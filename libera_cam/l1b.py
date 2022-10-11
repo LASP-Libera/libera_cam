@@ -2,6 +2,5 @@
 
 
 def algorithm():
-    # TODO: Placeholder. Rename as necessary.
+    """Placeholder docstring"""
     print("This would make an L1b product")
-    return
