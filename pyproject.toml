@@ -11,6 +11,8 @@ authors = [
 
 [tool.poetry.dependencies]
 python = "^3.9"
+cloudpathlib = "^0.13.0"
+libera-utils = "^2.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.1.2"
