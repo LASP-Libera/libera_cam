@@ -93,7 +93,7 @@ def write_data_product(incoming_file: str, input_man: str) -> str:
     hour_minute_second = hour_minute_second.strftime("%H%M%S")
 
     dropbox_path = os.getenv("PROCESSING_DROPBOX")
-    data_product_filename = f"{dropbox_path}/libera_cam_{DataLevel['L1B']}_ManIHopeThisWorks_" \
+    data_product_filename = f"{dropbox_path}/libera_cam_{DataLevel['L1B']}_ThisIsARandDesc_" \
                             f"{year_month_day}t{hour_minute_second}_vM1m2p3_r27002112233.h5"
 
     logger.info("Writing the new netcdf4 file to the output manifest")
