@@ -62,6 +62,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> str:
 
 def write_data_product(incoming_file: str, input_man: str) -> str:
     """
+    Takes a file named in the input manifest and generates the output nectdf4 file, with tags and correct output name
 
     Parameters
     ----------
@@ -86,15 +87,11 @@ def write_data_product(incoming_file: str, input_man: str) -> str:
     incoming_data.attrs['Incoming_Process_Date(UTC)'] = str(datetime.utcnow())
     incoming_data.attrs['Incoming_manifest_name'] = input_man
 
-    year_month_day = datetime.utcnow()
-    year_month_day = year_month_day.strftime("%Y%m%d")
-
-    hour_minute_second = datetime.utcnow()
-    hour_minute_second = hour_minute_second.strftime("%H%M%S")
+    timestamp = datetime.utcnow().strftime("%Y%m%dt%H%M%S")
 
     dropbox_path = os.getenv("PROCESSING_DROPBOX")
     data_product_filename = f"{dropbox_path}/libera_cam_{DataLevel['L1B']}_ThisIsARandDesc_" \
-                            f"{year_month_day}t{hour_minute_second}_vM1m2p3_r27002112233.h5"
+                            f"{timestamp}_vM1m2p3_r27002112233.h5"
 
     logger.info("Writing the new netcdf4 file to the output manifest")
     incoming_data.to_netcdf(data_product_filename, engine="h5netcdf")

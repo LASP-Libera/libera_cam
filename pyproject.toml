@@ -6,7 +6,8 @@ authors = [
     "Stéphane Béland <stephane.beland@lasp.colorado.edu>",
     "Gavin Medley <gavin.medley@lasp.colorado.edu>",
     "Laura Sandoval <laura.sandoval@lasp.colorado.edu>",
-    "Matt Watwood <matt.watwood@lasp.colorado.edu>"
+    "Matt Watwood <matt.watwood@lasp.colorado.edu>",
+    "Caleb Kumar <caleb.kumar@colorado.edu>"
 ]
 
 [tool.poetry.dependencies]
