@@ -11,10 +11,11 @@ authors = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.9"
-cloudpathlib = "^0.13.0"
-libera-utils = "^2.0.1"
-xarray = "^2023.1.0"
+python = ">=3.9,<3.12"
+urllib3 = "<2"  # To reduce dependency solving time related to AWS libraries
+cloudpathlib = ">=0.13.0,<1.0.0"
+libera-utils = "2.1.1"
+xarray = "^2023.4.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.1.2"

@@ -6,29 +6,31 @@ import logging
 import os
 import pathlib
 import time
-# installed
+from typing import Union
+# Installed
 import xarray as xr
-# local
+import cloudpathlib
+# Local
 from libera_utils.io.manifest import Manifest
-from libera_utils.io.filenaming import DataLevel, ManifestType
+from libera_utils.io.filenaming import ManifestType, L1bFilename, PRINTABLE_TS_FORMAT
 from libera_utils.io.smart_open import smart_open
 
 logger = logging.getLogger(__name__)
 
 
-def algorithm(parsed_cli_args: argparse.Namespace) -> str:
+def algorithm(parsed_cli_args: argparse.Namespace) -> Union[cloudpathlib.CloudPath, pathlib.Path]:
     """
 
     Parameters
     ----------
     parsed_cli_args: argparse.Namespace
-        command line argument of the incoming manifest file
+        Command line argument of the incoming manifest file
 
 
     Returns
     -------
-    output_manifest: str
-        the path of the output manifest as a string
+    output_manifest: Cloudpath or Path
+        The path of the output manifest as a string
 
     """
 
@@ -49,9 +51,9 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> str:
             logger.info('Unsuccessfully opened the file')
 
         logger.info("Writing the new netcdf4 file to the output manifest")
-        data_product_file = write_data_product(file['filename'], input_manifest.filename)
+        data_product_file = write_data_product(file['filename'], input_manifest)
 
-        output_manifest.add_file_to_manifest(data_product_file)
+        output_manifest.add_file_to_manifest(data_product_file.path)
         time.sleep(1)
 
     logger.info("Writing the physical output manifest")
@@ -60,24 +62,23 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> str:
     return output_manifest_filepath
 
 
-def write_data_product(incoming_file: str, input_man: str) -> str:
+def write_data_product(incoming_file: str, input_man: Manifest) -> L1bFilename:
     """
     Takes a file named in the input manifest and generates the output nectdf4 file, with tags and correct output name
 
     Parameters
     ----------
     incoming_file: str
-        incoming data file retrieved from the input manifest file
-    input_man
-        the incoming manifest that houses the files, needed to add tags to the newly created netcdf4 files
+        Incoming data file retrieved from the input manifest file
+    input_man: Manifest
+        The input manifest that lists the input files, stored as metadata in the output netcdf4 files
 
 
     Returns
     -------
 
-    data_product_filename: str
-        the file path of the data product filename
-
+    data_product_filename: L1bFilename
+        The valid L1bFilename of the written data product
     """
 
     logger.info("Opening the file ")
@@ -85,15 +86,15 @@ def write_data_product(incoming_file: str, input_man: str) -> str:
 
     logger.info('Adding tags to the netcdf4 dataset')
     incoming_data.attrs['Incoming_Process_Date(UTC)'] = str(datetime.utcnow())
-    incoming_data.attrs['Incoming_manifest_name'] = input_man
+    incoming_data.attrs['Incoming_manifest_name'] = str(input_man.filename)
 
-    timestamp = datetime.utcnow().strftime("%Y%m%dt%H%M%S")
+    timestamp = datetime.utcnow().strftime(PRINTABLE_TS_FORMAT)
 
     dropbox_path = os.getenv("PROCESSING_DROPBOX")
-    data_product_filename = f"{dropbox_path}/libera_cam_{DataLevel['L1B']}_ThisIsARandDesc_" \
-                            f"{timestamp}_vM1m2p3_r27002112233.h5"
+    data_product_filename = L1bFilename(
+        f"{dropbox_path}/libera_l1b_cam_{timestamp}_{timestamp}_vM1m2p3_r27002112233.h5")
 
     logger.info("Writing the new netcdf4 file to the output manifest")
-    incoming_data.to_netcdf(data_product_filename, engine="h5netcdf")
+    incoming_data.to_netcdf(str(data_product_filename), engine="h5netcdf")
 
     return data_product_filename
