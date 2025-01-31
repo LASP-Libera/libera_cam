@@ -40,7 +40,7 @@ COPY pyproject.toml $LIBERA_CAM_DIRECTORY
 RUN true
 
 # Install libera_cam and all its (non-dev) dependencies according to pyproject.toml
-RUN poetry install --no-dev
+RUN poetry install --only main
 
 # Define the entrypoint of the container. Passing arguments when running the
 # container will be passed as arguments to the function
