@@ -2,7 +2,7 @@
 
 # libera-cam
 # ----------
-FROM python:3.9-slim AS libera-cam
+FROM python:3.11-slim AS libera-cam
 USER root
 
 # Location for Core package installation location. This can be used later by images that inherit from this one
@@ -34,6 +34,8 @@ ENV PATH="$PATH:/root/.local/bin"
 # Copy necessary files over (except for dockerignore-d files)
 COPY libera_cam $LIBERA_CAM_DIRECTORY/libera_cam
 COPY pyproject.toml $LIBERA_CAM_DIRECTORY
+COPY README.md $LIBERA_CAM_DIRECTORY
+COPY LICENSE.txt $LIBERA_CAM_DIRECTORY
 
 # This is so stupid but it fixes known a bug in docker build
 # https://github.com/moby/moby/issues/37965
@@ -56,7 +58,6 @@ RUN poetry install
 
 # Copy tests over
 COPY tests $LIBERA_CAM_DIRECTORY/tests
-COPY pylintrc $LIBERA_CAM_DIRECTORY
 
 # Set entrypoint
 ENTRYPOINT ["pytest", "--cov=libera_cam", "--cov-report=xml:coverage.xml", "--junit-xml=junit.xml"]

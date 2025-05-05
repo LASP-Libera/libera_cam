@@ -46,6 +46,9 @@ pipeline {
                         branches: [[name: "FETCH_HEAD"]],
                         doGenerateSubmoduleConfigurations: false,
                         gitTool: 'Default',
+                        extensions: [
+                            [$class: 'GitLFSPull'],
+                        ],
                         submoduleCfg: [],
                         userRemoteConfigs: [[credentialsId: '2ba9f035-20ea-4b6d-b541-7378271b199a',
                             refspec: "+refs/pull-requests/${env.pr_id}/from:refs/remotes/origin/pull-requests/${env.pr_id}",
@@ -60,19 +63,18 @@ pipeline {
                 sh 'docker-compose build --no-cache tests'
             }
         }
-        stage('Run Pylint') {
+        stage('Ruff Check') {
             steps {
-                sh 'docker-compose run -T linting'
-            }
-        }
-        stage('Run Bandit') {
-            steps {
-                sh 'docker-compose run -T ast'
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    sh 'docker-compose up --build --exit-code-from linting linting'
+                }
             }
         }
         stage('Run Tests') {
             steps {
-                sh 'docker-compose run -T tests'
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    sh 'docker-compose up --build --exit-code-from tests tests'
+                }
             }
         }
     }
@@ -85,7 +87,7 @@ pipeline {
             emailext attachLog: true,
             body: 'Log is attached',
             subject: 'libera_cam PR Tests Failed',
-            to: 'gavin.medley@lasp.colorado.edu,matt.watwood@lasp.colorado.edu,caleb.kumar@lasp.colorado.edu'
+            to: 'gavin.medley@lasp.colorado.edu,matt.watwood@lasp.colorado.edu'
 
             slackSend color: "bad", message: """libera_cam PR tests FAILED for PR #${env.pr_id}
             Source branch: ${env.pr_from_ref}

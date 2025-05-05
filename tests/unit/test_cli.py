@@ -1,7 +1,9 @@
 """Tests for cli module"""
 # Installed
 import argparse
+
 import pytest
+
 # Local
 from libera_cam import cli, l1b
 

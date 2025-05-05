@@ -1,7 +1,4 @@
-version: '1'
-
 services:
-
   # Runs program inside a docker container. Not used in Jenkins.
   cam:
     image: libera-cam:latest
@@ -16,21 +13,9 @@ services:
       context: .
       target: libera-cam-test
 
-  # Runs pylint inside a testing docker container.
-  # This will lint the `libera_cam` directory and automatically pick up our `pylintrc`
-  # configuration file.
   linting:
     image: libera-cam-test:latest
     build:
       context: .
       target: libera-cam-test
-    entrypoint: ["pylint", "libera_cam"]
-
-  # Runs bandit inside a testing docker container.
-  # This will recursively (`-r`) analyze the `libera_cam` directory and report results.
-  ast:
-    image: libera-cam-test:latest
-    build:
-      context: .
-      target: libera-cam-test
-    entrypoint: [ "bandit", "-r", "libera_cam" ]
+    entrypoint: ["ruff", "check"]

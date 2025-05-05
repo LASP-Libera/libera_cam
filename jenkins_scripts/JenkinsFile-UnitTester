@@ -27,6 +27,9 @@ pipeline {
                     branches: [[name: '${GIT_BRANCH}']],
                     doGenerateSubmoduleConfigurations: false,
                     gitTool: 'Default',
+                    extensions: [
+                            [$class: 'GitLFSPull'],
+                    ],
                     submoduleCfg: [],
                     userRemoteConfigs: [[
                         credentialsId: '2ba9f035-20ea-4b6d-b541-7378271b199a',
@@ -59,7 +62,7 @@ pipeline {
             emailext attachLog: true,
             body: 'Log is attached',
             subject: 'Libera Camera (libera_cam) Tests Failed',
-            to: 'gavin.medley@lasp.colorado.edu,matt.watwood@lasp.colorado.edu,caleb.kumar@lasp.colorado.edu'
+            to: 'gavin.medley@lasp.colorado.edu,matt.watwood@lasp.colorado.edu'
 
             slackSend color: "bad", message: "Periodic libera_cam unit tests FAILED: ${env.BUILD_URL}"
         }
