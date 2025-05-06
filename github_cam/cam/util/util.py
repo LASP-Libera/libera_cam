@@ -42,41 +42,7 @@ def polyval(p, x):
 
     return y
 
-def cal_vza_vaa(
-        fpa_nx,
-        fpa_ny,
-        fpa_dx,
-        fpa_dy,
-        coef_dist2ang=np.array([1.397428e-02, -1.500364e-01, 6.352646e-01, -9.551312e-01,    9.042359, 0]),
-        ):
 
-    # calculate viewing zenith angles (vaa) and viewing azimuth angles (vza)
-    #╭────────────────────────────────────────────────────────────────────────────╮#
-    fpa_cx = fpa_nx//2
-    fpa_cy = fpa_ny//2
-
-    fpa_ix = np.arange(fpa_nx)
-    fpa_iy = np.arange(fpa_ny)
-
-    fpa_x0 = (fpa_ix-fpa_cx + 0.5) * fpa_dx
-    fpa_y0 = (fpa_iy-fpa_cy + 0.5) * fpa_dy
-
-    fpa_x, fpa_y = np.meshgrid(fpa_x0, fpa_y0, indexing='ij')
-
-    vaa = np.rad2deg(np.arctan2(fpa_x, fpa_y))
-
-    fpa_dist = np.sqrt(fpa_x**2 + fpa_y**2)
-    vza = np.polyval(coef_dist2ang, fpa_dist)
-    #╰────────────────────────────────────────────────────────────────────────────╯#
-
-    data = {
-            'fpa_cx': np.array(fpa_cx),
-            'fpa_cy': np.array(fpa_cy),
-            'vza'   : vza,
-            'vaa'   : vaa,
-            }
-
-    return data
 
 def get_all_files(fdir, pattern='*'):
 

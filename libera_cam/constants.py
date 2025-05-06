@@ -2,7 +2,9 @@
 
 from enum import IntEnum
 
-# EARTH_RADIUS: 6370997.0 # Reference? Can use astropy constants
+import numpy as np
+
+#EARTH_RADIUS: 6370997.0 # Reference? Can use astropy constants
 # Possible ref: https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
 
 PIXEL_COUNT_X = 2048  # Number of pixels in the x direction of the focal plane array (FPA)
@@ -21,6 +23,35 @@ ADM_SAMPLE_PERCENT = 100
 # Pixel radius of ADM sample spots
 ADM_PIXEL_RADIUS = 20
 
+def cal_vza_vaa():
+
+    # calculate viewing zenith angles (vaa) and viewing azimuth angles (vza)
+    #╭────────────────────────────────────────────────────────────────────────────╮#
+    fpa_cx = PIXEL_COUNT_X//2
+    fpa_cy = PIXEL_COUNT_Y//2
+
+    fpa_ix = np.arange(PIXEL_COUNT_X)
+    fpa_iy = np.arange(PIXEL_COUNT_Y)
+
+    fpa_x0 = (fpa_ix-fpa_cx + 0.5) * PIXEL_SIZE_X
+    fpa_y0 = (fpa_iy-fpa_cy + 0.5) * PIXEL_COUNT_Y
+
+    fpa_x, fpa_y = np.meshgrid(fpa_x0, fpa_y0, indexing='ij')
+
+    vaa = np.rad2deg(np.arctan2(fpa _x, fpa_y))
+
+    fpa_dist = np.sqrt(fpa_x**2 + fpa_y**2)
+    vza = np.polyval(DISTANCE_TO_ANGLE_COEFFICIENTS, fpa_dist)
+    #╰────────────────────────────────────────────────────────────────────────────╯#
+
+    data = {
+            'fpa_cx': np.array(fpa_cx),
+            'fpa_cy': np.array(fpa_cy),
+            'vza'   : vza,
+            'vaa'   : vaa,
+            }
+
+    return data
 
 class IntegrationTime(IntEnum):
     """The class defining the length of integration times"""
