@@ -86,7 +86,7 @@ def write_data_product(incoming_file: str, input_man: Manifest) -> LiberaDataPro
 
     dropbox_path = os.getenv("PROCESSING_DROPBOX")
 
-    current_time = datetime.now()
+    current_time = datetime.now(UTC)
 
     product_version = metadata.version("libera_cam").replace(".", "-")
     data_product_filename = LiberaDataProductFilename.from_filename_parts(

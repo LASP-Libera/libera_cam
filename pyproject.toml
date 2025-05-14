@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "0.2.0"
+version = "1.0.0"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar", email =  "caleb.kumar@colorado.edu" },
@@ -41,6 +41,7 @@ dependencies = [
     "libera_utils>=2.1.1",
     "xarray>=2024.1.1",
     "pyyaml>=6.0.2,<7",
+    "matplotlib>=3.10.1"
 ]
 
 [tool.poetry.scripts]
@@ -86,7 +87,8 @@ extend-include = [
 ]
 extend-exclude = [
     "tests/test_data/**",
-    "libera_cam/data/**"
+    "libera_cam/data/**",
+    "github_cam/**"
 ]
 
 [tool.ruff.lint]

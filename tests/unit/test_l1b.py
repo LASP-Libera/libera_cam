@@ -19,7 +19,7 @@ def generate_input_manifest(tmp_path, test_data_path):
     filenames = (test_data_path / "libera_cam_l1b_descriptor_20220909t000000_20220910t000000.h5",
                  test_data_path / "libera_cam_l1b_descriptor_20221010t000000_20221011t000000.h5")
 
-    input_manifest = Manifest(manifest_type=ManifestType.INPUT, files=filenames, configuration={})
+    input_manifest = Manifest(manifest_type=ManifestType.INPUT, files = filenames)
 
     input_manifest_file_path = input_manifest.write(tmp_path)
 
