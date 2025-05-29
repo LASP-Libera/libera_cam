@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "1.0.0"
+version = "1.0.1"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar", email =  "caleb.kumar@colorado.edu" },
@@ -33,7 +33,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
-    "License :: OSI Approved :: GPLv3 License"
+    "License :: OSI Approved :: BSD License"
 ]
 # These are the dependencies used in the package metadata when building the project
 dependencies = [

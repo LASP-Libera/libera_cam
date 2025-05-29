@@ -1,4 +1,5 @@
 """The module for finding the most recent non-linearity calibrations to apply as a correction to measurements"""
+
 import sys
 from pathlib import Path
 
@@ -11,9 +12,7 @@ from libera_cam.utils.hdf5_io import load_hdf5_variable, load_hdf5_variable_from
 
 
 def get_non_linearity_factor(
-        pixel_counts: np.ndarray,
-        use_synthetic: bool = False,
-        use_exact: bool = False
+    pixel_counts: np.ndarray, use_synthetic: bool = False, use_exact: bool = False
 ) -> np.ndarray:
     # TODO: This function will eventually read in calibration parameter files
     """Returns the flat fielding correction from calibration parameters
@@ -53,22 +52,21 @@ def load_non_linearity_parameters(use_synthetic: bool = False) -> np.ndarray:
     use_synthetic: bool, Optional
         Determines if synthetic data should be used. Default to False
     """
-    data_path = Path(sys.modules[__name__.split('.', maxsplit=1)[0]].__file__).parent / 'ground_calibration_data'
+    data_path = Path(sys.modules[__name__.split(".", maxsplit=1)[0]].__file__).parent / "ground_calibration_data"
 
-    calibration_data = h5py.File(data_path / 'camera_calibration_data.h5', 'r')
+    calibration_data = h5py.File(data_path / "camera_calibration_data.h5", "r")
 
     if use_synthetic:
         calibration_return = load_hdf5_variable_from_object(
-            "synthetic_non_linearity_polynomial_coefficients",
-            calibration_data)
+            "synthetic_non_linearity_polynomial_coefficients", calibration_data
+        )
         calibration_data.close()
         return calibration_return
 
     raise NotImplementedError
 
 
-def apply_non_linearity_polynomial(pixel_counts: np.ndarray,
-                                   coefficients: np.ndarray) -> np.ndarray:
+def apply_non_linearity_polynomial(pixel_counts: np.ndarray, coefficients: np.ndarray) -> np.ndarray:
     """Applies the non-linearity polynomial to the pixel counts
 
     Parameters
@@ -90,13 +88,9 @@ def apply_non_linearity_polynomial(pixel_counts: np.ndarray,
     # Coefficients need to be ordered c0,...c5 where the equation is c0 + c1*x ... c5*x^5
     reversed_coefficients = coefficients[..., ::-1]
     # Current order is (row, column, coefficients) needs to be (coefficients, row, column)
-    corrected_order_coefficients = reversed_coefficients.transpose((-1,0,-2))
+    corrected_order_coefficients = reversed_coefficients.transpose((-1, 0, -2))
 
-    corrected_pixel_counts = np.polynomial.polynomial.polyval(
-        pixel_counts,
-        corrected_order_coefficients,
-        tensor=False
-    )
+    corrected_pixel_counts = np.polynomial.polynomial.polyval(pixel_counts, corrected_order_coefficients, tensor=False)
     return corrected_pixel_counts
 
 
@@ -133,8 +127,8 @@ def make_synthetic_non_linearity_factor(measured_pixel_counts: np.ndarray) -> np
 
 def get_exact_synthetic_non_linearity_factor():
     """Loads the exact non-linearity factor from the test calibration data file"""
-    test_calibration_data_path = Path(
-        sys.modules[__name__.split('.', maxsplit=1)[0]].__file__).parent.parent / "tests" / 'test_data'
+    test_calibration_data_path = (
+        Path(sys.modules[__name__.split(".", maxsplit=1)[0]].__file__).parent.parent / "tests" / "test_data"
+    )
     test_filename = "testing_calibration_data.h5"
-    return load_hdf5_variable("reverse_non_linearity_factors",
-                              file_path= test_calibration_data_path / test_filename)
+    return load_hdf5_variable("reverse_non_linearity_factors", file_path=test_calibration_data_path / test_filename)

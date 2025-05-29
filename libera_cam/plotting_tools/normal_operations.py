@@ -1,4 +1,5 @@
 """The plotting tools for normal operations"""
+
 import datetime
 import os
 
@@ -10,19 +11,19 @@ from libera_cam.plotting_tools.plotting_utils import add_colorbar_to_axes, remov
 
 
 def plot_observed_vs_true_plus_relative_difference(
-        true_data: np.ndarray,
-        observed_data: np.ndarray,
-        integration_time: IntegrationTime,
-        observation_time: datetime.datetime,
-        subplot_titles: list[str] = ('Radiance Truth', 'Radiance Observed', 'Relative Difference (%)'),
-        save_plot: bool = False,
-        vmin: float = 0.0,
-        vmax: float = 0.5,
-        relative_diff_vmin: float = -30.0,
-        relative_diff_vmax: float = 30.0,
-        cmap: str = "jet",
-        relative_diff_cmap: str = "seismic",
-        ) -> plt.Figure:
+    true_data: np.ndarray,
+    observed_data: np.ndarray,
+    integration_time: IntegrationTime,
+    observation_time: datetime.datetime,
+    subplot_titles: list[str] = ("Radiance Truth", "Radiance Observed", "Relative Difference (%)"),
+    save_plot: bool = False,
+    vmin: float = 0.0,
+    vmax: float = 0.5,
+    relative_diff_vmin: float = -30.0,
+    relative_diff_vmax: float = 30.0,
+    cmap: str = "jet",
+    relative_diff_cmap: str = "seismic",
+) -> plt.Figure:
     """Plots observed vs. true data with relative difference.
 
     Generates a figure with three subplots:
@@ -80,8 +81,7 @@ def plot_observed_vs_true_plus_relative_difference(
     """
     if true_data.shape != observed_data.shape:
         raise ValueError(
-            f"true_data and observed_data must have the same shape. "
-            f"Got {true_data.shape} and {observed_data.shape}."
+            f"true_data and observed_data must have the same shape. Got {true_data.shape} and {observed_data.shape}."
         )
 
     if subplot_titles is None:
@@ -92,29 +92,22 @@ def plot_observed_vs_true_plus_relative_difference(
         ]
     elif len(subplot_titles) != 3:
         raise ValueError(
-            f"subplot_titles must contain exactly three strings. "
-            f"Got {len(subplot_titles)}: {subplot_titles}"
+            f"subplot_titles must contain exactly three strings. Got {len(subplot_titles)}: {subplot_titles}"
         )
 
     fig = plt.figure(figsize=(16, 5))
-    fig.suptitle(
-        f"{observation_time.strftime('%Y-%m-%d %H:%M:%S')} with Integration Time= {integration_time.value}ms"
-    )
+    fig.suptitle(f"{observation_time.strftime('%Y-%m-%d %H:%M:%S')} with Integration Time= {integration_time.value}ms")
 
     # True Data Plot
     ax1 = fig.add_subplot(131)
-    cs = ax1.imshow(
-        true_data.T, origin="lower", cmap=cmap, zorder=0, vmin=vmin, vmax=vmax
-    )
+    cs = ax1.imshow(true_data.T, origin="lower", cmap=cmap, zorder=0, vmin=vmin, vmax=vmax)
     ax1.set_title(subplot_titles[0])
     add_colorbar_to_axes(fig, ax1, cs)
     remove_ticks_from_axes(ax1)
 
     # Observed Data Plot
     ax2 = fig.add_subplot(132)
-    cs = ax2.imshow(
-        observed_data.T, origin="lower", cmap=cmap, zorder=0, vmin=vmin, vmax=vmax
-    )
+    cs = ax2.imshow(observed_data.T, origin="lower", cmap=cmap, zorder=0, vmin=vmin, vmax=vmax)
     ax2.set_title(subplot_titles[1])
     add_colorbar_to_axes(fig, ax2, cs)
     remove_ticks_from_axes(ax2)

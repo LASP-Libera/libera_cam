@@ -1,4 +1,5 @@
-"""The module for creating the flat fielding calibrations """
+"""The module for creating the flat fielding calibrations"""
+
 import numpy as np
 
 from libera_cam.correction_tools.flat_field_corrections import make_synthetic_flat_field_factor

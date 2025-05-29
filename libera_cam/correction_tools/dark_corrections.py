@@ -1,4 +1,5 @@
 """The module for finding the most recent dark offset calibrations to apply as a correction to measurements"""
+
 import sys
 from pathlib import Path
 
@@ -8,9 +9,7 @@ from libera_cam.constants import IntegrationTime
 from libera_cam.utils.hdf5_io import load_hdf5_variable
 
 
-def get_dark_offset(
-        integration_time: IntegrationTime,
-        use_synthetic: bool = False) -> np.ndarray:
+def get_dark_offset(integration_time: IntegrationTime, use_synthetic: bool = False) -> np.ndarray:
     """Retrieves the dark offset for a given integration time.
 
     This function returns the dark offset, which represents the signal
@@ -50,8 +49,9 @@ def get_dark_offset(
         ground calibration files when `use_synthetic` is False.
     """
     if use_synthetic:
-        test_dark_data_path = Path(
-            sys.modules[__name__.split('.', maxsplit=1)[0]].__file__).parent.parent / "tests" / 'test_data'
+        test_dark_data_path = (
+            Path(sys.modules[__name__.split(".", maxsplit=1)[0]].__file__).parent.parent / "tests" / "test_data"
+        )
         test_filename = "testing_calibration_data.h5"
         test_dark_data_path = test_dark_data_path / test_filename
         dark_offset = load_hdf5_variable("dark_pixel_corrections", file_path=test_dark_data_path)

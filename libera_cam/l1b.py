@@ -1,4 +1,5 @@
 """L1b processing code libera WFOV camera"""
+
 # Standard
 import argparse
 import logging
@@ -45,9 +46,9 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> cloudpathlib.CloudPath | p
         try:
             incoming_file = file.filename
             with smart_open(incoming_file):
-                logger.info('Successfully opened file')
+                logger.info("Successfully opened file")
         except Exception as excep:
-            logger.info('Unsuccessfully opened the file')
+            logger.info("Unsuccessfully opened the file")
             raise excep
 
         logger.info("Writing the new netcdf4 file to the output manifest")
@@ -80,9 +81,9 @@ def write_data_product(incoming_file: str, input_man: Manifest) -> LiberaDataPro
     logger.info("Opening the file ")
     incoming_data = xr.open_dataset(incoming_file, engine="h5netcdf")
 
-    logger.info('Adding tags to the netcdf4 dataset')
-    incoming_data.attrs['Incoming_Process_Date(UTC)'] = str(datetime.now(UTC))
-    incoming_data.attrs['Incoming_manifest_name'] = str(input_man.filename)
+    logger.info("Adding tags to the netcdf4 dataset")
+    incoming_data.attrs["Incoming_Process_Date(UTC)"] = str(datetime.now(UTC))
+    incoming_data.attrs["Incoming_manifest_name"] = str(input_man.filename)
 
     dropbox_path = os.getenv("PROCESSING_DROPBOX")
 
@@ -93,11 +94,12 @@ def write_data_product(incoming_file: str, input_man: Manifest) -> LiberaDataPro
         data_level="L1B",
         product_name="CAM",
         version=f"V{product_version}",
-        utc_start=datetime(2027, 1,1,0,0,0),
-        utc_end=datetime(2027, 1, 1,1,59,59),
+        utc_start=datetime(2027, 1, 1, 0, 0, 0),
+        utc_end=datetime(2027, 1, 1, 1, 59, 59),
         revision=current_time,
         extension="h5",
-        basepath=dropbox_path)
+        basepath=dropbox_path,
+    )
 
     logger.info("Writing the new netcdf4 file to the output manifest")
     incoming_data.to_netcdf(str(data_product_filename), engine="h5netcdf")

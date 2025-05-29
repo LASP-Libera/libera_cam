@@ -1,13 +1,11 @@
-"""The module for creating the dark calibrations """
+"""The module for creating the dark calibrations"""
 
 import numpy as np
 
 from libera_cam.constants import BIT_COUNT, PIXEL_COUNT_X, PIXEL_COUNT_Y, IntegrationTime
 
 
-def generate_dark_offset(
-        integration_time: IntegrationTime,
-        use_synthetic: bool = False) -> np.ndarray:
+def generate_dark_offset(integration_time: IntegrationTime, use_synthetic: bool = False) -> np.ndarray:
     """Calculates and writes the dark offset parameters to a calibration file
 
     Parameters
@@ -48,15 +46,12 @@ def make_synthetic_dark_offset(integration_time: IntegrationTime) -> np.ndarray:
     """
     match integration_time:
         case IntegrationTime.SHORT:
-            dark_mean = 100.0 / 2.0 ** BIT_COUNT
-            dark_std = 50.0 / 2.0 ** BIT_COUNT
+            dark_mean = 100.0 / 2.0**BIT_COUNT
+            dark_std = 50.0 / 2.0**BIT_COUNT
         case IntegrationTime.LONG:
-            dark_mean = 200.0 / 2.0 ** BIT_COUNT
-            dark_std = 100.0 / 2.0 ** BIT_COUNT
+            dark_mean = 200.0 / 2.0**BIT_COUNT
+            dark_std = 100.0 / 2.0**BIT_COUNT
 
-    dark_offset = (2.0 ** BIT_COUNT *
-                   np.random.normal(
-                       loc=dark_mean, scale=dark_std,
-                       size=(PIXEL_COUNT_X, PIXEL_COUNT_Y)))
+    dark_offset = 2.0**BIT_COUNT * np.random.normal(loc=dark_mean, scale=dark_std, size=(PIXEL_COUNT_X, PIXEL_COUNT_Y))
 
     return dark_offset

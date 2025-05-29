@@ -1,6 +1,5 @@
 # Match all files in any test_data directory with the following extensions
 # This should cover all "big" (> ~1MB) files in the libera_cam/data and test_data directories
-
 # netCDF files
 **/*data/**/*.nc filter=lfs diff=lfs merge=lfs -text
 # HDF5 files

@@ -58,11 +58,6 @@ pipeline {
                 }
             }
         }
-        stage('Build Test Docker Image') {
-            steps {
-                sh 'docker-compose build --no-cache tests'
-            }
-        }
         stage('Ruff Check') {
             steps {
                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
@@ -87,7 +82,7 @@ pipeline {
             emailext attachLog: true,
             body: 'Log is attached',
             subject: 'libera_cam PR Tests Failed',
-            to: 'gavin.medley@lasp.colorado.edu,matt.watwood@lasp.colorado.edu'
+            to: 'libera.sdp.dev.cicd@lists.lasp.colorado.edu'
 
             slackSend color: "bad", message: """libera_cam PR tests FAILED for PR #${env.pr_id}
             Source branch: ${env.pr_from_ref}

@@ -1,9 +1,9 @@
-"""The module for creating the non-linearity calibrations """
+"""The module for creating the non-linearity calibrations"""
+
 from libera_cam.correction_tools.non_linearity_corrections import make_synthetic_non_linearity_factor
 
 
-def generate_non_linearity_factor(measured_pixel_count: int,
-                                  use_synthetic: bool = False):
+def generate_non_linearity_factor(measured_pixel_count: int, use_synthetic: bool = False):
     """
     Calculates and returns the non-linearity values to be used for calibration parameters
 

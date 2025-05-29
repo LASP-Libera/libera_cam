@@ -1,4 +1,5 @@
 """The primary methods used for calculating the l1b camera data"""
+
 import numpy as np
 
 from libera_cam.constants import IntegrationTime
@@ -10,10 +11,9 @@ from libera_cam.correction_tools import (
 )
 
 
-def convert_dn_to_radiance(dn_image: np.ndarray,
-                           integration_time: IntegrationTime,
-                           use_synthetic: bool = False,
-                           use_exact: bool = False):
+def convert_dn_to_radiance(
+    dn_image: np.ndarray, integration_time: IntegrationTime, use_synthetic: bool = False, use_exact: bool = False
+):
     """Converts an image of dn (digital number counts) to a radiance image.
 
     This function applies a series of corrections to the input DN image,including dark offset correction,
@@ -63,8 +63,9 @@ def convert_dn_to_radiance(dn_image: np.ndarray,
     dark_corrected_counts = dn_image - dark_offset
 
     # 2. Non-Linearity Correction
-    non_linearity_factor = get_non_linearity_factor(dark_corrected_counts,
-                                                    use_synthetic=use_synthetic, use_exact=use_exact)
+    non_linearity_factor = get_non_linearity_factor(
+        dark_corrected_counts, use_synthetic=use_synthetic, use_exact=use_exact
+    )
     non_linearity_corrected_counts = dark_corrected_counts * non_linearity_factor
 
     # 3. Flat-Fielding Correction

@@ -13,24 +13,20 @@ from libera_cam.correction_tools.non_linearity_corrections import (
 from libera_cam.utils.hdf5_io import load_hdf5_variable
 
 
-@pytest.mark.parametrize(
-    "use_synthetic",
-    [True, False]
-)
+@pytest.mark.parametrize("use_synthetic", [True, False])
 def test_get_non_linearity_factor(test_data_path, use_synthetic):
-    pixel_counts = load_hdf5_variable("cnt_obs0", test_data_path / 'camera_raw_count_example.h5')
+    pixel_counts = load_hdf5_variable("cnt_obs0", test_data_path / "camera_raw_count_example.h5")
     if use_synthetic:
         synth_data = get_non_linearity_factor(pixel_counts, use_synthetic=True)
-        assert_close(synth_data.max(),  41.626, decimal=3)
+        assert_close(synth_data.max(), 41.626, decimal=3)
         assert synth_data.shape == (PIXEL_COUNT_X, PIXEL_COUNT_Y)
     else:
         with pytest.raises(NotImplementedError):
             get_non_linearity_factor(pixel_counts, use_synthetic=False)
 
 
-
 def test_load_non_linearity_parameters():
-    """ Test the load_non_linearity_parameters function """
+    """Test the load_non_linearity_parameters function"""
 
     # First test the synthetic data
     coefficients = load_non_linearity_parameters(use_synthetic=True)
@@ -46,11 +42,11 @@ def test_load_non_linearity_parameters():
 
 
 def test_apply_non_linearity_polynomial(test_data_path):
-    """ Test the apply_non_linearity_polynomial function using expected data"""
+    """Test the apply_non_linearity_polynomial function using expected data"""
     coefficients = load_non_linearity_parameters(use_synthetic=True)
 
-    test_data = h5py.File(test_data_path / 'camera_raw_count_example.h5', 'r')
-    pixel_counts = test_data['cnt_obs0'][:]
+    test_data = h5py.File(test_data_path / "camera_raw_count_example.h5", "r")
+    pixel_counts = test_data["cnt_obs0"][:]
     scaled_data = pixel_counts / (2**16)
 
     returned_values = apply_non_linearity_polynomial(scaled_data, coefficients)

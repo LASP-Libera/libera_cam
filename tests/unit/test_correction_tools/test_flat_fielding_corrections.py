@@ -4,10 +4,7 @@ import pytest
 from libera_cam.correction_tools import get_flat_field_factor
 
 
-@pytest.mark.parametrize(
-    "use_synthetic",
-    [True, False]
-)
+@pytest.mark.parametrize("use_synthetic", [True, False])
 def test_get_flat_field_factor(use_synthetic):
     if use_synthetic:
         synth_data = get_flat_field_factor(use_synthetic=True)

@@ -1,9 +1,9 @@
 """The module for finding the most recent radiometric calibrations to apply as a correction to measurements"""
+
 from libera_cam.constants import IntegrationTime
 
 
-def get_radiometric_factor(integration_time: IntegrationTime,
-                           use_synthetic: bool = False) -> float:
+def get_radiometric_factor(integration_time: IntegrationTime, use_synthetic: bool = False) -> float:
     """
     Retrieves the most recent radiometric correction factor for the camera
 
@@ -21,9 +21,9 @@ def get_radiometric_factor(integration_time: IntegrationTime,
     return scale_factor
 
 
-def make_synthetic_radiometric_factor(integration_time: IntegrationTime,
-                                      band_width: float = 20.0,
-                                      scaling_coefficient: float = 2.4e4) -> float:
+def make_synthetic_radiometric_factor(
+    integration_time: IntegrationTime, band_width: float = 20.0, scaling_coefficient: float = 2.4e4
+) -> float:
     """A function to create a synthetic radiometric calibration factor
 
     Parameters
@@ -37,6 +37,6 @@ def make_synthetic_radiometric_factor(integration_time: IntegrationTime,
         This reflects an email exchange where 0.5 [radiance] approx. 800 DN at 2 ms
     """
 
-    scale_factor = 1.0 / (band_width * scaling_coefficient * (integration_time/1000.0))
+    scale_factor = 1.0 / (band_width * scaling_coefficient * (integration_time / 1000.0))
 
     return scale_factor
