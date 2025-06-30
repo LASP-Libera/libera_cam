@@ -13,7 +13,7 @@ import cloudpathlib
 
 # Installed
 import xarray as xr
-from libera_utils.io.filenaming import LiberaDataProductFilename, ManifestType
+from libera_utils.io.filenaming import LiberaDataProductFilename
 
 # Local
 from libera_utils.io.manifest import Manifest
@@ -39,7 +39,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> cloudpathlib.CloudPath | p
     input_manifest = Manifest.from_file(parsed_cli_args.manifest)
 
     logger.info("Creating output manifest")
-    output_manifest = Manifest(manifest_type=ManifestType.OUTPUT, files=[], configuration={})
+    output_manifest = Manifest.output_manifest_from_input_manifest(input_manifest)
 
     logger.info("Reading each file in the manifest")
     for file in input_manifest.files:
