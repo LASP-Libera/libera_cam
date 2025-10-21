@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import PIL.Image as Image
+import pillow_jpls  # noqa
 from space_packet_parser.xarr import create_dataset
 from space_packet_parser.xtce.definitions import XtcePacketDefinition
 
