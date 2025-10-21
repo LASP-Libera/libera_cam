@@ -464,7 +464,7 @@ def retrieve_image_bytes_from_wfov_dataframe(df, start_packet_index, end_packet_
         raise ValueError("End packet does not have EOP flag")
 
     # Extract the relevant data
-    flags = df.mem_dump_flags[start_packet_index : end_packet_index + 1]
+    # flags = df.mem_dump_flags[start_packet_index : end_packet_index + 1]
     image_data = df["science_data"][start_packet_index : end_packet_index + 1]
     packet_lengths = df["mem_dump_length"][start_packet_index : end_packet_index + 1]
 

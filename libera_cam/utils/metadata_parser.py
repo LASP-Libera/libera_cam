@@ -350,7 +350,7 @@ def extract_metadata(
         CRCValidationError: If CRC validation fails and config.validate_crc is True
     """
     # Handle different input types
-    if isinstance(source, (str, Path)):
+    if isinstance(source, (str | Path)):
         source = Path(source)
         if not source.exists():
             raise FileNotFoundError(f"File not found: {source}")
@@ -366,7 +366,7 @@ def extract_metadata(
             if image_data is None and config.validate_crc:
                 image_data = f.read()
 
-    elif isinstance(source, (bytes, bytearray)):
+    elif isinstance(source, (bytes | bytearray)):
         if len(source) < config.min_file_size:
             raise MetadataParseError(f"Data too small: {len(source)} bytes (minimum {config.min_file_size})")
 
