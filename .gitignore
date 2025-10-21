@@ -2,6 +2,11 @@
 ########################
 analysis
 
+# Binary Data #
+##################
+libera_cam/binary_data/*
+libera_cam/Tmp/*
+
 # Compiled source #
 ###################
 *.com
