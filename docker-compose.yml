@@ -1,6 +1,7 @@
 services:
   # Runs program inside a docker container. Not used in Jenkins.
   cam:
+    platform: linux/amd64
     image: libera-cam:latest
     build:
       context: .
@@ -8,12 +9,14 @@ services:
 
   # Runs tests inside a docker container.
   tests:
+    platform: linux/amd64
     image: libera-cam-test:latest
     build:
       context: .
       target: libera-cam-test
 
   linting:
+    platform: linux/amd64
     image: libera-cam-test:latest
     build:
       context: .
