@@ -53,7 +53,9 @@ pipeline {
 
             echo "Publishing test artifacts"
             junit '**/*junit.xml'
-            cobertura coberturaReportFile: '**/*coverage.xml'
+            recordCoverage(tools: [
+                [parser: 'COBERTURA', pattern: '**/*coverage.xml']
+            ])
 
             echo "Removing containers"
             sh 'docker-compose down --volumes'
