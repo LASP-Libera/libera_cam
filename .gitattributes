@@ -4,5 +4,11 @@
 **/*data/**/*.nc filter=lfs diff=lfs merge=lfs -text
 # HDF5 files
 **/*data/**/*.h5 filter=lfs diff=lfs merge=lfs -text
-# csv files
-**/*data/spice/*.csv filter=lfs diff=lfs merge=lfs -text
+# Spice Kernel SPK files
+**/*data/**/*.bsp filter=lfs diff=lfs merge=lfs -text
+# Spice Kernel CK files
+**/*data/**/*.bc filter=lfs diff=lfs merge=lfs -text
+# NumPy binary files
+**/*data/**/*.npy filter=lfs diff=lfs merge=lfs -text
+# CSV files
+**/*data/**/*.csv filter=lfs diff=lfs merge=lfs -text

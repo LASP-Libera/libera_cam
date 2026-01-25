@@ -1,6 +1,9 @@
 """The commonly used constant values of the camera"""
 
+import importlib.resources as resources
 from enum import IntEnum
+
+from cloudpathlib import AnyPath
 
 # EARTH_RADIUS: 6370997.0 # Reference? Can use astropy constants
 # Possible ref: https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
@@ -20,6 +23,9 @@ ANGLE_TO_DISTANCE_COEFFICIENTS = [1.21367e-10, 2.60014e-09, -7.50181e-06, -2.847
 ADM_SAMPLE_PERCENT = 100
 # Pixel radius of ADM sample spots
 ADM_PIXEL_RADIUS = 20
+
+LIBERA_CAM_GROUND_CAL_PATH = AnyPath(resources.files("libera_cam").joinpath("data", "ground_calibration"))
+GROUND_CAL_PIXEL_MAPPING = LIBERA_CAM_GROUND_CAL_PATH / "wfov_pixel_vectors.npy"
 
 
 class IntegrationTime(IntEnum):

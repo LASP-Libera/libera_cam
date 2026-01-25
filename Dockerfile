@@ -18,6 +18,12 @@ ARG DEBIAN_FRONTEND=noninteractive
 # gcc because it's often required for python package installations
 RUN apt-get update && apt-get install -y libpq-dev curl gcc
 
+# Install spice utilities directly from NAIF (precompiled for Linux)
+ENV CSPICE_DIR=/opt/naif
+RUN curl -L -o /tmp/cspice.tar.Z https://naif.jpl.nasa.gov/pub/naif/toolkit//C/PC_Linux_GCC_64bit/packages/cspice.tar.Z && \
+    mkdir -p $CSPICE_DIR && tar -C $CSPICE_DIR -xvzf /tmp/cspice.tar.Z cspice/exe && rm -r /tmp/cspice.tar.Z
+ENV PATH="$PATH:$CSPICE_DIR/cspice/exe"
+
 # Create virtual environment and permanently activate it for this image
 ENV VIRTUAL_ENV=/opt/venv
 RUN python -m venv $VIRTUAL_ENV
