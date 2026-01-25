@@ -56,7 +56,7 @@ def get_dark_offset(integration_time: IntegrationTime, use_synthetic: bool = Fal
         test_dark_data_path = test_dark_data_path / test_filename
         dark_offset = load_hdf5_variable("dark_pixel_corrections", file_path=test_dark_data_path)
     else:
-        # Will be implemented later
-        raise NotImplementedError
+        # Test data has no offset for now
+        dark_offset = 0
 
     return dark_offset

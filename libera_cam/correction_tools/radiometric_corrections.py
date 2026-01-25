@@ -17,7 +17,9 @@ def get_radiometric_factor(integration_time: IntegrationTime, use_synthetic: boo
     if use_synthetic:
         scale_factor = make_synthetic_radiometric_factor(integration_time)
     else:
-        raise NotImplementedError
+        # See the calculation in radiometric_calibration.py for details on how this value is derived from ground
+        # calibration data
+        scale_factor = 1.8737270248520255e-07
     return scale_factor
 
 

@@ -27,4 +27,5 @@ def test_synthetic_convert_dn_to_radiance(test_data_path, local_data_path, use_e
     masked_reference = masked_reference[full_mask]
     masked_output = masked_output[full_mask]
 
+    # TODO[LIBSDC-682] need to compare these two results? pending how to deal with the random noise of darks
     np.testing.assert_allclose(masked_output, masked_reference, rtol=expected_tolerance)
