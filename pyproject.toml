@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "0.2.1"
+version = "0.2.2"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar" },

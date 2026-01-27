@@ -11,8 +11,8 @@ from libera_cam.correction_tools import (
 
 
 def convert_dn_to_radiance(
-    dn_images: list[xr.DataArray],
-    int_time_masks: list[xr.DataArray],
+    dn_images: xr.DataArray,
+    int_time_masks: xr.DataArray,
     use_synthetic: bool = False,
     use_exact: bool = False,
 ):
@@ -23,11 +23,10 @@ def convert_dn_to_radiance(
 
     Parameters
     ----------
-    dn_images :list[xr.DataArray]
-        A list of 2D NumPy array representing the input DN image.
-        Shape of each image should be (2048, 2048).
-    int_time_masks : list[xr.DataArray]
-        A list of 2D Numpy masks of integration times used to acquire each pixel.
+    dn_images : xr.DataArray
+        A 3D DataArray (time, y, x) representing the input DN images.
+    int_time_masks : xr.DataArray
+        A 3D DataArray (time, y, x) of integration times used to acquire each pixel.
     use_synthetic : bool
         This is a flag to use synthetic calibration parameters
     use_exact: bool, Optional
@@ -36,50 +35,23 @@ def convert_dn_to_radiance(
 
     Returns
     -------
-    np.ndarray
-        A 2D NumPy array representing the radiance image.
-        Shape will be the same as `dn_image` (2048, 2048).
-
-    Raises
-    ------
-    ValueError
-        If the input `dn_image` is not a 2D array or does not have the shape (2048, 2048).
-
-    Notes
-    -----
-    The following corrections are applied in order:
-        1. Dark Offset Correction: Removes the dark current signal.
-        2. Flat-Fielding Correction: Corrects for pixel-to-pixel sensitivity variations.
-        3. Radiometric Calibration: Converts the corrected counts to radiance units.
+    xr.DataArray
+        A 3D DataArray representing the radiance images.
+        Shape will be the same as `dn_images`.
     """
-    converted_images = []
+    if not isinstance(dn_images, xr.DataArray) or not isinstance(int_time_masks, xr.DataArray):
+        raise TypeError("Both dn_images and int_time_masks must be Xarray DataArrays.")
 
-    for image, mask in zip(dn_images, int_time_masks):
-        if not isinstance(image, xr.DataArray) or not isinstance(mask, xr.DataArray):
-            raise TypeError("Both dn_image and int_time_mask must be Xarray DataArrays.")
-        if image.ndim != 2 or mask.ndim != 2:
-            raise ValueError(
-                "Both dn_image and int_time_mask must be 2D arrays. The provided arrays have "
-                f"{image.ndim} and {mask.ndim} dimensions respectively."
-            )
-        if image.shape != (2048, 2048) or mask.shape != (2048, 2048):
-            raise ValueError(
-                f"dn_image and int_time_mask must have shape (2048, 2048), but have shapes "
-                f"{image.shape} and {mask.shape} respectively."
-            )
+    # 1. Dark Offset Correction
+    dark_offset = get_dark_offset(int_time_masks, use_synthetic=use_synthetic)
+    dark_corrected_counts = dn_images - dark_offset
 
-        # 1. Dark Offset Correction
-        dark_offset = get_dark_offset(mask, use_synthetic=use_synthetic)
-        dark_corrected_counts = image - dark_offset
+    # 2. Flat-Fielding Correction
+    flat_field_factor = get_flat_field_factor(use_synthetic=use_synthetic)
+    flat_field_corrected_counts = dark_corrected_counts * flat_field_factor
 
-        # 2. Flat-Fielding Correction
-        flat_field_factor = get_flat_field_factor(use_synthetic=use_synthetic)
-        flat_field_corrected_counts = dark_corrected_counts * flat_field_factor
+    # 3. Radiometric Calibration Coefficient
+    radiometric_factor = get_radiometric_factor(int_time_masks, use_synthetic=use_synthetic)
+    radiance_image = flat_field_corrected_counts * radiometric_factor
 
-        # 3. Radiometric Calibration Coefficient
-        radiometric_factor = get_radiometric_factor(mask, use_synthetic=use_synthetic)
-        radiance_image = flat_field_corrected_counts * radiometric_factor
-
-        converted_images.append(radiance_image.astype(np.float32))
-
-    return converted_images
+    return radiance_image.astype(np.float32)

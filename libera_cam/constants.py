@@ -35,3 +35,9 @@ class IntegrationTime(IntEnum):
     SHORT = 1
     # Integration time for long exposures in milliseconds
     LONG = 20
+
+
+# Default chunk size for the time dimension in Dask arrays.
+# This balances memory usage (smaller chunks) against SPICE setup overhead (larger chunks).
+# 50 images * 2048 * 2048 * 4 bytes ~= 800 MB per chunk.
+DEFAULT_TIME_CHUNK_SIZE = 50

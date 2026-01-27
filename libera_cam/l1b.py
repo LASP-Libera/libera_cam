@@ -8,8 +8,7 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
+import dask
 import xarray as xr
 from cloudpathlib import AnyPath
 from libera_utils.constants import DataProductIdentifier
@@ -17,11 +16,15 @@ from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.manifest import Manifest
 from libera_utils.io.netcdf import write_libera_data_product
 from libera_utils.io.smart_open import smart_copy_file, smart_open
-from libera_utils.libera_spice.kernel_manager import KernelManager
 
 from libera_cam.camera import convert_dn_to_radiance
-from libera_cam.geolocation import calculate_all_pixel_lat_lon_altitude
+from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
+from libera_cam.geolocation import (
+    GeolocationKernelConfig,
+    add_geolocation_to_dataset,
+)
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
+from libera_cam.packaging import package_l1b_product
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,11 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     output_manifest: Cloudpath or Path
         The path of the output manifest as a string
     """
+    # Enforce synchronous execution for SPICE safety and IO stability
+    # 'threads' causes race conditions in CSPICE (not thread-safe).
+    # 'processes' causes Pickling/IO errors with smart_open/h5netcdf.
+    dask.config.set(scheduler="synchronous")
+
     # Set the output location to write to in the output dropbox
     dropbox_path = os.getenv("PROCESSING_PATH")
     if not dropbox_path:
@@ -52,10 +60,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
     # Step 2: Read and store ALL input data from manifest files
     logger.info("Step 2: Reading all input data from manifest files")
-    start = datetime.now()
     l1a_data, spice_directory = read_all_input_data(input_manifest)
-    end = datetime.now()
-    print(f"Read all input data in {(end - start).total_seconds()} seconds")
 
     # Step 3: Calculate science data variables (YOUR SCIENCE GOES HERE)
     logger.info("Step 3: Calculating science data variables")
@@ -63,10 +68,11 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
     # Steps 4: Store data with metadata and write to output folder
     logger.info("Step 4: Creating and writing data product")
+    # This is where the compute happens!
     start = datetime.now()
     output_data_file_path = write_data_product(processed_data, dropbox_path)
     end = datetime.now()
-    print(f"Wrote data product in {(end - start).total_seconds()} seconds")
+    logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
 
     # Step 6: Create output manifest
     logger.info("Step 5: Creating output manifest")
@@ -150,7 +156,7 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     return all_data, spice_directory
 
 
-def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: Path) -> dict[str, np.ndarray]:
+def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: Path) -> xr.Dataset:
     """
     Process L1A data camera data and SPICE Kernels to L1B product.
 
@@ -176,8 +182,8 @@ def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: P
 
     Returns
     -------
-    dict[str, np.ndarray]
-        L1B product data dictionary, with variables defined by the L1B product definition.
+    xr.Dataset
+        L1B product dataset, with variables defined by the L1B product definition.
 
     Raises
     ------
@@ -190,85 +196,39 @@ def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: P
     l1a_cam_data = all_input_data[DataProductIdentifier.l1a_icie_wfov_sci_decoded]
 
     # Output is a tuple of (images, metadata, integration time masks)
-    start = datetime.now()
     cam_dataset = read_l1a_cam_data(l1a_cam_data)
-    end = datetime.now()
-    print(f"Read L1A CAM data in {(end - start).total_seconds()} seconds")
 
-    start = datetime.now()
+    # Rechunk to reduce graph size and overhead for SPICE kernel loading
+    # Allow override via env var for tuning
+    chunk_size = int(os.getenv("LIBERA_CAM_CHUNK_SIZE", DEFAULT_TIME_CHUNK_SIZE))
+    cam_dataset = cam_dataset.chunk({"camera_time": chunk_size})
+
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
-    end = datetime.now()
-    print(f"Calibrated {len(cam_dataset.image_data)} images in {(end - start).total_seconds()} seconds")
-    cam_dataset["calibrated_images"] = (("time", "y", "x"), calibrated_images)
+    cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
+    cam_dataset["Radiance"].attrs = {"long_name": "Radiance", "units": "W m^-2 sr^-1"}
 
-    km = KernelManager()
-    km.load_libera_dynamic_kernels(str(spice_directory), needs_naif_kernels=True, needs_static_kernels=True)
-    # Calculate geolocation
-    start = datetime.now()
-    lat_lon_alt = calculate_all_pixel_lat_lon_altitude(km, cam_dataset.time.data)
-    end = datetime.now()
-    print(f"Calculated lat/lon/alt for {len(cam_dataset.time.data)} images in {(end - start).total_seconds()} seconds")
-    km.unload_all()
+    # Apply Geolocation (Lazy)
+    geo_config = GeolocationKernelConfig(
+        temp_dir_base=None,  # Use default temp location on workers
+        dynamic_kernel_directory=spice_directory,
+    )
+    cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
 
-    # Package output product
-    start = datetime.now()
-    l1b_product = _package_l1b_cam_product(cam_dataset, lat_lon_alt)
-    end = datetime.now()
-    print(f"Packaged L1B product in {(end - start).total_seconds()} seconds")
+    # Package output product (Renaming, Transposing, Typing)
+    cam_dataset = package_l1b_product(cam_dataset)
 
-    return l1b_product
+    return cam_dataset
 
 
-def _package_l1b_cam_product(cam_dataset: xr.DataArray, lat_lon_alt_data: pd.DataFrame) -> dict[str, np.ndarray]:
-    """
-    Package the L1B CAM product data into a dictionary.
-
-    Parameters
-    ----------
-    cam_dataset: xr.Dataset
-        The processed CAM dataset containing all necessary variables.
-    lat_lon_alt_data: pd.DataFrame
-        DataFrame containing latitude, longitude, and altitude data for good images.
-    Returns
-    -------
-    dict[str, np.ndarray]
-        Dictionary containing the packaged L1B CAM product data.
-    """
-    pixel_placeholder = np.zeros_like(cam_dataset.calibrated_images.data)
-
-    l1b_product = {
-        "camera_time": cam_dataset.time.data,
-        "Latitude": lat_lon_alt_data["latitude"].astype(np.float32),
-        "Terrain_Corrected_Latitude": pixel_placeholder.astype(np.float32),
-        "Longitude": lat_lon_alt_data["longitude"].astype(np.float32),
-        "Terrain_Corrected_Longitude": pixel_placeholder.astype(np.float32),
-        "Altitude": lat_lon_alt_data["altitude"].astype(np.float32),
-        "Terrain_Corrected_Altitude": pixel_placeholder.astype(np.float32),
-        "Solar_Zenith_Surface": pixel_placeholder.astype(np.float32),
-        "Relative_Azimuth_Surface": pixel_placeholder.astype(np.float32),
-        "Viewing_Zenith_Surface": pixel_placeholder.astype(np.float32),
-        "Azimuth": cam_dataset.azimuth_angle.data.astype(np.float32),
-        "Radiometer_Operational_Mode": cam_dataset.rad_obs_id.data.astype(np.uint8),
-        "Camera_Operational_Mode": cam_dataset.cam_obs_id.data.astype(np.uint8),
-        "Pixel_Counts": cam_dataset.image_data.data.astype(np.uint16),
-        "Radiance": cam_dataset.calibrated_images.data.astype(np.float32),
-        "Camera_Mask": pixel_placeholder.astype(np.uint8),
-        "Integration_Time": cam_dataset.integration_mask.data.astype(np.uint8),
-        # TODO[LIBSDC-682] Use libera_utils quality flags
-        "Quality_Flag": cam_dataset.good_image_flag.data.astype(np.uint32),
-    }
-    return l1b_product
-
-
-def write_data_product(processed_data, output_path) -> LiberaDataProductFilename:
+def write_data_product(processed_data: xr.Dataset, output_path: str) -> LiberaDataProductFilename:
     """
     Takes a file named in the input manifest and generates the output nectdf4 file, with tags and correct output name
     Parameters
     ----------
-    incoming_file: str
-        Incoming data file retrieved from the input manifest file
-    input_man: Manifest
-        The input manifest that lists the input files, stored as metadata in the output netcdf4 files
+    processed_data: xr.Dataset
+        The dataset to write
+    output_path: str
+        The path to write the output file to
 
     Returns
     -------
