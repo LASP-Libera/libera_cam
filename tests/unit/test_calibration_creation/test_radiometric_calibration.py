@@ -15,5 +15,6 @@ def test_generate_radiometric_factor(use_synthetic, integration_time, expected_f
         np.testing.assert_almost_equal(rad_factor, expected_factor, 1e-6)
 
     else:
-        with pytest.raises(NotImplementedError):
-            generate_radiometric_calibration_factor(integration_time, use_synthetic=use_synthetic)
+        # Code now returns the factor instead of raising error
+        rad_factor = generate_radiometric_calibration_factor(integration_time, use_synthetic=use_synthetic)
+        np.testing.assert_almost_equal(rad_factor, expected_factor, 1e-6)

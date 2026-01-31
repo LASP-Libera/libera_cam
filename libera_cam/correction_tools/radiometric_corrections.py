@@ -1,6 +1,6 @@
 """The module for finding the most recent radiometric calibrations to apply as a correction to measurements"""
 
-from libera_cam.constants import IntegrationTime
+from libera_cam.constants import RADIOMETRIC_SCALING_COEFFICIENT, IntegrationTime
 
 
 def get_radiometric_factor(integration_time: IntegrationTime, use_synthetic: bool = False) -> float:
@@ -17,9 +17,7 @@ def get_radiometric_factor(integration_time: IntegrationTime, use_synthetic: boo
     if use_synthetic:
         scale_factor = make_synthetic_radiometric_factor(integration_time)
     else:
-        # See the calculation in radiometric_calibration.py for details on how this value is derived from ground
-        # calibration data
-        scale_factor = 1.8737270248520255e-07
+        scale_factor = RADIOMETRIC_SCALING_COEFFICIENT
     return scale_factor
 
 

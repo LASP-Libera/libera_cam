@@ -24,6 +24,10 @@ ADM_SAMPLE_PERCENT = 100
 # Pixel radius of ADM sample spots
 ADM_PIXEL_RADIUS = 20
 
+# Calibration coefficients
+# See the calculation in radiometric_calibration.py for details on how this value is derived from ground
+# calibration data
+RADIOMETRIC_SCALING_COEFFICIENT = 1.8737270248520255e-07
 LIBERA_CAM_GROUND_CAL_PATH = AnyPath(resources.files("libera_cam").joinpath("data", "ground_calibration"))
 GROUND_CAL_PIXEL_MAPPING = LIBERA_CAM_GROUND_CAL_PATH / "wfov_pixel_vectors.npy"
 

@@ -14,5 +14,7 @@ def test_get_dark_offset(integration_time, use_synthetic, expected_factor):
         synth_value = get_radiometric_factor(integration_time, use_synthetic=True)
         assert np.abs(synth_value - expected_factor) < 0.00001
     else:
-        with pytest.raises(NotImplementedError):
-            get_radiometric_factor(integration_time, use_synthetic=False)
+        # Code now returns a static placeholder for ground calibration
+        expected_static_value = 1.8737270248520255e-07
+        value = get_radiometric_factor(integration_time, use_synthetic=False)
+        assert np.abs(value - expected_static_value) < 1e-10

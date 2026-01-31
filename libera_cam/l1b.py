@@ -14,7 +14,7 @@ from cloudpathlib import AnyPath
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.manifest import Manifest
-from libera_utils.io.netcdf import write_libera_data_product
+from libera_utils.io.product_writer import write_libera_data_product
 from libera_utils.io.smart_open import smart_copy_file, smart_open
 
 from libera_cam.camera import convert_dn_to_radiance
@@ -70,7 +70,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     logger.info("Step 4: Creating and writing data product")
     # This is where the compute happens!
     start = datetime.now()
-    output_data_file_path = write_data_product(processed_data, dropbox_path)
+    output_data_file_paths = write_data_product(processed_data, dropbox_path)
     end = datetime.now()
     logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
 
@@ -80,7 +80,10 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
     # Step 7: Add data files to output manifest
     logger.info("Step 6: Adding data files to output manifest")
-    output_manifest.add_files(output_data_file_path.path)
+    data_product = output_data_file_paths[0]  # Type is LiberaDataProductFilename
+    ummg_product = output_data_file_paths[1]  # Type is Path
+    output_manifest.add_files(data_product.path)
+    output_manifest.add_files(ummg_product)
 
     # Step 8: Write output manifest to output dropbox folder
     logger.info("Step 7: Writing the output manifest")
@@ -238,11 +241,11 @@ def write_data_product(processed_data: xr.Dataset, output_path: str) -> LiberaDa
     data_folder = resources.files("libera_cam.data")
     product_def_path = data_folder / "L1B_CAM_product_definition.yml"
 
-    output_filename = write_libera_data_product(
+    output_files = write_libera_data_product(
         data_product_definition=product_def_path,
         data=processed_data,
         output_path=output_path,
         time_variable="camera_time",
     )
 
-    return output_filename
+    return output_files

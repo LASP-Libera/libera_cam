@@ -1,6 +1,6 @@
 attributes:
   ProductID: CAM
-  algorithm_version: 0.1.2
+  algorithm_version: 0.2.2
 
 coordinates:
   camera_time: # TODO[LIBSDC-707]: Validate that time is unique for each image and can be used as a UID

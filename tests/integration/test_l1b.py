@@ -2,6 +2,7 @@
 
 import logging
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 import xarray as xr
@@ -26,18 +27,6 @@ def generate_input_manifest(tmp_path, test_data_path):
         ditl_data_path / "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp",
     )
 
-    # Timing Notes - 280 Images on Mac M1 Pro
-    # Reading L1A data 33 seconds
-    # Calibration algorithm  3.6 seconds
-    # Geolocation algorithm 164 seconds
-    # Packaging took 201 seconds
-    # filenames = (
-    #     raps_cpt_full_path / "LIBERA_SPICE_AZROT-CK_V5-5-1_20260122T174625_20260122T204017_R26022220846.bc",
-    #     raps_cpt_full_path / "LIBERA_SPICE_JPSS-CK_V5-4-6_20260122T000000_20260122T235900_R26021235418.bc",
-    #     raps_cpt_full_path / "LIBERA_SPICE_JPSS-SPK_V5-4-6_20260122T000000_20260122T235900_R26021235418.bsp",
-    #     raps_cpt_full_path / "LIBERA_L1A_WFOV-SCI-DECODED_V5-5-1_20260122T175301_20260122T204017_R26022214856.nc",
-    # )
-
     input_manifest = Manifest(manifest_type=ManifestType.INPUT, files=filenames)
 
     input_manifest_file_path = input_manifest.write(tmp_path)
@@ -55,5 +44,10 @@ def test_algorithm(generate_input_manifest, monkeypatch, tmp_path):
     output_manifest_obj = Manifest.from_file(output_manifest_path)
 
     for file in output_manifest_obj.files:
-        data_product = xr.open_dataset(file.filename)
-        print(data_product)
+        if Path(file.filename).suffix == ".nc":
+            data_product = xr.open_dataset(file.filename)
+            print(data_product)
+        if Path(file.filename).suffix == ".json":
+            with open(file.filename) as f:
+                metadata_content = f.read()
+                print(metadata_content)
