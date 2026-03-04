@@ -52,6 +52,7 @@ def calculate_ground_cal_average_radiometric_factor(method: str = "avg") -> floa
     float
         The average radiometric calibration factor for the specified integration time
     """
+    # TODO [LIBSDC-567]: Implement alternative radiometric calibration methods in production version
     if method != "avg":
         raise NotImplementedError("Only 'avg' method is implemented for calculating average radiometric factor.")
     # Use importlib to get the path to the data folder

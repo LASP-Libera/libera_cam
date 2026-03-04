@@ -14,8 +14,8 @@ from cloudpathlib import AnyPath
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.manifest import Manifest
-from libera_utils.io.product_writer import write_libera_data_product
-from libera_utils.io.smart_open import smart_copy_file, smart_open
+from libera_utils.io.netcdf import write_libera_data_product
+from libera_utils.io.smart_open import smart_copy_file
 
 from libera_cam.camera import convert_dn_to_radiance
 from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
@@ -70,7 +70,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     logger.info("Step 4: Creating and writing data product")
     # This is where the compute happens!
     start = datetime.now()
-    output_data_file_paths = write_data_product(processed_data, dropbox_path)
+    output_files = write_data_product(processed_data, dropbox_path)
     end = datetime.now()
     logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
 
@@ -80,10 +80,12 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
     # Step 7: Add data files to output manifest
     logger.info("Step 6: Adding data files to output manifest")
-    data_product = output_data_file_paths[0]  # Type is LiberaDataProductFilename
-    ummg_product = output_data_file_paths[1]  # Type is Path
-    output_manifest.add_files(data_product.path)
-    output_manifest.add_files(ummg_product)
+    # write_libera_data_product can return a single filename or a tuple
+    if isinstance(output_files, list | tuple):
+        for file in output_files:
+            output_manifest.add_files(file.path)
+    else:
+        output_manifest.add_files(output_files.path)
 
     # Step 8: Write output manifest to output dropbox folder
     logger.info("Step 7: Writing the output manifest")
@@ -136,22 +138,24 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
         logger.info(f"Reading file {i + 1}/{len(input_manifest.files)}: {file_info.filename}")
 
         try:
+            # TODO [LIBSDC-722]: Improve local SPICE caching to avoid redundant copies.
             if file_info.filename.endswith((".bc", ".bsp")):
                 local_file_destination = spice_directory / Path(file_info.filename).name
                 smart_copy_file(file_info.filename, str(local_file_destination))
                 spice_files_copied.append(local_file_destination)
                 logger.info(f"Successfully copied SPICE file to: {local_file_destination}")
             else:
-                with smart_open(file_info.filename) as file_handle:
-                    dataset = xr.open_dataset(file_handle).load()
-                    libera_filename = LiberaDataProductFilename(file_info.filename)
-                    all_data[str(libera_filename.data_product_id)] = dataset
-                    logger.info(f"Successfully loaded dataset with variables: {list(dataset.variables)}")
+                # Maintain laziness by using xr.open_dataset directly.
+                # Xarray handles closing the file when the dataset is closed.
+                dataset = xr.open_dataset(file_info.filename)
+                libera_filename = LiberaDataProductFilename(file_info.filename)
+                all_data[str(libera_filename.data_product_id)] = dataset
+                logger.info(f"Successfully opened dataset with variables: {list(dataset.variables)}")
         except Exception as e:
             logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
             raise
 
-    logger.info(f"Successfully loaded {len(all_data)} datasets and {len(spice_files_copied)} SPICE files")
+    logger.info(f"Successfully opened {len(all_data)} datasets and {len(spice_files_copied)} SPICE files")
 
     if not all_data:
         logger.warning("No data files were loaded from manifest")
@@ -161,14 +165,14 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
 
 def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: Path) -> xr.Dataset:
     """
-    Process L1A data camera data and SPICE Kernels to L1B product.
+    Process L1A camera data and SPICE Kernels to L1B product.
 
     This function coordinates the full L1A to L1B processing pipeline including:
     - Loading calibration data
-    - Extracting radiometer and housekeeping datasets
+    - Extracting camera and housekeeping datasets
     - Initializing SPICE kernels for geolocation
-    - Gain calibration of radiometer data
-    - Downsampling calibrated radiometer data to 100Hz
+    - Gain calibration of camera data
+    - Downsampling calibrated camera data to 100Hz
     - Calculating geolocation information
     - Interpolating temperatures
     - Computing radiances
@@ -177,8 +181,8 @@ def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: P
     Parameters
     ----------
     all_input_data : dict[str, xr.Dataset]
-        Dictionary of input datasets keyed by filename. Expected to contain radiometer sample data ('rad_sample') and
-        nominal housekeeping data ('nom_hk').
+        Dictionary of input datasets keyed by filename. Expected to contain camera sample data and
+        nominal housekeeping data.
     spice_directory : Path
         Path to directory containing SPICE kernel files (.bc, .bsp) for spacecraft positioning and attitude
         calculations.
@@ -191,7 +195,7 @@ def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: P
     Raises
     ------
     ValueError
-        If required input datasets (radiometer or housekeeping data) are not found.
+        If required input datasets (camera or housekeeping data) are not found.
     FileNotFoundError
         If the calibration data file is not found.
     """
@@ -208,7 +212,8 @@ def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: P
 
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
-    cam_dataset["Radiance"].attrs = {"long_name": "Radiance", "units": "W m^-2 sr^-1"}
+
+    # Units and attributes are handled by the product definition YAML during write_data_product.
 
     # Apply Geolocation (Lazy)
     geo_config = GeolocationKernelConfig(
@@ -235,8 +240,8 @@ def write_data_product(processed_data: xr.Dataset, output_path: str) -> LiberaDa
 
     Returns
     -------
-    data_product_filename: L1bFilename
-        The valid L1bFilename of the written data product
+    data_product_filenames: LiberaDataProductFilename
+        The valid filename of the written data product(s)
     """
     data_folder = resources.files("libera_cam.data")
     product_def_path = data_folder / "L1B_CAM_product_definition.yml"

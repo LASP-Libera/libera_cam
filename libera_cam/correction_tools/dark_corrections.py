@@ -48,6 +48,7 @@ def get_dark_offset(integration_time: IntegrationTime, use_synthetic: bool = Fal
     -   Future versions will support reading dark offset data from
         ground calibration files when `use_synthetic` is False.
     """
+    # TODO [LIBSDC-567]: Implement ground calibration loading for dark offset.
     if use_synthetic:
         test_dark_data_path = (
             Path(sys.modules[__name__.split(".", maxsplit=1)[0]].__file__).parent.parent / "tests" / "test_data"

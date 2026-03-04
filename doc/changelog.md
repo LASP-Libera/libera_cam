@@ -2,24 +2,14 @@
 
 ## 0.2.2
 
-### Production L1B Algorithm
-
-**High-Level Improvements:**
-
 - **Production-Ready Architecture**: Transitioned the entire L1B processing pipeline to a fully lazy, memory-efficient execution model using Dask. This is a step towards processing of full-day science products (~3TB uncompressed) on standard compute nodes without OOM errors.
 - **Robust Integration**: Unified L1A packet ingestion, radiometric calibration, and SPICE-based geolocation into a coherent, thread-safe pipeline that rigorously adheres to the L1B Product Definition.
-
-**Detailed Changes:**
-
-- **Lazy Execution**: Implemented strict Dask-based lazy evaluation for the entire pipeline to handle large daily volumes (~3TB/day) within memory limits.
+- **Lazy Execution**: Implemented strict Dask-based lazy evaluation for the entire pipeline to handle large daily volumes (~3TB/day) within memory limits. Removed eager `.load()` calls during data ingestion.
 - **Dask-Optimized Geolocation**: Integrated `libera_cam.geolocation` with Dask `map_blocks` to parallelize SPICE calculations while managing kernel loading safely on workers.
 - **Process Parallelism**: Enforced `synchronous` or `processes` scheduling to ensure thread-safety for CSPICE operations.
-- **Vectorized Calibration**: Refactored `convert_dn_to_radiance` to use vectorized operations on Dask arrays instead of iterative processing.
+- **Vectorized Calibration**: Refactored `convert_dn_to_radiance` to use `xr.apply_ufunc` for truly lazy, vectorized operations on Dask arrays.
 - **Product Packaging**: Decoupled product formatting logic into `libera_cam.packaging` to enforce strict adherence to L1B Product Definition (renaming, transposing, typing) transparently.
 - **Tuning**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments.
-
-### Test Suite Stability & Cleanup
-
 - **Test Refactoring**: Rewrote `tests/unit/test_l1b.py` and `tests/unit/test_camera.py` to decouple them from legacy data files and non-linearity logic. Used rigorous mocking for orchestration tests.
 - **Integration Stability**: Updated integration tests to use `synchronous` Dask scheduling to avoid CSPICE kernel conflicts during parallel test execution.
 - **Cleanup**: Removed unused test data files (`camera_calibration_data.h5`) and obsolete code related to non-linearity corrections.

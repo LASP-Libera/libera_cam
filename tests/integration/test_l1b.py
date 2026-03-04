@@ -47,7 +47,3 @@ def test_algorithm(generate_input_manifest, monkeypatch, tmp_path):
         if Path(file.filename).suffix == ".nc":
             data_product = xr.open_dataset(file.filename)
             print(data_product)
-        if Path(file.filename).suffix == ".json":
-            with open(file.filename) as f:
-                metadata_content = f.read()
-                print(metadata_content)

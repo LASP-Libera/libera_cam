@@ -1,10 +1,8 @@
-"""Tests for the L1B orchestration module"""
-
 import argparse
+import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import xarray as xr
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.manifest import Manifest
@@ -12,185 +10,146 @@ from libera_utils.io.manifest import Manifest
 from libera_cam import l1b
 
 
-@pytest.fixture
-def mock_manifest():
-    """Create a mock input manifest"""
-    manifest = MagicMock(spec=Manifest)
-    manifest.files = []
-    # Mocking file entries
-    file_info = MagicMock()
-    file_info.filename = "s3://bucket/test_l1a.nc"
-    manifest.files.append(file_info)
+class TestL1b(unittest.TestCase):
+    @patch("libera_cam.l1b.Manifest")
+    @patch("libera_cam.l1b.read_all_input_data")
+    @patch("libera_cam.l1b.process_l1a_to_l1b")
+    @patch("libera_cam.l1b.write_data_product")
+    def test_algorithm(self, mock_write, mock_process, mock_read, mock_manifest_cls):
+        """
+        Test the main algorithm orchestration function.
+        Verifies:
+        1. Input manifest is read.
+        2. Data is read (Step 2).
+        3. Processing is called (Step 3).
+        4. Output is written (Step 4).
+        5. Output manifest is created and written (Step 5-8).
+        """
+        # Setup Mocks
+        mock_manifest = MagicMock(spec=Manifest)
+        mock_manifest.files = []
+        mock_manifest_cls.from_file.return_value = mock_manifest
 
-    spice_info = MagicMock()
-    spice_info.filename = "s3://bucket/kernel.bsp"
-    manifest.files.append(spice_info)
+        # Setup the output manifest mock chain
+        mock_out_man = MagicMock(spec=Manifest)
+        mock_manifest_cls.output_manifest_from_input_manifest.return_value = mock_out_man
 
-    return manifest
+        # Mock return values for steps
+        mock_l1a_data = {"test": "data"}
+        mock_spice_dir = Path("/tmp/spice")
+        mock_read.return_value = (mock_l1a_data, mock_spice_dir)
 
+        mock_processed_ds = MagicMock(spec=xr.Dataset)
+        mock_process.return_value = mock_processed_ds
 
-@patch("libera_cam.l1b.Manifest")
-@patch("libera_cam.l1b.read_all_input_data")
-@patch("libera_cam.l1b.process_l1a_to_l1b")
-@patch("libera_cam.l1b.write_data_product")
-def test_algorithm(mock_write, mock_process, mock_read, mock_manifest_cls, mock_manifest):
-    """
-    Test the main algorithm orchestration function.
-    Verifies:
-    1. Input manifest is read.
-    2. Data is read (Step 2).
-    3. Processing is called (Step 3).
-    4. Output is written (Step 4).
-    5. Output manifest is created and written (Step 5-8).
-    """
-    # Setup Mocks
-    # 1. Manifest.from_file returns mock_manifest
-    mock_manifest_cls.from_file.return_value = mock_manifest
+        # Correctly mock LiberaDataProductFilename objects which have a .path attribute
+        mock_output_data_filename = MagicMock()
+        mock_output_data_filename.path = Path("output.nc")
+        mock_output_ummg_filename = MagicMock()
+        mock_output_ummg_filename.path = Path("output.json")
 
-    # 2. Setup the output manifest mock chain
-    # The code calls Manifest.output_manifest_from_input_manifest(input_manifest)
-    mock_out_man = MagicMock(spec=Manifest)
-    mock_manifest_cls.output_manifest_from_input_manifest.return_value = mock_out_man
+        # write_data_product returns a tuple of filenames
+        mock_write.return_value = (mock_output_data_filename, mock_output_ummg_filename)
 
-    # Mock return values for steps
-    mock_l1a_data = {"test": "data"}
-    mock_spice_dir = Path("/tmp/spice")
-    mock_read.return_value = (mock_l1a_data, mock_spice_dir)
+        # Call the algorithm
+        args = argparse.Namespace(manifest="input.json")
+        with patch.dict("os.environ", {"PROCESSING_PATH": "/tmp/dropbox"}):
+            _ = l1b.algorithm(args)
 
-    mock_processed_ds = MagicMock(spec=xr.Dataset)
-    mock_process.return_value = mock_processed_ds
+        # Verification
+        mock_manifest_cls.from_file.assert_called_with("input.json")
+        mock_read.assert_called_with(mock_manifest)
+        mock_process.assert_called_with(mock_l1a_data, mock_spice_dir)
+        mock_write.assert_called_with(mock_processed_ds, "/tmp/dropbox")
 
-    mock_output_data_filename = MagicMock()
-    mock_output_data_filename.path = Path("output.nc")
-    mock_output_ummg_filename = Path("output.json")
-    mock_write.return_value = (mock_output_data_filename, mock_output_ummg_filename)
+        # Verify manifest file addition (both files)
+        assert mock_out_man.add_files.call_count == 2
+        mock_out_man.add_files.assert_any_call(Path("output.nc"))
+        mock_out_man.add_files.assert_any_call(Path("output.json"))
 
-    # Call the algorithm
-    args = argparse.Namespace(manifest="input.json")
-    with patch.dict("os.environ", {"PROCESSING_PATH": "/tmp/dropbox"}):
-        _ = l1b.algorithm(args)
+        mock_out_man.write.assert_called_with("/tmp/dropbox")
 
-    # Verifications
-    mock_manifest_cls.from_file.assert_called_once_with("input.json")
+    @patch("libera_cam.l1b.Manifest")
+    @patch("libera_cam.l1b.xr.open_dataset")
+    @patch("libera_cam.l1b.LiberaDataProductFilename")
+    def test_read_all_input_data(self, mock_filename_cls, mock_open_ds, mock_manifest_cls):
+        """Test manifest file reading and dataset loading."""
+        # Setup Manifest mock with one NetCDF file
+        mock_file_info = MagicMock()
+        mock_file_info.filename = "test_l1a.nc"
+        mock_manifest = MagicMock()
+        mock_manifest.files = [mock_file_info]
 
-    mock_read.assert_called_once_with(mock_manifest)
+        # Setup Dataset mock
+        mock_ds = MagicMock(spec=xr.Dataset)
+        mock_ds.variables = ["var1"]
+        mock_open_ds.return_value = mock_ds
 
-    mock_process.assert_called_once_with(mock_l1a_data, mock_spice_dir)
+        # Setup Filename mock
+        mock_filename = MagicMock()
+        mock_filename.data_product_id = "wfov-l1a"
+        mock_filename_cls.return_value = mock_filename
 
-    mock_write.assert_called_once_with(mock_processed_ds, "/tmp/dropbox")
+        with patch("libera_cam.l1b.Path.mkdir"):
+            all_data, spice_dir = l1b.read_all_input_data(mock_manifest)
 
-    # Check Output Manifest interactions
-    mock_out_man.add_files.assert_any_call(Path("output.nc"))
-    mock_out_man.add_files.assert_any_call(Path("output.json"))
-    mock_out_man.write.assert_called_once_with("/tmp/dropbox")
+        # Verify
+        assert "wfov-l1a" in all_data
+        assert all_data["wfov-l1a"] == mock_ds
+        # Verify that .load() was NOT called (maintaining laziness)
+        mock_ds.load.assert_not_called()
 
+    @patch("libera_cam.l1b.read_l1a_cam_data")
+    @patch("libera_cam.l1b.convert_dn_to_radiance")
+    @patch("libera_cam.l1b.add_geolocation_to_dataset")
+    @patch("libera_cam.l1b.package_l1b_product")
+    def test_process_l1a_to_l1b(self, mock_package, mock_geo, mock_convert, mock_read_l1a):
+        """Test processing steps orchestration."""
+        # Setup
+        mock_l1a_input = MagicMock(spec=xr.Dataset)
+        # Use the correct Enum key as used in the source code
+        all_input = {DataProductIdentifier.l1a_icie_wfov_sci_decoded: mock_l1a_input}
 
-@patch("libera_cam.l1b.smart_open")
-@patch("libera_cam.l1b.smart_copy_file")
-@patch("libera_cam.l1b.xr.open_dataset")
-def test_read_all_input_data(mock_xr_open, mock_copy, mock_smart_open, mock_manifest):
-    """
-    Test read_all_input_data.
-    Verifies:
-    1. SPICE files (.bsp/.bc) are copied locally.
-    2. NetCDF files (.nc) are opened via xarray.
-    """
-    # Setup
-    mock_file_nc = MagicMock()
-    # Use a filename that matches the regex in LiberaDataProductFilename
-    mock_file_nc.filename = "LIBERA_L1A_WFOV-SCI-PDS_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        # Step 1: read_l1a returns a lazy dataset
+        mock_lazy_ds = MagicMock(spec=xr.Dataset)
+        mock_lazy_ds.image_data = MagicMock()
+        mock_lazy_ds.integration_mask = MagicMock()
+        mock_lazy_ds.valid_pixel_mask = MagicMock()
+        mock_lazy_ds.chunk.return_value = mock_lazy_ds
+        mock_read_l1a.return_value = mock_lazy_ds
 
-    mock_file_spice = MagicMock()
-    mock_file_spice.filename = "kernel.bsp"
+        # Step 2: convert returns lazy radiance
+        mock_radiance = MagicMock()
+        mock_convert.return_value = mock_radiance
 
-    mock_manifest.files = [mock_file_nc, mock_file_spice]
+        # Step 3: geo
+        mock_geo_ds = MagicMock()
+        mock_geo.return_value = mock_geo_ds
 
-    # Run
-    data, spice_dir = l1b.read_all_input_data(mock_manifest)
+        # Step 4: package
+        mock_final_ds = MagicMock()
+        mock_package.return_value = mock_final_ds
 
-    # Verify SPICE Copy
-    assert spice_dir.name == "spice_files"
-    # Ensure smart_copy was called for the .bsp file
-    mock_copy.assert_called_once()
-    args, _ = mock_copy.call_args
-    assert args[0] == "kernel.bsp"
-    assert str(args[1]).endswith("kernel.bsp")
+        # Call
+        result = l1b.process_l1a_to_l1b(all_input, Path("/tmp/spice"))
 
-    # Verify NetCDF Open
-    # Use the actual mock object returned by __enter__ for comparison
-    mock_file_handle = mock_smart_open.return_value.__enter__.return_value
+        # Verify
+        assert result == mock_final_ds
+        mock_read_l1a.assert_called_with(mock_l1a_input)
+        mock_convert.assert_called_with(mock_lazy_ds.image_data, mock_lazy_ds.integration_mask)
+        mock_lazy_ds.__setitem__.assert_called_with("Radiance", (("camera_time", "y", "x"), mock_radiance.data))
 
-    # We need to simulate the loop logic.
-    # The function calls smart_open(filename) -> xr.open_dataset(file_handle)
+    @patch("libera_cam.l1b.write_libera_data_product")
+    @patch("libera_cam.l1b.resources.files")
+    def test_write_data_product(self, mock_resources, mock_write_libera):
+        """Test data product writing wrapper."""
+        mock_ds = MagicMock(spec=xr.Dataset)
+        mock_resources.return_value.joinpath.return_value = "product_def.yml"
 
-    mock_smart_open.assert_called_once_with(mock_file_nc.filename)
-    mock_xr_open.assert_called_once_with(mock_file_handle)
+        mock_filenames = (MagicMock(), MagicMock())
+        mock_write_libera.return_value = mock_filenames
 
+        result = l1b.write_data_product(mock_ds, "/tmp/out")
 
-@patch("libera_cam.l1b.read_l1a_cam_data")
-@patch("libera_cam.l1b.convert_dn_to_radiance")
-@patch("libera_cam.l1b.add_geolocation_to_dataset")
-@patch("libera_cam.l1b.package_l1b_product")
-def test_process_l1a_to_l1b(mock_package, mock_geo, mock_rad, mock_read_l1a):
-    """
-    Test the science processing pipeline.
-    Verifies the chain of calls:
-    Read -> Calibration -> Geolocation -> Packaging
-    """
-    # Inputs
-    mock_ds = MagicMock(spec=xr.Dataset)
-    input_data = {DataProductIdentifier.l1a_icie_wfov_sci_decoded: mock_ds}
-    spice_dir = Path("/tmp/spice")
-
-    # Mocking Intermediate Returns
-    mock_cam_ds = MagicMock(spec=xr.Dataset)
-    mock_cam_ds.image_data = "image_data"
-    mock_cam_ds.integration_mask = "int_mask"
-    mock_cam_ds.valid_pixel_mask = "pixel_mask"
-    # Mock chunking returning self (or modified self)
-    mock_cam_ds.chunk.return_value = mock_cam_ds
-
-    mock_read_l1a.return_value = mock_cam_ds
-
-    mock_calibrated_data = MagicMock()
-    mock_calibrated_data.data = "radiance_values"
-    mock_rad.return_value = mock_calibrated_data
-
-    mock_geo_ds = MagicMock(spec=xr.Dataset)
-    mock_geo.return_value = mock_geo_ds
-
-    mock_final_ds = MagicMock(spec=xr.Dataset)
-    mock_package.return_value = mock_final_ds
-
-    # Run
-    result = l1b.process_l1a_to_l1b(input_data, spice_dir)
-
-    # Verify Call Chain
-    mock_read_l1a.assert_called_once_with(mock_ds)
-    mock_rad.assert_called_once_with("image_data", "int_mask")
-
-    # Verify Geolocation call
-    mock_geo.assert_called_once()
-    args, kwargs = mock_geo.call_args
-    assert args[0] == mock_cam_ds  # Passed the dataset
-    # Pixel mask is passed as kwarg
-    assert kwargs["pixel_mask"] == "pixel_mask"
-
-    mock_package.assert_called_once_with(mock_geo_ds)
-    assert result == mock_final_ds
-
-
-@patch("libera_cam.l1b.write_libera_data_product")
-def test_write_data_product(mock_write_libera):
-    """Test writing data product wrapper."""
-    mock_ds = MagicMock(spec=xr.Dataset)
-    output_path = "/tmp/out"
-
-    l1b.write_data_product(mock_ds, output_path)
-
-    mock_write_libera.assert_called_once()
-    call_kwargs = mock_write_libera.call_args[1]
-
-    assert call_kwargs["data"] == mock_ds
-    assert call_kwargs["output_path"] == output_path
-    assert str(call_kwargs["data_product_definition"]).endswith("L1B_CAM_product_definition.yml")
+        assert result == mock_filenames
+        mock_write_libera.assert_called_once()

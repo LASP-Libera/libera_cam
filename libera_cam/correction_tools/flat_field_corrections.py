@@ -6,7 +6,7 @@ from libera_cam.constants import PIXEL_COUNT_X, PIXEL_COUNT_Y
 
 
 def get_flat_field_factor(use_synthetic: bool = False) -> np.ndarray:
-    # TODO[LIBSDC-682]: This function will eventually read in calibration parameter files
+    # TODO [LIBSDC-567]: This function will eventually read in calibration parameter files
     """Returns the flat fielding correction from calibration parameters
 
     Parameters
