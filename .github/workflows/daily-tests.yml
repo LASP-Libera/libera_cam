@@ -1,0 +1,9 @@
+name: Daily Tests
+
+on:
+  schedule:
+    - cron: "30 9 * * *" # 09:30 UTC = 03:30 MDT (summer) / 02:30 MST (winter)
+
+jobs:
+  run-tests:
+    uses: ./.github/workflows/_run-tests.yml
