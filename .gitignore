@@ -19,6 +19,7 @@ analysis
 coverage_report
 corbertura_report.xml
 tests/test_data/hidden
+prof
 
 # Local Installation Artifacts #
 ################################
@@ -65,19 +66,23 @@ Thumbs.db
 # Virtual environment #
 #######################
 venv
+.venv
 
 # Configurations #
 ##################
 .python-version
 pytest.ini
 
-# added by Hong Chen #
+# Local folders #
 ######################
 !examples
 !examples/*.py
 
-# AI Tooling #
-##############
+# AI Context Files #
+##################
 .claude/*
 .claude/settings.local.json
 !.claude/CLAUDE.md
+.gemini
+gemini_plans
+GEMINI.md

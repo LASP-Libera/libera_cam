@@ -36,7 +36,6 @@ def test_load_non_linearity_parameters():
     assert coefficients.dtype == np.float32
 
     # Test the real data (not implemented yet)
-    # TODO This should likely be its own test
     with pytest.raises(NotImplementedError):
         load_non_linearity_parameters(use_synthetic=False)
 

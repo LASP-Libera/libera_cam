@@ -50,7 +50,6 @@ def load_hdf5_variable_from_file(variable_name: str, file_path: str or AnyPath) 
     dark_offset: np.ndarray
         The dark offset data
     """
-    # TODO check that file exists
 
     data_object = h5py.File(file_path, "r")
     dark_offset = load_hdf5_variable_from_object(variable_name, data_object)
@@ -113,7 +112,6 @@ def load_hdf5_single_value_from_file(variable_name: str, file_path: str or AnyPa
         The path to the HDF5 file
 
     """
-    # TODO check that file exists
 
     data_object = h5py.File(file_path, "r")
     dark_offset = load_hdf5_single_value_from_object(variable_name, data_object)

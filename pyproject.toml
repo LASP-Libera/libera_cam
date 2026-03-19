@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "0.1.2"
+version = "0.2.0"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar" },
@@ -39,11 +39,11 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    "netcdf4<=1.7.2",
-    "libera_utils>=5.2.2,<6.0",
-    "xarray>=2024.1.1",
+    "libera-utils>=5.5.2,<6.0.0",
     "pyyaml>=6.0.2,<7",
-    "matplotlib>=3.10.1"
+    "matplotlib>=3.10.1",
+    "pillow-jpls", # Needed for decompressing JPLS images
+    "dask>=2026.1.1"
 ]
 
 [tool.poetry.scripts]
@@ -66,6 +66,9 @@ pytest-cov = "*"
 pytest-randomly = "*"
 pytest-subprocess = "*"
 ruff = "*"
+pytest-profiling = "*"
+memory-profiler = "*"
+snakeviz = "*"
 
 [tool.pytest.ini_options]
 markers = [
