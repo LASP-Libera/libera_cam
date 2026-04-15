@@ -75,3 +75,9 @@ pytest.ini
 ######################
 !examples
 !examples/*.py
+
+# AI Tooling #
+##############
+.claude/*
+.claude/settings.local.json
+!.claude/CLAUDE.md
