@@ -11,14 +11,15 @@ from pathlib import Path
 import dask
 import xarray as xr
 from cloudpathlib import AnyPath
+from dask.distributed import Client
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.manifest import Manifest
 from libera_utils.io.netcdf import write_libera_data_product
 from libera_utils.io.smart_open import smart_copy_file
 
+from libera_cam import constants
 from libera_cam.camera import convert_dn_to_radiance
-from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
 from libera_cam.geolocation import (
     GeolocationKernelConfig,
     add_geolocation_to_dataset,
@@ -43,10 +44,30 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     output_manifest: Cloudpath or Path
         The path of the output manifest as a string
     """
-    # Enforce synchronous execution for SPICE safety and IO stability
-    # 'threads' causes race conditions in CSPICE (not thread-safe).
-    # 'processes' causes Pickling/IO errors with smart_open/h5netcdf.
-    dask.config.set(scheduler="synchronous")
+    start = datetime.now()
+
+    dask_scheduler = os.getenv("DASK_SCHEDULER", "synchronous")
+    dask_num_workers = int(os.getenv("DASK_NUM_WORKERS", "1"))
+    if dask_scheduler != "distributed":
+        logger.info(f"Proceeding with Dask scheduler {dask_scheduler}")
+        dask.config.set(scheduler=dask_scheduler)
+        if dask_scheduler != "synchronous":
+            dask.config.set(scheduler=dask_scheduler, num_workers=dask_num_workers)
+            logger.info(f"Dask number of workers {dask_num_workers}")
+        client = None
+    else:
+        logger.info("Creating distributed client and LocalCluster")
+        dask_memory_limit = os.getenv("DASK_MEMORY_LIMIT", "8GB")
+        # avoid disconnecting from the bokeh dashboard
+        dask.config.set({"distributed.scheduler.dashboard.bokeh-application.session-token-expiration": 3600000})
+        client = Client(
+            n_workers=dask_num_workers,
+            threads_per_worker=1,
+            memory_limit=dask_memory_limit,  # per worker
+        )
+        logger.info(f"Dask number of workers {dask_num_workers}, Dask memory limit per worker {dask_memory_limit}")
+        client.forward_logging()
+        logger.info(f"Dask dashboard URL: {client.dashboard_link}")
 
     # Set the output location to write to in the output dropbox
     dropbox_path = os.getenv("PROCESSING_PATH")
@@ -105,6 +126,11 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     logger.info(f"Output manifest written to: {output_manifest_filepath}")
 
     logger.info(f"Processing complete. Output manifest: {output_manifest_filepath}")
+
+    if client:
+        # uncomment input statement to keep the dask dashboard live when the processing is complete
+        # input("Press Enter to release the distributed client")
+        client.close()
 
     return output_manifest_filepath
 
@@ -236,12 +262,8 @@ def process_l1a_to_l1b(
     l1a_cam_data = all_input_data[DataProductIdentifier.l1a_icie_wfov_sci_decoded]
 
     # Output is a tuple of (images, metadata, integration time masks)
+    # cam_dataset is already chunked in read_l1a_cam_data
     cam_dataset = read_l1a_cam_data(l1a_cam_data)
-
-    # Rechunk to reduce graph size and overhead for SPICE kernel loading
-    # Allow override via env var for tuning
-    chunk_size = int(os.getenv("LIBERA_CAM_CHUNK_SIZE", DEFAULT_TIME_CHUNK_SIZE))
-    cam_dataset = cam_dataset.chunk({"camera_time": chunk_size})
 
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
@@ -261,7 +283,10 @@ def process_l1a_to_l1b(
     return cam_dataset
 
 
-def write_data_product(processed_data: xr.Dataset, output_path: str) -> LiberaDataProductFilename:
+def write_data_product(
+    processed_data: xr.Dataset,
+    output_path: str,
+) -> LiberaDataProductFilename:
     """
     Takes a file named in the input manifest and generates the output nectdf4 file, with tags and correct output name
     Parameters
@@ -278,6 +303,26 @@ def write_data_product(processed_data: xr.Dataset, output_path: str) -> LiberaDa
     """
     data_folder = resources.files("libera_cam.data")
     product_def_path = data_folder / "L1B_CAM_product_definition.yml"
+
+    # build encoding to ensure reasonable hdf5 chunk sizes
+    encoding = {}
+    for name, arr in processed_data.data_vars.items():
+        if arr.ndim == 3:
+            # For large arrays, the dask chunk size should be an integer multiple of the first size
+            encoding[name] = {
+                "zlib": True,
+                "complevel": 1,
+                "chunksizes": (10, constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X),
+            }
+        elif "camera_time" in arr.dims:
+            # May have unlimited dim — must be chunked, keep chunking consistent with 3D arrays
+            encoding[name] = {"zlib": False, "chunksizes": (10,)}
+        else:
+            # shouldn't happen, but just in case
+            encoding[name] = {
+                "zlib": False,
+                "contiguous": True,
+            }
 
     output_files = write_libera_data_product(
         data_product_definition=product_def_path,

@@ -155,7 +155,9 @@ def verify_crc(metadata: dict, image_data: bytes, config: ParserConfig = DEFAULT
         if config.validate_crc:
             raise CRCValidationError(error_msg)
         else:
-            logger.warning(error_msg)
+            # disable for now, clogs up the log
+            pass
+            # logger.warning(error_msg)
 
     return match
 

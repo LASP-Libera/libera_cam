@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import Generator
 from datetime import datetime
 
@@ -10,6 +11,7 @@ from libera_utils.time import multipart_to_dt64
 
 # Import the new separated parser functions
 from libera_cam import constants
+from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
 from libera_cam.image_parsing import l1a_parser
 
 # Configure logging
@@ -124,77 +126,65 @@ def reassemble_image_blobs(l1a_data: xr.Dataset, stats: dict = None) -> Generato
 
 
 def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
-    """
-    Reads a Libera CAM L1A data product and returns a stacked Image Cube backed by Dask Arrays.
+    chunk_size = int(os.getenv("LIBERA_CAM_CHUNK_SIZE", DEFAULT_TIME_CHUNK_SIZE))
 
-    Parameters
-    ----------
-    cam_dataset : xr.Dataset
-        Input L1A dataset containing the stream of CCSDS packets.
+    def decompress_batch(blobs_batch):
+        """Decompress a list of blobs and return stacked (images, masks) arrays."""
+        images, masks = [], []
+        for blobi in blobs_batch:
+            img, mask = l1a_parser.decompress_image(blobi)
+            images.append(img)
+            masks.append(mask)
+        return np.stack(images, axis=0), np.stack(masks, axis=0)
 
-    Returns
-    -------
-    xr.Dataset
-        A single Xarray Dataset containing:
-        - 3D variables (camera_time, y, x): image_data, integration_mask (Lazy Dask Arrays)
-        - 1D variables (camera_time): gain, exposure_time, temperature, etc. (Eager Loaded)
-        - Coordinates: camera_time, y, x
-    """
+    delayed_decompress_batch = dask.delayed(decompress_batch, nout=2, pure=True)
+
     # 1. Extract raw binary blobs from the packet stream
     logger.info("Stitching binary blobs from L1A packets...")
     start = datetime.now()
 
-    # Process Blobs lazily
     metadata_list = []
-    delayed_image_chunks = []
-    delayed_mask_chunks = []
     stitching_stats = {}
+    image_count = 0
 
-    # Use a dummy wrapper to handle the tuple return from decompress_image
-    # This allows us to index into the delayed object to get the two separate arrays
-    delayed_decompress = dask.delayed(l1a_parser.decompress_image, nout=2)
-
+    # Collect blobs and metadata eagerly
+    blobs = []
     for blob in reassemble_image_blobs(cam_dataset, stats=stitching_stats):
-        try:
-            # Eager Metadata Parse
-            meta = l1a_parser.parse_image_metadata(blob)
-
-            # Compute timestamp for coordination
-            meta["camera_time"] = multipart_to_dt64(meta, s_field="timestamp_seconds", us_field="timestamp_subseconds")
-            metadata_list.append(meta)
-
-            # Lazy Image Decompression
-            # Returns tuple (image, mask)
-            out = delayed_decompress(blob)
-
-            # We must specify shape and dtype for from_delayed to work without computing
-            image_chunk = da.from_delayed(
-                out[0], shape=(constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X), dtype=np.int32
-            )
-            mask_chunk = da.from_delayed(
-                out[1], shape=(constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X), dtype=np.uint8
-            )
-
-            delayed_image_chunks.append(image_chunk)
-            delayed_mask_chunks.append(mask_chunk)
-
-        except Exception as e:
-            logger.exception(f"Failed to process image blob: {e}")
-            continue
-
-    end = datetime.now()
-    logger.info(f"Image data extraction and metadata parsing in {(end - start).total_seconds()} seconds")
+        image_count += 1
+        meta = l1a_parser.parse_image_metadata(blob)
+        meta["camera_time"] = multipart_to_dt64(meta, s_field="timestamp_seconds", us_field="timestamp_subseconds")
+        metadata_list.append(meta)
+        blobs.append(blob)
 
     if not metadata_list:
         logger.warning("No complete images found in L1A data.")
         return xr.Dataset()
 
+    end = datetime.now()
+    logger.info(f"Image data extraction and metadata parsing in {(end - start).total_seconds()} seconds")
+
     logger.info(f"Found {len(metadata_list)} valid images. Constructing Dask Graph...")
 
-    # 3. Stack into 3D Dask Arrays
-    # Stack along the time dimension (axis 0)
-    image_data_3d = da.stack(delayed_image_chunks, axis=0)
-    integration_mask_3d = da.stack(delayed_mask_chunks, axis=0)
+    # 2. Build chunks of chunk_size
+    delayed_image_chunks, delayed_mask_chunks = [], []
+    for i in range(0, len(blobs), chunk_size):
+        batch = blobs[i : min(len(blobs), i + chunk_size)]
+        actual_size = len(batch)  # last batch may be smaller
+        out = delayed_decompress_batch(batch)
+        delayed_image_chunks.append(
+            da.from_delayed(
+                out[0], shape=(actual_size, constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X), dtype=np.int32
+            )
+        )
+        delayed_mask_chunks.append(
+            da.from_delayed(
+                out[1], shape=(actual_size, constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X), dtype=np.uint8
+            )
+        )
+
+    # 3. Concatenate pre-chunked 3D arrays — no rechunk needed
+    image_data_3d = da.concatenate(delayed_image_chunks, axis=0)
+    integration_mask_3d = da.concatenate(delayed_mask_chunks, axis=0)
 
     # 4. Construct Coordinate Arrays
     times = [m["camera_time"] for m in metadata_list]
