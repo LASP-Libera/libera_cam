@@ -1,6 +1,5 @@
 """Tests for the l1b algorithm"""
 
-import logging
 from argparse import Namespace
 from pathlib import Path
 
@@ -9,10 +8,6 @@ import xarray as xr
 from libera_utils.io.manifest import Manifest, ManifestType
 
 from libera_cam.l1b import algorithm
-
-# set logging to debug for the test
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
 
 
 @pytest.fixture

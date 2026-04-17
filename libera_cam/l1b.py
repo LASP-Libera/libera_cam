@@ -128,6 +128,7 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     logger.info("Step 2: Reading all input data from manifest files")
 
     # Use Path object and ensure directory exists
+    # TODO [LIBSDC-722]: Improve local SPICE caching to avoid redundant copies.
     spice_directory = Path(__file__).parent / "spice_files"
     spice_directory.mkdir(exist_ok=True)
 
