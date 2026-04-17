@@ -1,5 +1,11 @@
 # Version Changes
 
+## 0.2.6
+
+- **Process Parallelism**: Tested with all Dask schedulers, finding that both synchronous and distributed work reliably with all calculations. Threads (race conditions) and processes (out of memory) should not be used.
+- **Tuning**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments. Also exposed `DASK_SCHEDULER`, `DASK_NUM_WORKERS`, and `DASK_MEMORY_LIMIT` for further Dask tuning.
+- **Testing Tools**: Added `make_l1a_data.py` to create large L1A files for testing and `profile_l1b.py` for configurable test runs with profiling support.
+
 ## 0.2.5
 
 - Replace `no_geo` manifest key with `use_geo` (default true; `use_geo: false` for ground-calibration placeholder geolocation). Reject incompatible `use_geo: false` + `jpss_only: true` combinations. Align `use_geo: false` placeholder geolocation with product `_FillValue` (-999 lat/lon, -9999 alt) and Azimuth -999.
@@ -28,6 +34,7 @@
 - **Test Refactoring**: Rewrote `tests/unit/test_l1b.py` and `tests/unit/test_camera.py` to decouple them from legacy data files and non-linearity logic. Used rigorous mocking for orchestration tests.
 - **Integration Stability**: Updated integration tests to use `synchronous` Dask scheduling to avoid CSPICE kernel conflicts during parallel test execution.
 - **Cleanup**: Removed unused test data files (`camera_calibration_data.h5`) and obsolete code related to non-linearity corrections.
+- **Testing Tools**: Added `make_l1a_data.py` to create large L1A files for testing and `profile_l1b.py` for configurable test runs with profiling support.
 
 ## 0.2.1
 

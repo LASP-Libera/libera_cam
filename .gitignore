@@ -20,6 +20,7 @@ coverage_report
 corbertura_report.xml
 tests/test_data/hidden
 prof
+spice_files
 
 # Local Installation Artifacts #
 ################################
@@ -74,7 +75,7 @@ venv
 .python-version
 pytest.ini
 
-# Local folders #
+# added by Hong Chen #
 ######################
 !examples
 !examples/*.py
