@@ -62,6 +62,7 @@ Thumbs.db
 #######################
 .idea
 .project
+.vscode
 
 # Virtual environment #
 #######################

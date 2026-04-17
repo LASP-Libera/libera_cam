@@ -22,6 +22,7 @@ from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
 from libera_cam.geolocation import (
     GeolocationKernelConfig,
     add_geolocation_to_dataset,
+    add_placeholder_geolocation_to_dataset,
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 from libera_cam.packaging import package_l1b_product
@@ -58,25 +59,36 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     input_manifest = Manifest.from_file(parsed_cli_args.manifest)
     logger.info(f"Loaded manifest with {len(input_manifest.files)} files")
 
+    # Determine processing mode: presence of 'ground_data' key in the manifest
+    # configuration signals that SPICE kernels are unavailable and placeholder
+    # geolocation should be used instead of computing from spacecraft attitude.
+    no_geo_mode = "no_geo" in input_manifest.configuration
+    if no_geo_mode:
+        logger.info("No geolocation mode detected: placeholder geolocation will be used.")
+
     # Step 2: Read and store ALL input data from manifest files
     logger.info("Step 2: Reading all input data from manifest files")
-    l1a_data, spice_directory = read_all_input_data(input_manifest)
+    l1a_data, spice_directory = read_all_input_data(input_manifest, no_geo_mode=no_geo_mode)
 
     # Step 3: Calculate science data variables (YOUR SCIENCE GOES HERE)
     logger.info("Step 3: Calculating science data variables")
-    processed_data = process_l1a_to_l1b(l1a_data, spice_directory)
+    processed_data = process_l1a_to_l1b(l1a_data, spice_directory, no_geo_mode=no_geo_mode)
 
     # Steps 4: Store data with metadata and write to output folder
     logger.info("Step 4: Creating and writing data product")
     # This is where the compute happens!
     start = datetime.now()
-    output_files = write_data_product(processed_data, dropbox_path)
+    packaged_data = package_l1b_product(processed_data)
+    output_files = write_data_product(packaged_data, dropbox_path)
     end = datetime.now()
     logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
 
     # Step 6: Create output manifest
     logger.info("Step 5: Creating output manifest")
     output_manifest = Manifest.output_manifest_from_input_manifest(input_manifest)
+    # Propagate the full input configuration block so downstream users can
+    # inspect processing mode, time ranges, and any other operator settings.
+    output_manifest.configuration.update(input_manifest.configuration)
 
     # Step 7: Add data files to output manifest
     logger.info("Step 6: Adding data files to output manifest")
@@ -97,7 +109,9 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     return output_manifest_filepath
 
 
-def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset], Path]:
+def read_all_input_data(
+    input_manifest: Manifest, no_geo_mode: bool = False
+) -> tuple[dict[str, xr.Dataset], Path | None]:
     """
     Read and store all input data from manifest files.
 
@@ -113,8 +127,9 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     -------
     dict[str, xr.Dataset]
         Dictionary with filenames as keys and loaded xarray datasets as values.
-    Path
-        Path to the directory of SPICE files copied to local filesystem.
+    Path or None
+        Path to the directory of SPICE files copied to local filesystem, or
+        None when ground_data_mode is True and SPICE files are not required.
 
     Raises
     ------
@@ -127,10 +142,13 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     """
     logger.info("Step 2: Reading all input data from manifest files")
 
-    # Use Path object and ensure directory exists
+    # SPICE directory is only needed for production runs with SPICE-based geolocation.
     # TODO [LIBSDC-722]: Improve local SPICE caching to avoid redundant copies.
-    spice_directory = Path(__file__).parent / "spice_files"
-    spice_directory.mkdir(exist_ok=True)
+    if no_geo_mode:
+        spice_directory = None
+    else:
+        spice_directory = AnyPath(__file__).parent / "spice_files"
+        spice_directory.mkdir(exist_ok=True)
 
     all_data = {}
     spice_files_copied = []
@@ -141,16 +159,22 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
         try:
             # TODO [LIBSDC-722]: Improve local SPICE caching to avoid redundant copies.
             if file_info.filename.endswith((".bc", ".bsp")):
+                if no_geo_mode:
+                    logger.info(f"No geolocation mode: skipping SPICE file {file_info.filename}")
+                    continue
                 local_file_destination = spice_directory / Path(file_info.filename).name
                 smart_copy_file(file_info.filename, str(local_file_destination))
                 spice_files_copied.append(local_file_destination)
                 logger.info(f"Successfully copied SPICE file to: {local_file_destination}")
             else:
-                # Maintain laziness by using xr.open_dataset directly.
-                # Xarray handles closing the file when the dataset is closed.
                 dataset = xr.open_dataset(file_info.filename)
                 libera_filename = LiberaDataProductFilename(file_info.filename)
-                all_data[str(libera_filename.data_product_id)] = dataset
+                if libera_filename.data_product_id is not DataProductIdentifier.l1a_icie_wfov_sci_decoded:
+                    raise ValueError(
+                        f"Unexpected data product ID {libera_filename.data_product_id} in file {file_info.filename}."
+                        f"Expected L1A WFOV SCI DECODED data."
+                    )
+                all_data[str(DataProductIdentifier.l1a_icie_wfov_sci_decoded)] = dataset
                 logger.info(f"Successfully opened dataset with variables: {list(dataset.variables)}")
         except Exception as e:
             logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
@@ -164,7 +188,11 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     return all_data, spice_directory
 
 
-def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: Path) -> xr.Dataset:
+def process_l1a_to_l1b(
+    all_input_data: dict[str, xr.Dataset],
+    spice_directory: Path | None,
+    no_geo_mode: bool = False,
+) -> xr.Dataset:
     """
     Process L1A camera data and SPICE Kernels to L1B product.
 
@@ -184,9 +212,13 @@ def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: P
     all_input_data : dict[str, xr.Dataset]
         Dictionary of input datasets keyed by filename. Expected to contain camera sample data and
         nominal housekeeping data.
-    spice_directory : Path
+    spice_directory : Path or None
         Path to directory containing SPICE kernel files (.bc, .bsp) for spacecraft positioning and attitude
-        calculations.
+        calculations. Not used when no_geo_mode is True.
+    no_geo_mode : bool, optional
+        When True, replaces SPICE-based geolocation with NaN placeholder arrays.
+        Triggered by the presence of a 'no_geo' key in the input manifest
+        configuration. Defaults to False (production SPICE path).
 
     Returns
     -------
@@ -214,17 +246,17 @@ def process_l1a_to_l1b(all_input_data: dict[str, xr.Dataset], spice_directory: P
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
 
-    # Units and attributes are handled by the product definition YAML during write_data_product.
-
     # Apply Geolocation (Lazy)
-    geo_config = GeolocationKernelConfig(
-        temp_dir_base=None,  # Use default temp location on workers
-        dynamic_kernel_directory=spice_directory,
-    )
-    cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
-
-    # Package output product (Renaming, Transposing, Typing)
-    cam_dataset = package_l1b_product(cam_dataset)
+    # No geolocation mode uses NaN placeholders because spacecraft attitude kernels
+    # are not available outside of production/flight-data processing.
+    if no_geo_mode:
+        cam_dataset = add_placeholder_geolocation_to_dataset(cam_dataset)
+    else:
+        geo_config = GeolocationKernelConfig(
+            temp_dir_base=None,
+            dynamic_kernel_directory=spice_directory,
+        )
+        cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
 
     return cam_dataset
 
@@ -251,7 +283,7 @@ def write_data_product(processed_data: xr.Dataset, output_path: str) -> LiberaDa
         data_product_definition=product_def_path,
         data=processed_data,
         output_path=output_path,
-        time_variable="camera_time",
+        time_variable="CAMERA_TIME",
     )
 
     return output_files

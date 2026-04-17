@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
@@ -184,3 +185,34 @@ def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
     # Now calculate_chunk_geolocation should have been called at least once (inference + compute)
     assert mock_calc_chunk.call_count >= 1
     assert result_chunk.shape == (2, 2, 2)
+
+
+@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 4)
+@patch("libera_cam.geolocation.PIXEL_COUNT_X", 4)
+def test_add_placeholder_geolocation_to_dataset():
+    """Placeholder function adds NaN-filled Latitude/Longitude/Altitude matching image_data chunks."""
+    import xarray as xr
+
+    from libera_cam.geolocation import add_placeholder_geolocation_to_dataset
+
+    n_times = 6
+    times = pd.date_range("2025-01-01", periods=n_times, freq="s")
+    image_data = da.zeros((n_times, 4, 4), chunks=(3, 4, 4))
+
+    ds = xr.Dataset(
+        {"image_data": (("camera_time", "y", "x"), image_data)},
+        coords={"camera_time": times, "y": range(4), "x": range(4)},
+    )
+
+    result = add_placeholder_geolocation_to_dataset(ds)
+
+    for var in ("Latitude", "Longitude", "Altitude"):
+        assert var in result, f"{var} missing from result dataset"
+        assert isinstance(result[var].data, da.Array), f"{var} should be a dask array"
+        assert result[var].dtype == np.float32, f"{var} dtype should be float32"
+        # Time chunks must match image_data chunks
+        assert result[var].data.chunks[0] == image_data.chunks[0], f"{var} time chunks should match image_data"
+
+    # All values must be NaN when computed
+    computed = result["Latitude"].compute()
+    assert np.isnan(computed.values).all(), "Latitude placeholder should be all NaN"

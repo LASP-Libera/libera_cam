@@ -33,8 +33,19 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     """
     logger.info("Packaging L1B product for conformance.")
 
-    # 1. Rename variables/dims to match Product Definition
-    # Note: 'camera_time' is already correct from ingest.
+    # Drop ingest-only summary attrs that are not part of the L1B product schema.
+    for attr_name in (
+        "description",
+        "n_packets_read",
+        "n_images_stitched",
+        "n_images_discarded_sop",
+        "n_images_discarded_gap",
+        "n_unexpected_eop",
+        "n_images_decoded",
+    ):
+        dataset.attrs.pop(attr_name, None)
+
+    # 1. Rename variables/dims to match Product Definition.
     # We map internal names (e.g. 'image_data') to public names (e.g. 'Pixel_Counts').
     dataset = dataset.rename(
         {
@@ -42,16 +53,17 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
             "rad_obs_id": "Radiometer_Operational_Mode",
             "cam_obs_id": "Camera_Operational_Mode",
             "image_data": "Pixel_Counts",
-            "integration_mask": "Integration_Time",
+            "integration_mask": "Integration_Time_Flag",
             "good_image_flag": "Quality_Flag",
-            "x": "camera_pixel_count_x",
-            "y": "camera_pixel_count_y",
+            "camera_time": "CAMERA_TIME",
+            "x": "CAMERA_PIXEL_COUNT_X",
+            "y": "CAMERA_PIXEL_COUNT_Y",
         }
     )
 
     # 2. Reorder dimensions to match product definition: (Time, X, Y)
     # This effectively transposes the image arrays if they were (Time, Y, X).
-    dataset = dataset.transpose("camera_time", "camera_pixel_count_x", "camera_pixel_count_y")
+    dataset = dataset.transpose("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
 
     # 3. Create Placeholders for unused fields (Lazy)
     # Using da.zeros_like to match the chunking of Radiance
@@ -60,7 +72,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         raise ValueError("Dataset must contain 'Radiance' variable before packaging.")
 
     pixel_placeholder = da.zeros_like(dataset["Radiance"].data, dtype=np.float32)
-    dims_3d = ("camera_time", "camera_pixel_count_x", "camera_pixel_count_y")
+    dims_3d = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
 
     placeholders = {
         "Terrain_Corrected_Latitude": (dims_3d, pixel_placeholder),
@@ -79,8 +91,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     # Using explicit casting to float32/uint types
     type_map = {
         "Azimuth": np.float32,
-        "Radiometer_Operational_Mode": np.uint8,
-        "Camera_Operational_Mode": np.uint8,
+        "Radiometer_Operational_Mode": np.uint16,
+        "Camera_Operational_Mode": np.uint16,
         "Pixel_Counts": np.uint16,
         "Integration_Time": np.uint8,
         "Quality_Flag": np.uint32,
@@ -94,5 +106,13 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         if var_name in dataset:
             if dataset[var_name].dtype != dtype:
                 dataset[var_name] = dataset[var_name].astype(dtype)
+
+    # Normalize geolocation long_name metadata to match the product definition.
+    if "Latitude" in dataset:
+        dataset["Latitude"].attrs["long_name"] = "Geodetic latitude. Coordinate Reference System WGS84"
+    if "Longitude" in dataset:
+        dataset["Longitude"].attrs["long_name"] = "Longitude. Coordinate Reference System WGS84"
+    if "Altitude" in dataset:
+        dataset["Altitude"].attrs["long_name"] = "Height above the WGS84 ellipsoid. EPSG:4979"
 
     return dataset
