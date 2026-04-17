@@ -23,6 +23,10 @@ repos:
         args: [--branch, main, --branch, dev]
       - id: check-yaml
       - id: check-json
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.8.1
+    hooks:
+      - id: nbstripout
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: "v0.9.8"
     hooks:
@@ -34,3 +38,11 @@ repos:
     hooks:
       - id: codespell
         files: ^.*\.(py|md|rst|yml|json)$
+  - repo: https://github.com/lasp/prevent-dangling-todos
+    rev: v1.0.0
+    hooks:
+      - id: prevent-dangling-todos
+        args: ["-t", "LIBSDC", "-c", "TODO,FIXME", "--check-unstaged"]
+        exclude: ".pre-commit-config.yaml"
+        verbose: true
+        always_run: true

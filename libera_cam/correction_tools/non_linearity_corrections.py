@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 
-# TODO: Change this to netCDF4 after Heather has implemented it and the camera team has confirmed calibration data
 import h5py
 import numpy as np
 
@@ -14,7 +13,6 @@ from libera_cam.utils.hdf5_io import load_hdf5_variable, load_hdf5_variable_from
 def get_non_linearity_factor(
     pixel_counts: np.ndarray, use_synthetic: bool = False, use_exact: bool = False
 ) -> np.ndarray:
-    # TODO: This function will eventually read in calibration parameter files
     """Returns the flat fielding correction from calibration parameters
 
     Parameters

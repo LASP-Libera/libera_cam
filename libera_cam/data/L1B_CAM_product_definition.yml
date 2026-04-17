@@ -97,52 +97,6 @@ variables:
       units: degrees
       valid_range: [0, 180]
       _FillValue: -999
-  Satellite_Position:
-    dtype: float64
-    dimensions: ["camera_time", "euclidean_dim"]
-    attributes:
-      long_name: >-
-        X, Y, and Z components of the satellite inertial position in J2000 Earth-centered inertial reference frame
-      units: kilometers
-      valid_range: [-8000.0, 8000.0]
-      _FillValue: -9999
-  Satellite_Velocity:
-    dtype: float64
-    dimensions: ["camera_time", "euclidean_dim"]
-    attributes:
-      long_name: >-
-        X, Y, and Z components of the satellite inertial velocity in J2000 Earth-centered inertial reference frame
-      units: km/s
-      valid_range: [-10, 10]
-      _FillValue: -999
-  Satellite_Attitude_Q0:
-    dtype: float32
-    dimensions: ["radiometer_time"]
-    attributes:
-      long_name: The scalar component of the quaternion describing the attitude of the spacecraft interpolated to the radiometer measurement time in ECEF
-      valid_range: [-1, 1]
-      _FillValue: -999
-  Satellite_Attitude_Q1:
-    dtype: float32
-    dimensions: ["radiometer_time"]
-    attributes:
-      long_name: First component in the quaternion vector describing the attitude of the spacecraft interpolated to the radiometer measurement time in ECEF
-      valid_range: [-1, 1]
-      _FillValue: -999
-  Satellite_Attitude_Q2:
-    dtype: float32
-    dimensions: ["radiometer_time"]
-    attributes:
-      long_name: Second component in the quaternion vector describing the attitude of the spacecraft interpolated to the radiometer measurement time in ECEF
-      valid_range: [-1, 1]
-      _FillValue: -999
-  Satellite_Attitude_Q3:
-    dtype: float32
-    dimensions: ["radiometer_time"]
-    attributes:
-      long_name: Third component in the quaternion vector describing the attitude of the spacecraft interpolated to the radiometer measurement time in ECEF
-      valid_range: [-1, 1]
-      _FillValue: -999
   Azimuth:
     dtype: float32
     dimensions: ["camera_time"]
@@ -155,33 +109,38 @@ variables:
   ##############
   # Instrument #
   ##############
-  # TODO[LIBSDC-708]: Confirm how granular we want to get with the operational mode and where we will get the information
   Radiometer_Operational_Mode:
-    dtype: int8
-    dimensions: ["radiometer_time"]
+    dtype: uint16
+    dimensions: ["camera_time"]
     attributes:
       long_name: >-
-        Radiometer operational mode (details TBD; need an indicator for
-        cross-track, along-track, RAPS, Earth Target, GeoScan,
-        shortwave cal, longwave cal, solar cal, gain cal, lunar cal,
-        and maybe something like 'transition' just in case.
-      valid_range: [0, 10] #TBC
-      _FillValue: -128
+        Radiometer operational mode (details TBD; indicators for
+        nominal, video, dark, LED, lunar cal,
+        and maybe something like 'transition' just in case?
+      valid_range: [0, 511] #TBC
+      _FillValue: 0
   Camera_Operational_Mode:
-    dtype: int8
+    dtype: uint16
     dimensions: ["camera_time"]
     attributes:
       long_name: >-
         Camera operational mode (details TBD; indicators for
         nominal, video, dark, LED, lunar cal,
         and maybe something like 'transition' just in case?
-      valid_range: [0, 10] #TBC
-      _FillValue: -128
+      valid_range: [0, 511] #TBC
+      _FillValue: 0
 
   ###########
   # Science #
   ###########
   # TODO[LIBSDC-709]: Add any camera telemetry needed for calibration or L2 processing
+  Pixel_Counts:
+    dtype: uint16
+    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    attributes:
+      long_name: Original Pixel counts from camera before any corrections
+      units: dn
+      valid_range: [0, 10000]
   Radiance:
     dtype: float32
     dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
@@ -192,32 +151,23 @@ variables:
       units: W/(m^2*sr*nm)
       valid_range: [0, 1000]
       _FillValue: -999
-  Radiance_Uncertainty: # Useful?
-    dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
-    attributes:
-      long_name: Uncertainty in the camera radiance
-      units: #TBC percent or absolute if including
-      valid_range: [] #Depends on units
-      _FillValue: -999
   Camera_Mask:
     #If we need to save storage space, this can become a per-image trace to the mask that was applied,
     #rather than the pixel-level bitmask itself (FSW captures this as "Bitmask Mask ID")
-    dtype: int8
+    dtype: uint8
     dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
     attributes:
       long_name: Pixel level mask for data
       valid_range: [0, 1]
-  Integration_Time:
-    dtype: int8
+  Integration_Time_Flag:
+    dtype: uint8
     dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
     attributes:
-      long_name: Integration time for camera exposures in milliseconds
-      units: ms
-      valid_range: [1, 20]
+      long_name: Integration time for camera exposure. 0 for short, 1 for long
+      valid_range: [0, 1]
   Quality_Flag:
     dtype: uint32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["camera_time"]
     attributes:
       long_name: Bit flags indicating the quality of the data
       value_meaning: TBD. Example file from PREFIRE has this information laid out per-bit using [b0], [b1], etc.
