@@ -62,6 +62,7 @@ Thumbs.db
 #######################
 .idea
 .project
+.vscode
 
 # Virtual environment #
 #######################
@@ -86,3 +87,6 @@ pytest.ini
 .gemini
 gemini_plans
 GEMINI.md
+Claude.md
+fort.*
+spice_files/

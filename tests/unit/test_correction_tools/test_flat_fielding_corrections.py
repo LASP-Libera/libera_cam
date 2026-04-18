@@ -10,5 +10,6 @@ def test_get_flat_field_factor(use_synthetic):
         synth_data = get_flat_field_factor(use_synthetic=True)
         np.testing.assert_equal(synth_data, 1)
     else:
-        with pytest.raises(NotImplementedError):
-            get_flat_field_factor(use_synthetic=False)
+        # Placeholder returns 1.0
+        data = get_flat_field_factor(use_synthetic=False)
+        assert data == 1.0

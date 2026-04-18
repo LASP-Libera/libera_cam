@@ -1,31 +1,58 @@
 """The primary methods used for calculating the l1b camera data"""
 
 import numpy as np
+import xarray as xr
 
-from libera_cam.constants import IntegrationTime
 from libera_cam.correction_tools import (
     get_dark_offset,
     get_flat_field_factor,
-    get_non_linearity_factor,
     get_radiometric_factor,
 )
 
 
+def _convert_dn_to_radiance_numpy(dn, int_time, use_synthetic):
+    """
+    Numpy-level implementation for a single chunk.
+    This is called by apply_ufunc.
+    """
+    # 1. Dark Offset Correction
+    # get_dark_offset returns (2048, 2048)
+    dark_offset = get_dark_offset(int_time, use_synthetic=use_synthetic)
+    dark_corrected_counts = dn - dark_offset
+
+    # 2. Flat-Fielding Correction
+    # get_flat_field_factor returns (2048, 2048)
+    flat_field_factor = get_flat_field_factor(use_synthetic=use_synthetic)
+    flat_field_corrected_counts = dark_corrected_counts * flat_field_factor
+
+    # 3. Radiometric Calibration Coefficient
+    # get_radiometric_factor returns a scalar or array matching integration_time
+    radiometric_factor = get_radiometric_factor(int_time, use_synthetic=use_synthetic)
+    radiance_image = flat_field_corrected_counts * radiometric_factor
+
+    return radiance_image.astype(np.float32)
+
+
 def convert_dn_to_radiance(
-    dn_image: np.ndarray, integration_time: IntegrationTime, use_synthetic: bool = False, use_exact: bool = False
+    dn_images: xr.DataArray,
+    int_time_masks: xr.DataArray,
+    use_synthetic: bool = False,
+    use_exact: bool = False,
 ):
     """Converts an image of dn (digital number counts) to a radiance image.
 
-    This function applies a series of corrections to the input DN image,including dark offset correction,
+    This function applies a series of corrections to the input DN image, including dark offset correction,
     non-linearity correction, flat-fielding correction, and radiometric calibration.
+
+    It uses xarray.apply_ufunc with dask='parallelized' to ensure that if the input
+    is backed by Dask, the computation remains lazy and is distributed across workers.
 
     Parameters
     ----------
-    dn_image : np.ndarray
-        A 2D NumPy array representing the input DN image.
-        Shape should be (2048, 2048).
-    integration_time : IntegrationTime
-        The integration time used to acquire the image.
+    dn_images : xr.DataArray
+        A 3D DataArray (time, y, x) representing the input DN images.
+    int_time_masks : xr.DataArray
+        A 3D DataArray (time, y, x) of integration times used to acquire each pixel.
     use_synthetic : bool
         This is a flag to use synthetic calibration parameters
     use_exact: bool, Optional
@@ -34,46 +61,24 @@ def convert_dn_to_radiance(
 
     Returns
     -------
-    np.ndarray
-        A 2D NumPy array representing the radiance image.
-        Shape will be the same as `dn_image` (2048, 2048).
-
-    Raises
-    ------
-    ValueError
-        If the input `dn_image` is not a 2D array or does not have the shape (2048, 2048).
-
-    Notes
-    -----
-    The following corrections are applied in order:
-        1. Dark Offset Correction: Removes the dark current signal.
-        2. Non-Linearity Correction: Corrects for non-linear response of the sensor.
-        3. Flat-Fielding Correction: Corrects for pixel-to-pixel sensitivity variations.
-        4. Radiometric Calibration: Converts the corrected counts to radiance units.
+    xr.DataArray
+        A 3D DataArray representing the radiance images.
+        Shape will be the same as `dn_images`.
     """
-    if not isinstance(dn_image, np.ndarray):
-        raise TypeError("dn_image must be a NumPy array.")
-    if dn_image.ndim != 2:
-        raise ValueError("dn_image must be a 2D array.")
-    if dn_image.shape != (2048, 2048):
-        raise ValueError(f"dn_image must have shape (2048, 2048), but has shape {dn_image.shape}")
+    if not isinstance(dn_images, xr.DataArray) or not isinstance(int_time_masks, xr.DataArray):
+        raise TypeError("Both dn_images and int_time_masks must be Xarray DataArrays.")
 
-    # 1. Dark Offset Correction
-    dark_offset = get_dark_offset(integration_time, use_synthetic=use_synthetic)
-    dark_corrected_counts = dn_image - dark_offset
-
-    # 2. Non-Linearity Correction
-    non_linearity_factor = get_non_linearity_factor(
-        dark_corrected_counts, use_synthetic=use_synthetic, use_exact=use_exact
+    # Use apply_ufunc to handle Dask automatically.
+    # core_dims=['y', 'x'] means the function is called for each 'camera_time' (or chunk of times).
+    radiance = xr.apply_ufunc(
+        _convert_dn_to_radiance_numpy,
+        dn_images,
+        int_time_masks,
+        kwargs={"use_synthetic": use_synthetic},
+        input_core_dims=[["y", "x"], ["y", "x"]],
+        output_core_dims=[["y", "x"]],
+        dask="parallelized",
+        output_dtypes=[np.float32],
     )
-    non_linearity_corrected_counts = dark_corrected_counts * non_linearity_factor
 
-    # 3. Flat-Fielding Correction
-    flat_field_factor = get_flat_field_factor(use_synthetic=use_synthetic)
-    flat_field_corrected_counts = non_linearity_corrected_counts * flat_field_factor
-
-    # 4. Radiometric Calibration
-    radiometric_factor = get_radiometric_factor(integration_time, use_synthetic=use_synthetic)
-    radiance_image = flat_field_corrected_counts * radiometric_factor
-
-    return radiance_image
+    return radiance

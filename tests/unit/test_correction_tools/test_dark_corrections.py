@@ -19,5 +19,6 @@ def test_get_dark_offset(integration_time, use_synthetic, expected_max, expected
         assert np.abs(synth_data.max() - expected_max) < 0.01
         assert np.abs(synth_data.min() - expected_min) < 0.01
     else:
-        with pytest.raises(NotImplementedError):
-            get_dark_offset(integration_time, use_synthetic=False)
+        # Placeholder returns 0
+        dark_offset = get_dark_offset(integration_time, use_synthetic=use_synthetic)
+        assert dark_offset == 0

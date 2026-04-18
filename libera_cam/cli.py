@@ -44,13 +44,9 @@ def parse_cli_args(cli_args: list):
         help="print current version of the CLI",
     )
 
-    subparsers = parser.add_subparsers(description="sub-commands for libera-cam CLI")
-
-    l1b_parser = subparsers.add_parser("l1b", help="generate L1b data products")
-
-    l1b_parser.set_defaults(func=l1b.algorithm)
-    l1b_parser.add_argument("manifest", type=str, help="input manifest file")
-    l1b_parser.add_argument("-v", "--verbose", action="store_true", help="set DEBUG level logging output")
+    parser.set_defaults(func=l1b.algorithm)
+    parser.add_argument("manifest", type=str, help="input manifest file")
+    parser.add_argument("-v", "--verbose", action="store_true", help="set DEBUG level logging output")
 
     parsed_args = parser.parse_args(cli_args)
     return parsed_args

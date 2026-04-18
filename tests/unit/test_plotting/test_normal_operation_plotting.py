@@ -3,6 +3,7 @@ import datetime
 import h5py
 import numpy as np
 import pytest
+import xarray as xr
 
 import libera_cam.utils.hdf5_io as hdf5_io
 from libera_cam.camera import convert_dn_to_radiance
@@ -27,7 +28,15 @@ def test_plot_observed_vs_true_plus_relative_difference(
         seconds=np.round(((obs_julian_day - 1) * 86400.0), decimals=0)
     )
 
-    observed_radiance = convert_dn_to_radiance(pixel_counts, integration_time, use_synthetic=True)
+    # Wrap inputs in DataArray as expected by camera.py
+    # pixel_counts is likely (2048, 2048), we add time dim
+    dn_da = xr.DataArray(pixel_counts[np.newaxis, ...], dims=("camera_time", "y", "x"))
+    # IntegrationTime is a scalar Enum
+    int_time_da = xr.DataArray(np.full((1, 2048, 2048), integration_time.value), dims=("camera_time", "y", "x"))
+
+    observed_radiance_da = convert_dn_to_radiance(dn_da, int_time_da, use_synthetic=True)
+    observed_radiance = observed_radiance_da.values.squeeze()
+
     observed_radiance[np.isnan(ref_radiance)] = np.nan
 
     plot_observed_vs_true_plus_relative_difference(ref_radiance, observed_radiance, integration_time, obs_datetime)

@@ -1,11 +1,11 @@
 attributes:
   ProductID: CAM
-  algorithm_version: 0.1.2
+  algorithm_version: 0.2.2
 
 coordinates:
-  camera_time: # TODO[LIBSDC-707]: Validate that time is unique for each image and can be used as a UID
+  CAMERA_TIME: # TODO[LIBSDC-707]: Validate that time is unique for each image and can be used as a UID
     dtype: datetime64[ns]
-    dimensions: ["camera_time"]
+    dimensions: ["CAMERA_TIME"]
     attributes:
       long_name: >-
         Time of each measurement (UTC) against a base reference of the CCSDS Epoch (January 1, 1958).
@@ -21,7 +21,7 @@ variables:
   ###############
   Latitude:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Geodetic latitude. Coordinate Reference System WGS84
       units: degrees_north
@@ -29,7 +29,7 @@ variables:
       _FillValue: -999 #off Earth
   Terrain_Corrected_Latitude:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Terrain corrected latitude
       units: degrees_north
@@ -37,7 +37,7 @@ variables:
       _FillValue: -999 #off Earth
   Longitude:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Longitude. Coordinate Reference System WGS84
       units: degrees_east
@@ -45,7 +45,7 @@ variables:
       _FillValue: -999 #off Earth
   Terrain_Corrected_Longitude:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Terrain corrected longitude
       units: degrees_east
@@ -53,7 +53,7 @@ variables:
       _FillValue: -999 #off Earth
   Altitude:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Height above the WGS84 ellipsoid. EPSG:4979
       units: meters
@@ -61,7 +61,7 @@ variables:
       _FillValue: -9999
   Terrain_Corrected_Altitude:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Terrain corrected altitude
       units: meters
@@ -73,7 +73,7 @@ variables:
   ############
   Solar_Zenith_Surface:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Geodetic zenith angle at the Earth point of the Sun
       units: degrees
@@ -81,7 +81,7 @@ variables:
       _FillValue: -999
   Relative_Azimuth_Surface:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: >-
         Geodetic azimuth angle at the Earth point of the satellite relative to
@@ -91,7 +91,7 @@ variables:
       _FillValue: -999
   Viewing_Zenith_Surface:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Geodetic angle at the Earth point to the satellite
       units: degrees
@@ -99,7 +99,7 @@ variables:
       _FillValue: -999
   Azimuth:
     dtype: float32
-    dimensions: ["camera_time"]
+    dimensions: ["CAMERA_TIME"]
     attributes:
       long_name: Detector azimuth angle
       units: degrees
@@ -111,7 +111,7 @@ variables:
   ##############
   Radiometer_Operational_Mode:
     dtype: uint16
-    dimensions: ["camera_time"]
+    dimensions: ["CAMERA_TIME"]
     attributes:
       long_name: >-
         Radiometer operational mode (details TBD; indicators for
@@ -121,7 +121,7 @@ variables:
       _FillValue: 0
   Camera_Operational_Mode:
     dtype: uint16
-    dimensions: ["camera_time"]
+    dimensions: ["CAMERA_TIME"]
     attributes:
       long_name: >-
         Camera operational mode (details TBD; indicators for
@@ -136,14 +136,14 @@ variables:
   # TODO[LIBSDC-709]: Add any camera telemetry needed for calibration or L2 processing
   Pixel_Counts:
     dtype: uint16
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Original Pixel counts from camera before any corrections
       units: dn
       valid_range: [0, 10000]
   Radiance:
     dtype: float32
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: >-
         Measured, spectrally integrated radiance emerging from the TOA, where the spectral
@@ -155,19 +155,19 @@ variables:
     #If we need to save storage space, this can become a per-image trace to the mask that was applied,
     #rather than the pixel-level bitmask itself (FSW captures this as "Bitmask Mask ID")
     dtype: uint8
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Pixel level mask for data
       valid_range: [0, 1]
   Integration_Time_Flag:
     dtype: uint8
-    dimensions: ["camera_time", "camera_pixel_count_x", "camera_pixel_count_y"]
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Integration time for camera exposure. 0 for short, 1 for long
       valid_range: [0, 1]
   Quality_Flag:
     dtype: uint32
-    dimensions: ["camera_time"]
+    dimensions: ["CAMERA_TIME"]
     attributes:
       long_name: Bit flags indicating the quality of the data
       value_meaning: TBD. Example file from PREFIRE has this information laid out per-bit using [b0], [b1], etc.

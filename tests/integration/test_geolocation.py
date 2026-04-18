@@ -78,7 +78,7 @@ def test_add_geolocation_to_dataset(test_data_path, test_ditl_l1a_file_path):
 
     # 4. Compute (Trigger Dask)
     # Compute first frame
-    result = ds_geo.isel(camera_time=0).compute(scheduler="processes")
+    result = ds_geo.isel(camera_time=0).compute(scheduler="synchronous")
 
     assert result["Latitude"].shape == (2048, 2048)
 
@@ -117,7 +117,7 @@ def test_add_geolocation_with_static_mask(test_data_path, test_ditl_l1a_file_pat
     ds_geo = add_geolocation_to_dataset(ds, config, pixel_mask=mask)
 
     # 5. Verify
-    result = ds_geo.isel(camera_time=0).compute(scheduler="processes")
+    result = ds_geo.isel(camera_time=0).compute(scheduler="synchronous")
     lat = result["Latitude"].values.ravel()
 
     # Masked-out pixels (index 10 onwards) must be NaN
@@ -157,8 +157,8 @@ def test_add_geolocation_with_dynamic_mask_integration(test_data_path, test_ditl
     # ds_geo_full = add_geolocation_to_dataset(ds, config, pixel_mask=None)
 
     # 6. Verify Results
-    results = ds_geo_dynamic["Latitude"].compute(scheduler="processes").values  # (3, 2048, 2048)
-    # full_results = ds_geo_full["Latitude"].compute(scheduler="processes").values
+    results = ds_geo_dynamic["Latitude"].compute(scheduler="synchronous").values  # (3, 2048, 2048)
+    # full_results = ds_geo_full["Latitude"].compute(scheduler="synchronous").values
 
     # Verification Logic:
     # We verify that masked-out regions are strictly NaN.

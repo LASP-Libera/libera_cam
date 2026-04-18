@@ -13,7 +13,7 @@ from libera_cam import cli, l1b
     ("cli_args", "parsed"),
     [
         (
-            ["l1b", "-v", "input_manifest.json"],
+            ["-v", "input_manifest.json"],
             argparse.Namespace(func=l1b.algorithm, manifest="input_manifest.json", verbose=True),
         ),
     ],
