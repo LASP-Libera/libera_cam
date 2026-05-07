@@ -39,8 +39,8 @@ class TestL1b(unittest.TestCase):
 
         # Mock return values for steps
         mock_l1a_data = {"test": "data"}
-        mock_spice_dir = Path("/tmp/spice")
-        mock_read.return_value = (mock_l1a_data, mock_spice_dir)
+        mock_dynamic_kernel_sources = ["/tmp/spice/orbit.bc"]
+        mock_read.return_value = (mock_l1a_data, mock_dynamic_kernel_sources)
 
         mock_processed_ds = MagicMock(spec=xr.Dataset)
         mock_process.return_value = mock_processed_ds
@@ -62,7 +62,7 @@ class TestL1b(unittest.TestCase):
         # Verification
         mock_manifest_cls.from_file.assert_called_with("input.json")
         mock_read.assert_called_with(mock_manifest, no_geo_mode=False)
-        mock_process.assert_called_with(mock_l1a_data, mock_spice_dir, no_geo_mode=False)
+        mock_process.assert_called_with(mock_l1a_data, mock_dynamic_kernel_sources, no_geo_mode=False)
         mock_package.assert_called_once_with(mock_processed_ds)
         mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox")
 
@@ -97,20 +97,19 @@ class TestL1b(unittest.TestCase):
         mock_filename.data_product_id = DataProductIdentifier.l1a_icie_wfov_sci_decoded
         mock_filename_cls.return_value = mock_filename
 
-        with patch("libera_cam.l1b.Path.mkdir"):
-            all_data, spice_dir = l1b.read_all_input_data(mock_manifest)
+        all_data, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
 
         # Verify
         assert "WFOV-SCI-DECODED" in all_data
         assert all_data["WFOV-SCI-DECODED"] == mock_ds
+        assert dynamic_kernel_sources == []
         # Verify that .load() was NOT called (maintaining laziness)
         mock_ds.load.assert_not_called()
 
-    @patch("libera_cam.l1b.smart_copy_file")
     @patch("libera_cam.l1b.xr.open_dataset")
     @patch("libera_cam.l1b.LiberaDataProductFilename")
-    def test_read_all_input_data_ground_data_mode(self, mock_filename_cls, mock_open_ds, mock_smart_copy):
-        """SPICE files are silently skipped and spice_directory is None in ground_data_mode."""
+    def test_read_all_input_data_ground_data_mode(self, mock_filename_cls, mock_open_ds):
+        """SPICE files are silently skipped and dynamic_kernel_sources is None in no_geo_mode."""
         nc_file = MagicMock()
         nc_file.filename = "test_l1a.nc"
         spice_file = MagicMock()
@@ -127,10 +126,9 @@ class TestL1b(unittest.TestCase):
         mock_filename.data_product_id = DataProductIdentifier.l1a_icie_wfov_sci_decoded
         mock_filename_cls.return_value = mock_filename
 
-        all_data, spice_dir = l1b.read_all_input_data(mock_manifest, no_geo_mode=True)
+        all_data, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest, no_geo_mode=True)
 
-        mock_smart_copy.assert_not_called()
-        assert spice_dir is None
+        assert dynamic_kernel_sources is None
         assert "WFOV-SCI-DECODED" in all_data
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
@@ -153,12 +151,13 @@ class TestL1b(unittest.TestCase):
 
         mock_geo.return_value = mock_lazy_ds
 
-        l1b.process_l1a_to_l1b(all_input, Path("/tmp/spice"), no_geo_mode=False)
+        dynamic_kernel_sources = ["/tmp/spice/orbit.bc"]
+        l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, no_geo_mode=False)
 
         mock_geo.assert_called_once()
         call_kwargs = mock_geo.call_args
         # Second positional arg is the GeolocationKernelConfig
-        assert call_kwargs.args[1].dynamic_kernel_directory == Path("/tmp/spice")
+        assert call_kwargs.args[1].dynamic_kernel_sources == dynamic_kernel_sources
         # Third keyword arg is pixel_mask
         assert call_kwargs.kwargs["pixel_mask"] is mock_lazy_ds.valid_pixel_mask
 
@@ -180,7 +179,7 @@ class TestL1b(unittest.TestCase):
         mock_convert.return_value = mock_radiance
         mock_placeholder.return_value = mock_lazy_ds
 
-        result = l1b.process_l1a_to_l1b(all_input, spice_directory=None, no_geo_mode=True)
+        result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources=None, no_geo_mode=True)
 
         mock_placeholder.assert_called_once_with(mock_lazy_ds)
         assert result is mock_lazy_ds

@@ -4,6 +4,7 @@ import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
+from libera_utils.libera_spice import spice_utils
 from libera_utils.libera_spice.kernel_manager import KernelManager
 
 from libera_cam.geolocation import (
@@ -63,7 +64,7 @@ def test_add_geolocation_to_dataset(test_data_path, test_ditl_l1a_file_path):
     # 2. Setup Config
     test_kernel_dir = test_data_path / "DITL_short"
     config = GeolocationKernelConfig(
-        dynamic_kernel_directory=test_kernel_dir, use_test_naif_url=False, cache_timeout_days=7
+        dynamic_kernel_sources=test_kernel_dir, use_test_naif_url=False, cache_timeout_days=7
     )
 
     # 3. Add Geolocation (Lazy)
@@ -106,7 +107,7 @@ def test_add_geolocation_with_static_mask(test_data_path, test_ditl_l1a_file_pat
 
     # 2. Config
     test_kernel_dir = test_data_path / "DITL_short"
-    config = GeolocationKernelConfig(dynamic_kernel_directory=test_kernel_dir)
+    config = GeolocationKernelConfig(dynamic_kernel_sources=test_kernel_dir)
 
     # 3. Create a Static Mask
     # Mask out everything except the first 10 pixels
@@ -148,7 +149,7 @@ def test_add_geolocation_with_dynamic_mask_integration(test_data_path, test_ditl
 
     # 3. Config
     test_kernel_dir = test_data_path / "DITL_short"
-    config = GeolocationKernelConfig(dynamic_kernel_directory=test_kernel_dir)
+    config = GeolocationKernelConfig(dynamic_kernel_sources=test_kernel_dir)
 
     # 4. Run Geolocation (Dynamic)
     ds_geo_dynamic = add_geolocation_to_dataset(ds, config, pixel_mask=mask_da)
@@ -172,3 +173,23 @@ def test_add_geolocation_with_dynamic_mask_integration(test_data_path, test_ditl
 
     # Frame 2: All NaN
     assert np.isnan(results[2]).all()
+
+
+@pytest.mark.integration
+def test_dynamic_kernel_sequence_materializes_into_cache(monkeypatch, tmp_path, test_data_path):
+    """Explicit sequence mode should materialize kernel basenames into the user cache via KernelFileCache."""
+    test_kernel_dir = test_data_path / "DITL_short"
+    kernel_files = sorted(
+        [p for p in test_kernel_dir.iterdir() if p.is_file() and p.suffix in {".bc", ".bsp"}],
+        key=lambda p: p.name,
+    )
+    assert kernel_files, f"No dynamic kernels found under {test_kernel_dir}"
+    sources = kernel_files[:2]
+
+    monkeypatch.setattr(spice_utils.caching, "get_local_cache_dir", lambda: tmp_path)
+
+    km = KernelManager(cache_timeout_days=7)
+    km.load_libera_dynamic_kernels(sources, needs_naif_kernels=True, needs_static_kernels=True)
+
+    for src in sources:
+        assert (tmp_path / src.name).is_file(), f"Expected cached kernel missing: {src.name}"

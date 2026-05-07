@@ -4,18 +4,18 @@
 import argparse
 import logging
 import os
+from collections.abc import Sequence
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
 import dask
 import xarray as xr
-from cloudpathlib import AnyPath
+from cloudpathlib import AnyPath, S3Path
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.manifest import Manifest
 from libera_utils.io.netcdf import write_libera_data_product
-from libera_utils.io.smart_open import smart_copy_file
 
 from libera_cam.camera import convert_dn_to_radiance
 from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
@@ -68,11 +68,11 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
     # Step 2: Read and store ALL input data from manifest files
     logger.info("Step 2: Reading all input data from manifest files")
-    l1a_data, spice_directory = read_all_input_data(input_manifest, no_geo_mode=no_geo_mode)
+    l1a_data, dynamic_kernel_sources = read_all_input_data(input_manifest, no_geo_mode=no_geo_mode)
 
     # Step 3: Calculate science data variables (YOUR SCIENCE GOES HERE)
     logger.info("Step 3: Calculating science data variables")
-    processed_data = process_l1a_to_l1b(l1a_data, spice_directory, no_geo_mode=no_geo_mode)
+    processed_data = process_l1a_to_l1b(l1a_data, dynamic_kernel_sources, no_geo_mode=no_geo_mode)
 
     # Steps 4: Store data with metadata and write to output folder
     logger.info("Step 4: Creating and writing data product")
@@ -111,12 +111,14 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
 def read_all_input_data(
     input_manifest: Manifest, no_geo_mode: bool = False
-) -> tuple[dict[str, xr.Dataset], Path | None]:
+) -> tuple[dict[str, xr.Dataset], list[str] | None]:
     """
     Read and store all input data from manifest files.
 
     This function opens and validates all input NetCDF files from the manifest and stores them in a dictionary keyed by
-    filename. SPICE kernel files (.bc, .bsp) are copied to a local directory for processing.
+    filename. SPICE kernel sources (.bc, .bsp) are collected in manifest order for later use with
+    :meth:`~libera_utils.libera_spice.kernel_manager.KernelManager.load_libera_dynamic_kernels`, which materializes each
+    source via libera_utils `KernelFileCache` (local file, S3, or HTTP(S) as supported).
 
     Parameters
     ----------
@@ -127,9 +129,9 @@ def read_all_input_data(
     -------
     dict[str, xr.Dataset]
         Dictionary with filenames as keys and loaded xarray datasets as values.
-    Path or None
-        Path to the directory of SPICE files copied to local filesystem, or
-        None when ground_data_mode is True and SPICE files are not required.
+    list[str] or None
+        Manifest paths for dynamic SPICE kernels, in manifest order, or None when no_geo_mode is True and SPICE kernels
+        are not required.
 
     Raises
     ------
@@ -142,30 +144,19 @@ def read_all_input_data(
     """
     logger.info("Step 2: Reading all input data from manifest files")
 
-    # SPICE directory is only needed for production runs with SPICE-based geolocation.
-    # TODO [LIBSDC-722]: Improve local SPICE caching to avoid redundant copies.
-    if no_geo_mode:
-        spice_directory = None
-    else:
-        spice_directory = AnyPath(__file__).parent / "spice_files"
-        spice_directory.mkdir(exist_ok=True)
-
-    all_data = {}
-    spice_files_copied = []
+    all_data: dict[str, xr.Dataset] = {}
+    dynamic_kernel_sources: list[str] | None = [] if not no_geo_mode else None
 
     for i, file_info in enumerate(input_manifest.files):
         logger.info(f"Reading file {i + 1}/{len(input_manifest.files)}: {file_info.filename}")
 
         try:
-            # TODO [LIBSDC-722]: Improve local SPICE caching to avoid redundant copies.
             if file_info.filename.endswith((".bc", ".bsp")):
                 if no_geo_mode:
                     logger.info(f"No geolocation mode: skipping SPICE file {file_info.filename}")
                     continue
-                local_file_destination = spice_directory / Path(file_info.filename).name
-                smart_copy_file(file_info.filename, str(local_file_destination))
-                spice_files_copied.append(local_file_destination)
-                logger.info(f"Successfully copied SPICE file to: {local_file_destination}")
+                dynamic_kernel_sources.append(file_info.filename)
+                logger.info("Recorded SPICE kernel for KernelManager: %s", file_info.filename)
             else:
                 dataset = xr.open_dataset(file_info.filename)
                 libera_filename = LiberaDataProductFilename(file_info.filename)
@@ -180,41 +171,42 @@ def read_all_input_data(
             logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
             raise
 
-    logger.info(f"Successfully opened {len(all_data)} datasets and {len(spice_files_copied)} SPICE files")
+    logger.info(
+        "Successfully opened %d datasets and %d SPICE kernels",
+        len(all_data),
+        0 if dynamic_kernel_sources is None else len(dynamic_kernel_sources),
+    )
 
     if not all_data:
         logger.warning("No data files were loaded from manifest")
 
-    return all_data, spice_directory
+    return all_data, dynamic_kernel_sources
 
 
 def process_l1a_to_l1b(
     all_input_data: dict[str, xr.Dataset],
-    spice_directory: Path | None,
+    dynamic_kernel_sources: Sequence[str | Path | S3Path] | None,
     no_geo_mode: bool = False,
 ) -> xr.Dataset:
     """
     Process L1A camera data and SPICE Kernels to L1B product.
 
-    This function coordinates the full L1A to L1B processing pipeline including:
-    - Loading calibration data
-    - Extracting camera and housekeeping datasets
-    - Initializing SPICE kernels for geolocation
-    - Gain calibration of camera data
-    - Downsampling calibrated camera data to 100Hz
-    - Calculating geolocation information
-    - Interpolating temperatures
-    - Computing radiances
-    - Packaging the final L1B product
+    This function coordinates the core L1A to L1B camera processing steps:
+    - Parse the input L1A camera data into a working dataset
+    - Convert DN to radiance (lazy when backed by Dask arrays)
+    - Add geolocation (lazy Dask `map_blocks`), or placeholders when `no_geo_mode` is enabled
 
     Parameters
     ----------
     all_input_data : dict[str, xr.Dataset]
         Dictionary of input datasets keyed by filename. Expected to contain camera sample data and
         nominal housekeeping data.
-    spice_directory : Path or None
-        Path to directory containing SPICE kernel files (.bc, .bsp) for spacecraft positioning and attitude
-        calculations. Not used when no_geo_mode is True.
+    dynamic_kernel_sources : sequence of str, pathlib.Path, or cloudpathlib.S3Path, or None
+        Dynamic kernel sources passed through to geolocation workers via
+        :class:`~libera_cam.geolocation.GeolocationKernelConfig`.
+        Each source is materialized through libera_utils `KernelFileCache` inside
+        :meth:`~libera_utils.libera_spice.kernel_manager.KernelManager.load_libera_dynamic_kernels`.
+        Not used when `no_geo_mode` is True.
     no_geo_mode : bool, optional
         When True, replaces SPICE-based geolocation with NaN placeholder arrays.
         Triggered by the presence of a 'no_geo' key in the input manifest
@@ -254,7 +246,7 @@ def process_l1a_to_l1b(
     else:
         geo_config = GeolocationKernelConfig(
             temp_dir_base=None,
-            dynamic_kernel_directory=spice_directory,
+            dynamic_kernel_sources=dynamic_kernel_sources,
         )
         cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
 

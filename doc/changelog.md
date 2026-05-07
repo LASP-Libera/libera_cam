@@ -1,5 +1,10 @@
 # Version Changes
 
+## 0.2.3
+
+- Use `KernelManager.load_libera_dynamic_kernels(dynamic_kernel_sources=...)` with libera_utils `KernelFileCache` rather than copying `.bc`/`.bsp` kernels into a package-local directory during L1B processing.
+- Update geolocation configuration to accept dynamic kernel sources (directory or explicit sequence) and add integration coverage for explicit-sequence kernel loading and cache materialization.
+
 ## 0.2.2
 
 - **Production-Ready Architecture**: Transitioned the entire L1B processing pipeline to a fully lazy, memory-efficient execution model using Dask. This is a step towards processing of full-day science products (~3TB uncompressed) on standard compute nodes without OOM errors.
