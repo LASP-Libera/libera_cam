@@ -225,7 +225,7 @@ def process_l1a_to_l1b(
         If the calibration data file is not found.
     """
     # Initially, we only have WFOV-SCI-DECODED data to process
-    l1a_cam_data = all_input_data[DataProductIdentifier.l1a_icie_wfov_sci_decoded]
+    l1a_cam_data = all_input_data[str(DataProductIdentifier.l1a_icie_wfov_sci_decoded)]
 
     # Output is a tuple of (images, metadata, integration time masks)
     cam_dataset = read_l1a_cam_data(l1a_cam_data)

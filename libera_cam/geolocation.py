@@ -72,6 +72,14 @@ def prefetch_kernels(config: GeolocationKernelConfig) -> None:
         km.load_naif_kernels()
         # Load Static kernels (generates if missing)
         km.load_static_kernels()
+        # Load dynamic kernels (materialize through KernelFileCache) when provided.
+        # This is intentionally done client-side to avoid multi-worker cache races.
+        if config.dynamic_kernel_sources:
+            km.load_libera_dynamic_kernels(
+                config.dynamic_kernel_sources,
+                needs_naif_kernels=True,
+                needs_static_kernels=True,
+            )
         logger.info("Kernel cache populated successfully.")
     except Exception as e:
         logger.warning(f"Kernel pre-fetch failed: {e}. Workers will attempt download independently.")

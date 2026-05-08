@@ -2,7 +2,7 @@
 
 ## 0.2.3
 
-- Use `KernelManager.load_libera_dynamic_kernels(dynamic_kernel_sources=...)` with libera_utils `KernelFileCache` rather than copying `.bc`/`.bsp` kernels into a package-local directory during L1B processing. `dynamic_kernel_sources` must be a **sequence** of kernel paths (e.g. manifest order); `GeolocationKernelConfig` and integration tests pass explicit `.bc`/`.bsp` path lists.
+- Use `KernelManager.load_libera_dynamic_kernels(...)` with libera_utils `KernelFileCache` rather than copying `.bc`/`.bsp` kernels into a package-local directory during L1B processing. Dynamic kernels are provided as an explicit **sequence** of sources (e.g. manifest order); `GeolocationKernelConfig` and integration tests pass ordered `.bc`/`.bsp` source lists.
 
 ## 0.2.2
 
