@@ -1,5 +1,7 @@
 """Integration tests for geolocation using static and geolocation kernels."""
 
+from pathlib import Path
+
 import dask.array as da
 import numpy as np
 import pytest
@@ -15,6 +17,11 @@ from libera_cam.geolocation import (
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 
 
+def _ditl_dynamic_kernel_sources(test_data_path: Path) -> list[Path]:
+    d = test_data_path / "DITL_short"
+    return sorted(p for p in d.iterdir() if p.is_file() and p.suffix in {".bc", ".bsp"})
+
+
 @pytest.mark.integration
 def test_geolocation_from_kernels(test_data_path, test_ditl_l1a_file_path):
     """
@@ -28,10 +35,10 @@ def test_geolocation_from_kernels(test_data_path, test_ditl_l1a_file_path):
     time_subset = l1a_ds.PACKET_ICIE_TIME.data[:5]  # Using packet timestamp to avoid mismatch with camera times
 
     km = KernelManager()
-    test_kernel_dir = test_data_path / "DITL_short"
+    test_kernel_sources = _ditl_dynamic_kernel_sources(test_data_path)
     km.load_naif_kernels()
     km.load_static_kernels()
-    km.load_libera_dynamic_kernels(test_kernel_dir, needs_naif_kernels=True, needs_static_kernels=True)
+    km.load_libera_dynamic_kernels(test_kernel_sources, needs_naif_kernels=True, needs_static_kernels=True)
 
     print(f"Calculating lat/lon/alt for {len(time_subset)} timestamps.")
 
@@ -62,9 +69,9 @@ def test_add_geolocation_to_dataset(test_data_path, test_ditl_l1a_file_path):
     ds = ds.isel(camera_time=slice(0, 5))
 
     # 2. Setup Config
-    test_kernel_dir = test_data_path / "DITL_short"
+    test_kernel_sources = _ditl_dynamic_kernel_sources(test_data_path)
     config = GeolocationKernelConfig(
-        dynamic_kernel_sources=test_kernel_dir, use_test_naif_url=False, cache_timeout_days=7
+        dynamic_kernel_sources=test_kernel_sources, use_test_naif_url=False, cache_timeout_days=7
     )
 
     # 3. Add Geolocation (Lazy)
@@ -106,8 +113,8 @@ def test_add_geolocation_with_static_mask(test_data_path, test_ditl_l1a_file_pat
     ds = read_l1a_cam_data(l1a_ds).isel(camera_time=slice(0, 2))  # 2 frames
 
     # 2. Config
-    test_kernel_dir = test_data_path / "DITL_short"
-    config = GeolocationKernelConfig(dynamic_kernel_sources=test_kernel_dir)
+    test_kernel_sources = _ditl_dynamic_kernel_sources(test_data_path)
+    config = GeolocationKernelConfig(dynamic_kernel_sources=test_kernel_sources)
 
     # 3. Create a Static Mask
     # Mask out everything except the first 10 pixels
@@ -148,8 +155,8 @@ def test_add_geolocation_with_dynamic_mask_integration(test_data_path, test_ditl
     ds = ds.chunk({"camera_time": 3})
 
     # 3. Config
-    test_kernel_dir = test_data_path / "DITL_short"
-    config = GeolocationKernelConfig(dynamic_kernel_sources=test_kernel_dir)
+    test_kernel_sources = _ditl_dynamic_kernel_sources(test_data_path)
+    config = GeolocationKernelConfig(dynamic_kernel_sources=test_kernel_sources)
 
     # 4. Run Geolocation (Dynamic)
     ds_geo_dynamic = add_geolocation_to_dataset(ds, config, pixel_mask=mask_da)

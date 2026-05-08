@@ -34,14 +34,11 @@ class GeolocationKernelConfig:
 
     Parameters
     ----------
-    dynamic_kernel_sources : pathlib.Path, str, or sequence, optional
-        Dynamic SPICE kernels to load for geolocation. May be either:
-        - a directory containing kernel files (non-recursive),
-        - a single kernel file path, or
-        - an explicit sequence of sources (e.g. manifest-ordered `.bc` / `.bsp` paths, including S3).
-
-        Each source is materialized through libera_utils `KernelFileCache` inside
+    dynamic_kernel_sources : sequence of str, pathlib.Path, or cloudpathlib.S3Path, optional
+        Manifest-ordered paths to dynamic SPICE kernel files (``.bc`` / ``.bsp``, etc.), including S3 when applicable.
+        Each entry is materialized through libera_utils ``KernelFileCache`` inside
         :meth:`libera_utils.libera_spice.kernel_manager.KernelManager.load_libera_dynamic_kernels`.
+        Use ``None`` when geolocation kernels are not required.
     """
 
     temp_dir_base: str | Path | None = None
@@ -49,7 +46,7 @@ class GeolocationKernelConfig:
     use_test_naif_url: bool = False
     use_high_precision_earth: bool = True
     cache_timeout_days: int = 7
-    dynamic_kernel_sources: str | Path | Sequence[str | Path | S3Path] | None = None
+    dynamic_kernel_sources: Sequence[str | Path | S3Path] | None = None
 
 
 def prefetch_kernels(config: GeolocationKernelConfig) -> None:
