@@ -39,7 +39,7 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@feature/LIBSDC-722-kernel-caching",
+    "libera-utils >= 5.8.0,<6.0.0",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images
@@ -60,6 +60,7 @@ include = [
 
 [tool.poetry.group.dev.dependencies]
 # These specs are totally open because they are only needed for developers
+moto = {extras = ["s3"], version = "^5.2.1"}
 bandit = "*"
 pre-commit = "*"
 pytest-cov = "*"
