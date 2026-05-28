@@ -3,6 +3,18 @@ from pathlib import Path
 
 import pytest
 
+pytest_plugins = ["tests.plugins.aws_fixtures"]
+
+
+@pytest.fixture(scope="session")
+def monkeypatch_session():
+    """Session-scoped monkeypatch for autouse AWS fixtures."""
+    from _pytest.monkeypatch import MonkeyPatch
+
+    mp = MonkeyPatch()
+    yield mp
+    mp.undo()
+
 
 @pytest.fixture
 def test_data_path():

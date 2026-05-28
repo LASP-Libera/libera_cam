@@ -76,8 +76,10 @@ NetCDF files. End users are scientists and SDC operators running operational L1b
 - **Test data**: Store reference arrays as HDF5 files under `tests/test_data/` (tracked via Git
   LFS). Load them via the `test_data_path` fixture defined in `tests/conftest.py`.
 - **Fixtures**: Use `test_data_path` (path to `tests/test_data/`) and `local_data_path` (path
-  to `libera_cam/ground_calibration_data/`) from `tests/conftest.py`. Use `monkeypatch` for
-  environment variables; `tmp_path` for temporary output directories.
+  to `libera_cam/ground_calibration_data/`) from `tests/conftest.py`. S3 mocking fixtures live
+  in `tests/plugins/aws_fixtures.py` (`write_file_to_s3`, `create_mock_bucket`). Use
+  `monkeypatch` for environment variables; `tmp_path` for temporary output directories.
+- **AWS mocking**: Use `moto[s3]` and `cloudpathlib` — never call real AWS endpoints in tests.
 - **Parametrized tests**: Prefer `@pytest.mark.parametrize` over duplicated test functions.
 - **Subprocess testing**: Use `pytest-subprocess` to mock subprocess calls.
 - **`xfail_strict = true`**: All `@pytest.mark.xfail` tests must actually fail; fix or remove

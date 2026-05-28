@@ -6,6 +6,7 @@ geolocation calculations for the Libera camera.
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import xarray as xr
+from cloudpathlib import S3Path
 from curryer import spicetime
 from curryer import spicierpy as sp
 from curryer.compute import spatial
@@ -29,6 +31,14 @@ class GeolocationKernelConfig:
     Configuration for initializing a KernelManager on a worker node.
 
     This dataclass is pickleable and can be passed to Dask workers.
+
+    Parameters
+    ----------
+    dynamic_kernel_sources : sequence of str, pathlib.Path, or cloudpathlib.S3Path, optional
+        Manifest-ordered paths to dynamic SPICE kernel files (``.bc`` / ``.bsp``, etc.), including S3 when applicable.
+        Each entry is materialized through libera_utils ``KernelFileCache`` inside
+        :meth:`libera_utils.libera_spice.kernel_manager.KernelManager.load_libera_dynamic_kernels`.
+        Use ``None`` when geolocation kernels are not required.
     """
 
     temp_dir_base: str | Path | None = None
@@ -36,7 +46,7 @@ class GeolocationKernelConfig:
     use_test_naif_url: bool = False
     use_high_precision_earth: bool = True
     cache_timeout_days: int = 7
-    dynamic_kernel_directory: str | Path | None = None
+    dynamic_kernel_sources: Sequence[str | Path | S3Path] | None = None
 
 
 def prefetch_kernels(config: GeolocationKernelConfig) -> None:
@@ -62,6 +72,14 @@ def prefetch_kernels(config: GeolocationKernelConfig) -> None:
         km.load_naif_kernels()
         # Load Static kernels (generates if missing)
         km.load_static_kernels()
+        # Load dynamic kernels (materialize through KernelFileCache) when provided.
+        # This is intentionally done client-side to avoid multi-worker cache races.
+        if config.dynamic_kernel_sources:
+            km.load_libera_dynamic_kernels(
+                config.dynamic_kernel_sources,
+                needs_naif_kernels=True,
+                needs_static_kernels=True,
+            )
         logger.info("Kernel cache populated successfully.")
     except Exception as e:
         logger.warning(f"Kernel pre-fetch failed: {e}. Workers will attempt download independently.")
@@ -277,8 +295,8 @@ def calculate_chunk_geolocation(
     # Use context manager for automatic cleanup of static kernels and unloading
     with km:
         # Load dynamic kernels if specified
-        if config.dynamic_kernel_directory:
-            km.load_libera_dynamic_kernels(config.dynamic_kernel_directory)
+        if config.dynamic_kernel_sources:
+            km.load_libera_dynamic_kernels(config.dynamic_kernel_sources)
 
         # Convert numpy datetime64 array to DatetimeIndex for the calculation function
         flat_camera_time = np.asarray(camera_time).ravel()
