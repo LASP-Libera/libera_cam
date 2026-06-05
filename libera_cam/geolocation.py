@@ -485,6 +485,6 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     ds["Longitude"].attrs = {"units": "degrees_east", "long_name": "Pixel Longitude"}
     ds["Altitude"].attrs = {"units": "km", "long_name": "Pixel Altitude"}
 
-    logger.info("Ground data mode: added NaN placeholder geolocation (Latitude, Longitude, Altitude).")
+    logger.info("use_geo is false: using placeholder geolocation (Latitude, Longitude, Altitude).")
 
     return ds

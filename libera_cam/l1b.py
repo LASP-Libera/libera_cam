@@ -31,8 +31,17 @@ from libera_cam.version import version as libera_cam_version
 logger = logging.getLogger(__name__)
 
 
+def _manifest_geo_flags(input_manifest: Manifest) -> tuple[bool, bool]:
+    """Return ``(use_geo, jpss_only)`` from manifest configuration."""
+    cfg = input_manifest.configuration
+    use_geo = bool(cfg.get("use_geo", True))
+    jpss_only_mode = bool(cfg.get("jpss_only"))
+    return use_geo, jpss_only_mode
+
+
 def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     """
+    Run the L1B camera processing pipeline from an input manifest.
 
     Parameters
     ----------
@@ -43,6 +52,15 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     -------
     output_manifest: Cloudpath or Path
         The path of the output manifest as a string
+
+    Notes
+    -----
+    Manifest ``configuration.use_geo`` controls geolocation behavior. When
+    ``use_geo`` is false, SPICE kernel files are skipped during input read and
+    placeholder lat/lon/alt values are written. Omitting the key defaults to
+    true (production SPICE geolocation). ``configuration.jpss_only`` is parsed
+    and validated but geolocation behavior for that mode is not yet implemented
+    in libera_cam. It cannot be combined with ``use_geo: false``.
     """
     # Enforce synchronous execution for SPICE safety and IO stability
     # 'threads' causes race conditions in CSPICE (not thread-safe).
@@ -59,21 +77,19 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     logger.info("Step 1: Reading the input manifest file")
     input_manifest = Manifest.from_file(parsed_cli_args.manifest)
     logger.info(f"Loaded manifest with {len(input_manifest.files)} files")
-
-    # Determine processing mode: presence of 'ground_data' key in the manifest
-    # configuration signals that SPICE kernels are unavailable and placeholder
-    # geolocation should be used instead of computing from spacecraft attitude.
-    no_geo_mode = "no_geo" in input_manifest.configuration
-    if no_geo_mode:
-        logger.info("No geolocation mode detected: placeholder geolocation will be used.")
+    use_geo, jpss_only_mode = _manifest_geo_flags(input_manifest)
+    if not use_geo and jpss_only_mode:
+        raise ValueError("use_geo: false and jpss_only cannot both be enabled")
+    if not use_geo:
+        logger.info("use_geo is false: placeholder geolocation will be used.")
 
     # Step 2: Read and store ALL input data from manifest files
     logger.info("Step 2: Reading all input data from manifest files")
-    l1a_data, dynamic_kernel_sources = read_all_input_data(input_manifest, no_geo_mode=no_geo_mode)
+    l1a_data, dynamic_kernel_sources = read_all_input_data(input_manifest)
 
     # Step 3: Calculate science data variables (YOUR SCIENCE GOES HERE)
     logger.info("Step 3: Calculating science data variables")
-    processed_data = process_l1a_to_l1b(l1a_data, dynamic_kernel_sources, no_geo_mode=no_geo_mode)
+    processed_data = process_l1a_to_l1b(l1a_data, dynamic_kernel_sources, use_geo=use_geo)
 
     # Steps 4: Store data with metadata and write to output folder
     logger.info("Step 4: Creating and writing data product")
@@ -110,9 +126,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     return output_manifest_filepath
 
 
-def read_all_input_data(
-    input_manifest: Manifest, no_geo_mode: bool = False
-) -> tuple[dict[str, xr.Dataset], list[str] | None]:
+def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset], list[str]]:
     """
     Read and store all input data from manifest files.
 
@@ -130,9 +144,10 @@ def read_all_input_data(
     -------
     dict[str, xr.Dataset]
         Dictionary with filenames as keys and loaded xarray datasets as values.
-    list[str] or None
-        Manifest paths for dynamic SPICE kernels, in manifest order, or None when no_geo_mode is True and SPICE kernels
-        are not required.
+    list[str]
+        Manifest paths for dynamic SPICE kernels, in manifest order. Empty when
+        ``input_manifest.configuration.use_geo`` is false and SPICE kernels are
+        not required.
 
     Raises
     ------
@@ -142,19 +157,28 @@ def read_all_input_data(
     Warnings
     --------
     Logs a warning if no data files were loaded from the manifest.
+
+    Notes
+    -----
+    When ``input_manifest.configuration.use_geo`` is false, SPICE kernel files
+    (.bc, .bsp) are skipped. Omitting ``use_geo`` defaults to true.
     """
     logger.info("Step 2: Reading all input data from manifest files")
 
+    use_geo, _jpss_only_mode = _manifest_geo_flags(input_manifest)
     all_data: dict[str, xr.Dataset] = {}
-    dynamic_kernel_sources: list[str] | None = [] if not no_geo_mode else None
+    dynamic_kernel_sources: list[str] = []
 
     for i, file_info in enumerate(input_manifest.files):
         logger.info(f"Reading file {i + 1}/{len(input_manifest.files)}: {file_info.filename}")
 
         try:
             if file_info.filename.endswith((".bc", ".bsp")):
-                if no_geo_mode:
-                    logger.info(f"No geolocation mode: skipping SPICE file {file_info.filename}")
+                if not use_geo:
+                    logger.warning(
+                        "use_geo is false: skipping SPICE kernel %s",
+                        file_info.filename,
+                    )
                     continue
                 dynamic_kernel_sources.append(file_info.filename)
                 logger.info("Recorded SPICE kernel for KernelManager: %s", file_info.filename)
@@ -171,7 +195,7 @@ def read_all_input_data(
     logger.info(
         "Successfully opened %d datasets and %d SPICE kernels",
         len(all_data),
-        0 if dynamic_kernel_sources is None else len(dynamic_kernel_sources),
+        len(dynamic_kernel_sources),
     )
 
     if not all_data:
@@ -198,8 +222,8 @@ def _extract_camera_dataset(all_input_data: dict[str, xr.Dataset]) -> xr.Dataset
 
 def process_l1a_to_l1b(
     all_input_data: dict[str, xr.Dataset],
-    dynamic_kernel_sources: Sequence[str | Path | S3Path] | None,
-    no_geo_mode: bool = False,
+    dynamic_kernel_sources: Sequence[str | Path | S3Path],
+    use_geo: bool = True,
 ) -> xr.Dataset:
     """
     Process L1A camera data and SPICE Kernels to L1B product.
@@ -207,23 +231,23 @@ def process_l1a_to_l1b(
     This function coordinates the core L1A to L1B camera processing steps:
     - Parse the input L1A camera data into a working dataset
     - Convert DN to radiance (lazy when backed by Dask arrays)
-    - Add geolocation (lazy Dask `map_blocks`), or placeholders when `no_geo_mode` is enabled
+    - Add geolocation (lazy Dask `map_blocks`), or placeholders when ``use_geo`` is false
 
     Parameters
     ----------
     all_input_data : dict[str, xr.Dataset]
         Dictionary of input datasets keyed by filename. Expected to contain camera sample data and
         nominal housekeeping data.
-    dynamic_kernel_sources : sequence of str, pathlib.Path, or cloudpathlib.S3Path, or None
+    dynamic_kernel_sources : sequence of str, pathlib.Path, or cloudpathlib.S3Path
         Dynamic kernel sources passed through to geolocation workers via
         :class:`~libera_cam.geolocation.GeolocationKernelConfig`.
         Each source is materialized through libera_utils `KernelFileCache` inside
         :meth:`~libera_utils.libera_spice.kernel_manager.KernelManager.load_libera_dynamic_kernels`.
-        Not used when `no_geo_mode` is True.
-    no_geo_mode : bool, optional
-        When True, replaces SPICE-based geolocation with NaN placeholder arrays.
-        Triggered by the presence of a 'no_geo' key in the input manifest
-        configuration. Defaults to False (production SPICE path).
+        May be empty when ``use_geo`` is false.
+    use_geo : bool, optional
+        When True (default), runs SPICE geolocation. When False, uses placeholder
+        lat/lon/alt for ground-calibration processing. Set via manifest
+        ``configuration.use_geo``; omitting the key is equivalent to True.
 
     Returns
     -------
@@ -233,7 +257,8 @@ def process_l1a_to_l1b(
     Raises
     ------
     ValueError
-        If required input datasets (camera or housekeeping data) are not found.
+        If required input datasets (camera or housekeeping data) are not found,
+        or SPICE kernel sources are missing when ``use_geo`` is True.
     FileNotFoundError
         If the calibration data file is not found.
     """
@@ -251,11 +276,11 @@ def process_l1a_to_l1b(
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
 
     # Apply Geolocation (Lazy)
-    # No geolocation mode uses NaN placeholders because spacecraft attitude kernels
-    # are not available outside of production/flight-data processing.
-    if no_geo_mode:
+    if not use_geo:
         cam_dataset = add_placeholder_geolocation_to_dataset(cam_dataset)
     else:
+        if not dynamic_kernel_sources:
+            raise ValueError("SPICE kernel sources are required for geolocation when use_geo is True")
         geo_config = GeolocationKernelConfig(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,

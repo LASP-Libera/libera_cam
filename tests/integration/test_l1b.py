@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 import xarray as xr
-from libera_utils.io.manifest import Manifest, ManifestType
+from libera_utils.io.manifest import Manifest
 
 from libera_cam.l1b import algorithm
 from libera_cam.version import version as libera_cam_version

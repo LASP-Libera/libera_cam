@@ -1,5 +1,10 @@
 # Version Changes
 
+## 0.2.5
+
+- Replace `no_geo` manifest key with `use_geo` (default true; `use_geo: false` for ground-calibration placeholder geolocation).
+- Parse `jpss_only` from manifest configuration and reject incompatible `use_geo: false` + `jpss_only: true` combinations (geolocation behavior for `jpss_only` not yet implemented).
+
 ## 0.2.4
 
 - Set `algorithm_version` dynamically from the installed package at write time (product definition YAML uses `null`, matching `libera_rad`). Added tests to ensure the bundled product definition stays in sync with the repo version.
