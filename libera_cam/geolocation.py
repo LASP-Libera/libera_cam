@@ -7,7 +7,7 @@ geolocation calculations for the Libera camera.
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import dask.array as da
@@ -23,6 +23,13 @@ from libera_utils.libera_spice.kernel_manager import KernelManager
 from libera_cam.constants import GROUND_CAL_PIXEL_MAPPING, PIXEL_COUNT_X, PIXEL_COUNT_Y
 
 logger = logging.getLogger(__name__)
+
+# Product fill values (L1B_CAM_product_definition.yml)
+_GEO_FILL_LAT_LON = np.float32(-999.0)
+_GEO_FILL_ALT = np.float32(-9999.0)
+
+_SPICE_BODY_PRODUCTION = "LIBERA_WFOV_CAM"
+_SPICE_BODY_JPSS_ONLY = "LIBERA_BASE"
 
 
 @dataclass
@@ -47,6 +54,7 @@ class GeolocationKernelConfig:
     use_high_precision_earth: bool = True
     cache_timeout_days: int = 7
     dynamic_kernel_sources: Sequence[str | Path | S3Path] | None = None
+    jpss_only: bool = False
 
 
 def prefetch_kernels(config: GeolocationKernelConfig) -> None:
@@ -96,6 +104,7 @@ def calculate_all_pixel_lat_lon_altitude(
     pointing_vectors: np.ndarray | None = None,
     pixel_mask: np.ndarray | None = None,
     is_dynamic_mask: bool | None = None,
+    spice_body: str = _SPICE_BODY_PRODUCTION,
 ) -> dict[str, np.ndarray]:
     """
     Calculate latitude, longitude, and altitude for all pixels at given image times.
@@ -127,6 +136,10 @@ def calculate_all_pixel_lat_lon_altitude(
         If True, treats `pixel_mask` as a per-timestamp mask.
         If False, treats `pixel_mask` as a static mask applied to all timestamps.
         If None (default), attempts to detect based on dimensions.
+    spice_body: str, optional
+        NAIF body name for ellipsoid intersection. Production uses
+        ``LIBERA_WFOV_CAM``; JPSS-only uses ``LIBERA_BASE`` (azimuth CK absent,
+        camera vectors applied at zero azimuth).
 
     Returns
     -------
@@ -135,7 +148,7 @@ def calculate_all_pixel_lat_lon_altitude(
         with shape `(N_times, PIXEL_COUNT_X, PIXEL_COUNT_Y)`:
         - "latitude" (np.float64): Latitude values in degrees north.
         - "longitude" (np.float64): Longitude values in degrees east.
-        - "altitude" (np.float64): Altitude values in kilometers.
+        - "altitude" (np.float64): Altitude values in meters.
     """
     kernel_manager.ensure_known_kernels_are_furnished()
 
@@ -196,7 +209,7 @@ def calculate_all_pixel_lat_lon_altitude(
             if active_vectors.size > 0:
                 cam_pix_lla, _, _ = spatial.compute_ellipsoid_intersection(
                     np.array([unified_gps_times[i]]),
-                    sp.obj.Body("LIBERA_WFOV_CAM", frame=True),
+                    sp.obj.Body(spice_body, frame=True),
                     custom_pointing_vectors=active_vectors,
                     give_geodetic_output=True,
                     give_lat_lon_in_degrees=True,
@@ -220,7 +233,7 @@ def calculate_all_pixel_lat_lon_altitude(
 
             cam_pix_lla, _, _ = spatial.compute_ellipsoid_intersection(
                 unified_gps_times,
-                sp.obj.Body("LIBERA_WFOV_CAM", frame=True),
+                sp.obj.Body(spice_body, frame=True),
                 custom_pointing_vectors=active_vectors,
                 give_geodetic_output=True,
                 give_lat_lon_in_degrees=True,
@@ -302,10 +315,17 @@ def calculate_chunk_geolocation(
         flat_camera_time = np.asarray(camera_time).ravel()
         times = pd.DatetimeIndex(flat_camera_time)
 
+        spice_body = _SPICE_BODY_JPSS_ONLY if config.jpss_only else _SPICE_BODY_PRODUCTION
+
         # Perform calculation
         # Result is a dict of arrays of shape (T, Y, X)
         result_dict = calculate_all_pixel_lat_lon_altitude(
-            km, times, pointing_vectors, pixel_mask=pixel_mask, is_dynamic_mask=is_dynamic_mask
+            km,
+            times,
+            pointing_vectors,
+            pixel_mask=pixel_mask,
+            is_dynamic_mask=is_dynamic_mask,
+            spice_body=spice_body,
         )
 
         # Stack into (T, Y, X, 3)
@@ -432,26 +452,56 @@ def add_geolocation_to_dataset(
         new_axis=new_axes_indices,
     )
 
-    # 7. Assign variables to Dataset
-    ds["Latitude"] = (("camera_time", "y", "x"), geo_data[..., 0].astype(np.float32))
-    ds["Longitude"] = (("camera_time", "y", "x"), geo_data[..., 1].astype(np.float32))
-    ds["Altitude"] = (("camera_time", "y", "x"), geo_data[..., 2].astype(np.float32))
+    # 7. Assign variables to Dataset (apply product fill values for off-Earth / uncomputed pixels)
+    valid_geo = da.isfinite(geo_data[..., 0])
+    ds["Latitude"] = (
+        ("camera_time", "y", "x"),
+        da.where(valid_geo, geo_data[..., 0], _GEO_FILL_LAT_LON).astype(np.float32),
+    )
+    ds["Longitude"] = (
+        ("camera_time", "y", "x"),
+        da.where(valid_geo, geo_data[..., 1], _GEO_FILL_LAT_LON).astype(np.float32),
+    )
+    ds["Altitude"] = (
+        ("camera_time", "y", "x"),
+        da.where(valid_geo, geo_data[..., 2], _GEO_FILL_ALT).astype(np.float32),
+    )
 
     ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
     ds["Longitude"].attrs = {"units": "degrees_east", "long_name": "Pixel Longitude"}
-    ds["Altitude"].attrs = {"units": "km", "long_name": "Pixel Altitude"}
+    ds["Altitude"].attrs = {"units": "meters", "long_name": "Pixel Altitude"}
 
     return ds
 
 
+def add_jpss_only_geolocation_to_dataset(
+    ds: xr.Dataset,
+    config: GeolocationKernelConfig,
+    pixel_mask: np.ndarray | da.Array | xr.DataArray | None = None,
+    is_dynamic_mask: bool | None = None,
+) -> xr.Dataset:
+    """
+    Lazily compute JPSS-only per-pixel geolocation and add it to the dataset.
+
+    Uses the same per-pixel vector pipeline as production, but intersects against
+    ``LIBERA_BASE`` (zero-azimuth approximation) with JPSS-only dynamic kernels.
+    """
+    return add_geolocation_to_dataset(
+        ds,
+        replace(config, jpss_only=True),
+        pixel_mask=pixel_mask,
+        is_dynamic_mask=is_dynamic_mask,
+    )
+
+
 def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     """
-    Add NaN-filled placeholder geolocation variables to the dataset.
+    Add product fill-value placeholder geolocation variables to the dataset.
 
     Used in ground-data mode when SPICE kernels are unavailable (e.g. during
     ground testing where spacecraft attitude kernels do not exist). Adds
-    Latitude, Longitude, and Altitude variables filled with NaN to indicate
-    that geolocation was not computed for this run.
+    Latitude, Longitude, and Altitude variables filled with product
+    ``_FillValue`` (-999 / -9999) to indicate that geolocation was not computed.
 
     Parameters
     ----------
@@ -461,7 +511,7 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     Returns
     -------
     xr.Dataset
-        The dataset with NaN-filled Latitude, Longitude, and Altitude variables
+        The dataset with fill-value Latitude, Longitude, and Altitude variables
         matching the chunking of the existing image data.
     """
     if "image_data" in ds and isinstance(ds["image_data"].data, da.Array):
@@ -470,20 +520,26 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
         n_times = ds.sizes["camera_time"]
         time_chunks_tuple = (1,) * n_times
 
-    placeholder = da.full(
+    placeholder_lat_lon = da.full(
         (ds.sizes["camera_time"], PIXEL_COUNT_X, PIXEL_COUNT_Y),
-        fill_value=np.nan,
+        fill_value=_GEO_FILL_LAT_LON,
+        dtype=np.float32,
+        chunks=(time_chunks_tuple, (PIXEL_COUNT_X,), (PIXEL_COUNT_Y,)),
+    )
+    placeholder_alt = da.full(
+        (ds.sizes["camera_time"], PIXEL_COUNT_X, PIXEL_COUNT_Y),
+        fill_value=_GEO_FILL_ALT,
         dtype=np.float32,
         chunks=(time_chunks_tuple, (PIXEL_COUNT_X,), (PIXEL_COUNT_Y,)),
     )
 
-    ds["Latitude"] = (("camera_time", "y", "x"), placeholder)
-    ds["Longitude"] = (("camera_time", "y", "x"), placeholder)
-    ds["Altitude"] = (("camera_time", "y", "x"), placeholder)
+    ds["Latitude"] = (("camera_time", "y", "x"), placeholder_lat_lon)
+    ds["Longitude"] = (("camera_time", "y", "x"), placeholder_lat_lon)
+    ds["Altitude"] = (("camera_time", "y", "x"), placeholder_alt)
 
     ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
     ds["Longitude"].attrs = {"units": "degrees_east", "long_name": "Pixel Longitude"}
-    ds["Altitude"].attrs = {"units": "km", "long_name": "Pixel Altitude"}
+    ds["Altitude"].attrs = {"units": "meters", "long_name": "Pixel Altitude"}
 
     logger.info("use_geo is false: using placeholder geolocation (Latitude, Longitude, Altitude).")
 

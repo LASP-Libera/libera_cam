@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import dask
+import numpy as np
 import xarray as xr
 from cloudpathlib import AnyPath, S3Path
 from libera_utils import Manifest, smart_open
@@ -22,6 +23,7 @@ from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
 from libera_cam.geolocation import (
     GeolocationKernelConfig,
     add_geolocation_to_dataset,
+    add_jpss_only_geolocation_to_dataset,
     add_placeholder_geolocation_to_dataset,
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
@@ -29,6 +31,28 @@ from libera_cam.packaging import package_l1b_product
 from libera_cam.version import version as libera_cam_version
 
 logger = logging.getLogger(__name__)
+
+# Required dynamic SPICE inputs keyed by Libera data product id (see libera_utils.constants).
+_REQUIRED_SPICE_JPSS_ONLY: tuple[DataProductIdentifier, ...] = (
+    DataProductIdentifier.spice_jpss_spk,
+    DataProductIdentifier.spice_jpss_ck,
+)
+# Furnish order: azimuth CK before JPSS CK. ELSCAN-CK is not used by WFOV camera geolocation.
+_REQUIRED_SPICE_PRODUCTION: tuple[DataProductIdentifier, ...] = (
+    DataProductIdentifier.spice_az_ck,
+    DataProductIdentifier.spice_jpss_spk,
+    DataProductIdentifier.spice_jpss_ck,
+)
+
+
+def _require_spice_inputs(
+    spice_files: dict[DataProductIdentifier, str],
+    required: tuple[DataProductIdentifier, ...],
+) -> None:
+    missing = [product_id for product_id in required if product_id not in spice_files]
+    if missing:
+        labels = ", ".join(str(product_id) for product_id in missing)
+        raise ValueError(f"Input manifest missing required SPICE data products: {labels}")
 
 
 def _manifest_geo_flags(input_manifest: Manifest) -> tuple[bool, bool]:
@@ -58,9 +82,9 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     Manifest ``configuration.use_geo`` controls geolocation behavior. When
     ``use_geo`` is false, SPICE kernel files are skipped during input read and
     placeholder lat/lon/alt values are written. Omitting the key defaults to
-    true (production SPICE geolocation). ``configuration.jpss_only`` is parsed
-    and validated but geolocation behavior for that mode is not yet implemented
-    in libera_cam. It cannot be combined with ``use_geo: false``.
+    true (production SPICE geolocation). ``configuration.jpss_only`` selects
+    JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
+    frame, Azimuth 0°) and cannot be combined with ``use_geo: false``.
     """
     # Enforce synchronous execution for SPICE safety and IO stability
     # 'threads' causes race conditions in CSPICE (not thread-safe).
@@ -82,6 +106,8 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
         raise ValueError("use_geo: false and jpss_only cannot both be enabled")
     if not use_geo:
         logger.info("use_geo is false: placeholder geolocation will be used.")
+    if jpss_only_mode:
+        logger.info("jpss_only mode detected: LIBERA_BASE per-pixel geolocation will be used.")
 
     # Step 2: Read and store ALL input data from manifest files
     logger.info("Step 2: Reading all input data from manifest files")
@@ -89,7 +115,12 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
     # Step 3: Calculate science data variables (YOUR SCIENCE GOES HERE)
     logger.info("Step 3: Calculating science data variables")
-    processed_data = process_l1a_to_l1b(l1a_data, dynamic_kernel_sources, use_geo=use_geo)
+    processed_data = process_l1a_to_l1b(
+        l1a_data,
+        dynamic_kernel_sources,
+        use_geo=use_geo,
+        jpss_only_mode=jpss_only_mode,
+    )
 
     # Steps 4: Store data with metadata and write to output folder
     logger.info("Step 4: Creating and writing data product")
@@ -145,14 +176,18 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     dict[str, xr.Dataset]
         Dictionary with filenames as keys and loaded xarray datasets as values.
     list[str]
-        Manifest paths for dynamic SPICE kernels, in manifest order. Empty when
+        Manifest paths for dynamic SPICE kernels, in furnish order. Empty when
         ``input_manifest.configuration.use_geo`` is false and SPICE kernels are
-        not required.
+        not required. When ``configuration.jpss_only`` is true, only JPSS-SPK
+        and JPSS-CK paths are collected.
 
     Raises
     ------
     Exception
         If any file cannot be opened or is invalid.
+    ValueError
+        If duplicate SPICE data products appear in the manifest, or required
+        kernels are missing when ``use_geo`` is true.
 
     Warnings
     --------
@@ -165,9 +200,9 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     """
     logger.info("Step 2: Reading all input data from manifest files")
 
-    use_geo, _jpss_only_mode = _manifest_geo_flags(input_manifest)
+    use_geo, jpss_only_mode = _manifest_geo_flags(input_manifest)
     all_data: dict[str, xr.Dataset] = {}
-    dynamic_kernel_sources: list[str] = []
+    spice_files: dict[DataProductIdentifier, str] = {}
 
     for i, file_info in enumerate(input_manifest.files):
         logger.info(f"Reading file {i + 1}/{len(input_manifest.files)}: {file_info.filename}")
@@ -180,8 +215,28 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
                         file_info.filename,
                     )
                     continue
-                dynamic_kernel_sources.append(file_info.filename)
-                logger.info("Recorded SPICE kernel for KernelManager: %s", file_info.filename)
+
+                product_id = LiberaDataProductFilename.from_file_path(file_info.filename).data_product_id
+                if jpss_only_mode and product_id not in _REQUIRED_SPICE_JPSS_ONLY:
+                    logger.warning(
+                        "jpss_only mode: skipping SPICE file %s (%s)",
+                        file_info.filename,
+                        product_id,
+                    )
+                    continue
+
+                if product_id in spice_files:
+                    raise ValueError(
+                        f"Duplicate SPICE data product {product_id} in manifest: "
+                        f"{spice_files[product_id]} and {file_info.filename}"
+                    )
+
+                spice_files[product_id] = file_info.filename
+                logger.info(
+                    "Recorded SPICE kernel %s (%s)",
+                    file_info.filename,
+                    product_id,
+                )
             else:
                 with smart_open(file_info.filename) as file_handle:
                     LiberaDataProductFilename.from_file_path(file_info.filename)  # Ensure file is Libera Data Product
@@ -192,8 +247,14 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
             logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
             raise
 
+    dynamic_kernel_sources: list[str] = []
+    if use_geo:
+        required_spice = _REQUIRED_SPICE_JPSS_ONLY if jpss_only_mode else _REQUIRED_SPICE_PRODUCTION
+        _require_spice_inputs(spice_files, required_spice)
+        dynamic_kernel_sources = [spice_files[product_id] for product_id in required_spice]
+
     logger.info(
-        "Successfully opened %d datasets and %d SPICE kernels",
+        "Successfully opened %d datasets and %d SPICE kernel paths",
         len(all_data),
         len(dynamic_kernel_sources),
     )
@@ -220,10 +281,23 @@ def _extract_camera_dataset(all_input_data: dict[str, xr.Dataset]) -> xr.Dataset
     raise ValueError("No WFOV SCI DECODED data found in input files")
 
 
+def _apply_azimuth_fill(ds: xr.Dataset, fill_value: float) -> xr.Dataset:
+    """Replace ``azimuth_angle`` with a constant per-frame fill value."""
+    if "azimuth_angle" not in ds:
+        return ds
+    n_times = ds.sizes["camera_time"]
+    ds["azimuth_angle"] = (
+        ("camera_time",),
+        np.full(n_times, fill_value, dtype=np.float32),
+    )
+    return ds
+
+
 def process_l1a_to_l1b(
     all_input_data: dict[str, xr.Dataset],
     dynamic_kernel_sources: Sequence[str | Path | S3Path],
     use_geo: bool = True,
+    jpss_only_mode: bool = False,
 ) -> xr.Dataset:
     """
     Process L1A camera data and SPICE Kernels to L1B product.
@@ -231,7 +305,8 @@ def process_l1a_to_l1b(
     This function coordinates the core L1A to L1B camera processing steps:
     - Parse the input L1A camera data into a working dataset
     - Convert DN to radiance (lazy when backed by Dask arrays)
-    - Add geolocation (lazy Dask `map_blocks`), or placeholders when ``use_geo`` is false
+    - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
+      or placeholders when ``use_geo`` is false
 
     Parameters
     ----------
@@ -248,6 +323,10 @@ def process_l1a_to_l1b(
         When True (default), runs SPICE geolocation. When False, uses placeholder
         lat/lon/alt for ground-calibration processing. Set via manifest
         ``configuration.use_geo``; omitting the key is equivalent to True.
+    jpss_only_mode : bool, optional
+        When True, uses per-pixel geolocation with ``LIBERA_BASE`` (zero-azimuth
+        approximation) and sets Azimuth to 0°. Requires ``use_geo`` True and JPSS-only
+        SPICE kernels in the manifest.
 
     Returns
     -------
@@ -278,6 +357,18 @@ def process_l1a_to_l1b(
     # Apply Geolocation (Lazy)
     if not use_geo:
         cam_dataset = add_placeholder_geolocation_to_dataset(cam_dataset)
+        cam_dataset = _apply_azimuth_fill(cam_dataset, fill_value=-999.0)
+    elif jpss_only_mode:
+        if not dynamic_kernel_sources:
+            raise ValueError("SPICE kernel sources are required for geolocation when jpss_only_mode is True")
+        geo_config = GeolocationKernelConfig(
+            temp_dir_base=None,
+            dynamic_kernel_sources=dynamic_kernel_sources,
+        )
+        cam_dataset = add_jpss_only_geolocation_to_dataset(
+            cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask
+        )
+        cam_dataset = _apply_azimuth_fill(cam_dataset, fill_value=0.0)
     else:
         if not dynamic_kernel_sources:
             raise ValueError("SPICE kernel sources are required for geolocation when use_geo is True")

@@ -2,8 +2,8 @@
 
 ## 0.2.5
 
-- Replace `no_geo` manifest key with `use_geo` (default true; `use_geo: false` for ground-calibration placeholder geolocation).
-- Parse `jpss_only` from manifest configuration and reject incompatible `use_geo: false` + `jpss_only: true` combinations (geolocation behavior for `jpss_only` not yet implemented).
+- Replace `no_geo` manifest key with `use_geo` (default true; `use_geo: false` for ground-calibration placeholder geolocation). Reject incompatible `use_geo: false` + `jpss_only: true` combinations. Align `use_geo: false` placeholder geolocation with product `_FillValue` (-999 lat/lon, -9999 alt) and Azimuth -999.
+- Add `jpss_only` manifest configuration: load only JPSS-SPK and JPSS-CK dynamic kernels, compute per-pixel geolocation using `wfov_pixel_vectors.npy` with `LIBERA_BASE` reference frame (zero-azimuth approximation), and write Azimuth as 0°. Validate required SPICE data products in `read_all_input_data` (production: AZROT-CK + JPSS-SPK + JPSS-CK; jpss_only: JPSS-SPK + JPSS-CK). Reject duplicate kernel types in the manifest. Warn when other SPICE files are listed but skipped. Apply product `_FillValue` for off-Earth and masked pixels; fix Altitude units metadata to meters.
 
 ## 0.2.4
 

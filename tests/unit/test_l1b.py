@@ -74,7 +74,7 @@ class TestL1b(unittest.TestCase):
         # Verification
         mock_manifest_cls.from_file.assert_called_with("input.json")
         mock_read.assert_called_with(mock_manifest)
-        mock_process.assert_called_with(mock_l1a_data, mock_dynamic_kernel_sources, use_geo=True)
+        mock_process.assert_called_with(mock_l1a_data, mock_dynamic_kernel_sources, use_geo=True, jpss_only_mode=False)
         mock_package.assert_called_once_with(mock_processed_ds)
         mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox")
 
@@ -97,7 +97,7 @@ class TestL1b(unittest.TestCase):
         mock_file_info.filename = "test_l1a.nc"
         mock_manifest = MagicMock()
         mock_manifest.files = [mock_file_info]
-        mock_manifest.configuration = {}
+        mock_manifest.configuration = {"use_geo": False}
 
         mock_ds = MagicMock(spec=xr.Dataset)
         mock_ds.variables = ["var1"]
@@ -176,6 +176,36 @@ class TestL1b(unittest.TestCase):
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
+    @patch("libera_cam.l1b._apply_azimuth_fill")
+    @patch("libera_cam.l1b.add_jpss_only_geolocation_to_dataset")
+    def test_process_l1a_to_l1b_jpss_only_mode(self, mock_jpss_geo, mock_az_fill, mock_convert, mock_read_l1a):
+        """jpss_only uses LIBERA_BASE per-pixel geolocation and zero Azimuth."""
+        mock_l1a_input = MagicMock(spec=xr.Dataset)
+        all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
+
+        mock_lazy_ds = MagicMock(spec=xr.Dataset)
+        mock_lazy_ds.image_data = MagicMock()
+        mock_lazy_ds.integration_mask = MagicMock()
+        mock_lazy_ds.valid_pixel_mask = MagicMock()
+        mock_lazy_ds.chunk.return_value = mock_lazy_ds
+        mock_read_l1a.return_value = mock_lazy_ds
+
+        mock_convert.return_value = MagicMock()
+        mock_jpss_geo.return_value = mock_lazy_ds
+        mock_az_fill.return_value = mock_lazy_ds
+
+        dynamic_kernel_sources = [
+            "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp",
+            "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc",
+        ]
+        result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, jpss_only_mode=True)
+
+        mock_jpss_geo.assert_called_once()
+        mock_az_fill.assert_called_once_with(mock_lazy_ds, fill_value=0.0)
+        assert result is mock_lazy_ds
+
+    @patch("libera_cam.l1b.read_l1a_cam_data")
+    @patch("libera_cam.l1b.convert_dn_to_radiance")
     @patch("libera_cam.l1b.add_placeholder_geolocation_to_dataset")
     def test_process_l1a_to_l1b_use_geo_false(self, mock_placeholder, mock_convert, mock_read_l1a):
         """use_geo false: add_placeholder_geolocation_to_dataset is called; SPICE path is not."""
@@ -185,6 +215,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
         mock_lazy_ds.integration_mask = MagicMock()
+        mock_lazy_ds.sizes = {"camera_time": 2}
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
         mock_read_l1a.return_value = mock_lazy_ds
 
@@ -230,6 +261,94 @@ class TestL1b(unittest.TestCase):
         mock_write_libera.assert_called_once()
 
 
+class TestReadAllInputDataSpiceKernels:
+    @patch("libera_cam.l1b.xr.open_dataset")
+    def test_read_all_input_data_jpss_only_mode_filters_kernels(self, mock_open_ds, caplog):
+        """jpss_only collects only JPSS kernels and warns on motor kernels."""
+        import logging
+
+        nc_file = MagicMock()
+        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        az_file = MagicMock()
+        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R26021234221.bc"
+        jpss_spk = MagicMock()
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_ck = MagicMock()
+        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc"
+
+        mock_manifest = MagicMock()
+        mock_manifest.files = [nc_file, az_file, jpss_spk, jpss_ck]
+        mock_manifest.configuration = {"jpss_only": True}
+
+        mock_ds = MagicMock(spec=xr.Dataset)
+        mock_ds.variables = ["var1"]
+        mock_open_ds.return_value = mock_ds
+
+        with caplog.at_level(logging.WARNING):
+            _, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
+
+        assert dynamic_kernel_sources == [jpss_spk.filename, jpss_ck.filename]
+        assert "jpss_only mode: skipping SPICE file" in caplog.text
+
+    @patch("libera_cam.l1b.xr.open_dataset")
+    def test_read_all_input_data_production_collects_required_kernels(self, mock_open_ds):
+        """Production mode collects AZROT + JPSS kernels in furnish order."""
+        nc_file = MagicMock()
+        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        az_file = MagicMock()
+        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R26021234221.bc"
+        jpss_spk = MagicMock()
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_ck = MagicMock()
+        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc"
+
+        mock_manifest = MagicMock()
+        mock_manifest.files = [nc_file, jpss_ck, az_file, jpss_spk]
+        mock_manifest.configuration = {}
+
+        mock_open_ds.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
+
+        _, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
+
+        assert dynamic_kernel_sources == [az_file.filename, jpss_spk.filename, jpss_ck.filename]
+
+    @patch("libera_cam.l1b.xr.open_dataset")
+    def test_read_all_input_data_duplicate_spice_raises(self, mock_open_ds):
+        """Duplicate SPICE data product IDs in the manifest raise ValueError."""
+        nc_file = MagicMock()
+        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        jpss_spk_a = MagicMock()
+        jpss_spk_a.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_spk_b = MagicMock()
+        jpss_spk_b.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T235900_R26006200657.bsp"
+
+        mock_manifest = MagicMock()
+        mock_manifest.files = [nc_file, jpss_spk_a, jpss_spk_b]
+        mock_manifest.configuration = {"jpss_only": True}
+
+        mock_open_ds.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
+
+        with pytest.raises(ValueError, match="Duplicate SPICE data product"):
+            l1b.read_all_input_data(mock_manifest)
+
+    @patch("libera_cam.l1b.xr.open_dataset")
+    def test_read_all_input_data_missing_required_spice_raises(self, mock_open_ds):
+        """Missing required SPICE kernels raise ValueError."""
+        nc_file = MagicMock()
+        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        jpss_spk = MagicMock()
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+
+        mock_manifest = MagicMock()
+        mock_manifest.files = [nc_file, jpss_spk]
+        mock_manifest.configuration = {"jpss_only": True}
+
+        mock_open_ds.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
+
+        with pytest.raises(ValueError, match="missing required SPICE data products"):
+            l1b.read_all_input_data(mock_manifest)
+
+
 class TestAlgorithmUseGeoConfiguration:
     def test_algorithm_rejects_use_geo_false_and_jpss_only(self, tmp_path, monkeypatch):
         """Mutually exclusive manifest flags raise before processing."""
@@ -254,7 +373,7 @@ class TestAlgorithmUseGeoConfiguration:
             patch("libera_cam.l1b.Manifest.output_manifest_from_input_manifest", return_value=output_manifest),
             patch("libera_cam.l1b.read_all_input_data") as mock_read,
             patch("libera_cam.l1b.process_l1a_to_l1b") as mock_process,
-            patch("libera_cam.l1b.package_l1b_product") as mock_package,
+            patch("libera_cam.l1b.package_l1b_product"),
             patch("libera_cam.l1b.write_data_product") as mock_write,
         ):
             mock_from_file.return_value = Mock(
@@ -270,6 +389,28 @@ class TestAlgorithmUseGeoConfiguration:
             l1b.algorithm(argparse.Namespace(manifest="input.json"))
             mock_read.assert_called_once_with(input_manifest)
             assert mock_process.call_args.kwargs["use_geo"] is False
+            assert mock_process.call_args.kwargs["jpss_only_mode"] is False
+
+    def test_algorithm_passes_jpss_only_mode(self, tmp_path, monkeypatch):
+        """jpss_only in configuration is forwarded to process_l1a_to_l1b."""
+        monkeypatch.setenv("PROCESSING_PATH", str(tmp_path))
+        output_manifest = Mock()
+        with (
+            patch("libera_cam.l1b.Manifest.from_file") as mock_from_file,
+            patch("libera_cam.l1b.Manifest.output_manifest_from_input_manifest", return_value=output_manifest),
+            patch("libera_cam.l1b.read_all_input_data") as mock_read,
+            patch("libera_cam.l1b.process_l1a_to_l1b") as mock_process,
+            patch("libera_cam.l1b.package_l1b_product"),
+            patch("libera_cam.l1b.write_data_product") as mock_write,
+        ):
+            mock_from_file.return_value = Mock(files=[], configuration={"jpss_only": True})
+            mock_read.return_value = ({}, ["/tmp/jpss.bsp", "/tmp/jpss.bc"])
+            mock_processed = MagicMock(spec=xr.Dataset)
+            mock_process.return_value = mock_processed
+            mock_write.return_value = (Mock(path=Path("output.nc")), Mock(path=Path("output.json")))
+            output_manifest.write.return_value = tmp_path / "out_manifest.json"
+            l1b.algorithm(argparse.Namespace(manifest="input.json"))
+            assert mock_process.call_args.kwargs["jpss_only_mode"] is True
 
     def test_algorithm_omitted_use_geo_defaults_to_true(self, tmp_path, monkeypatch):
         """Omitting use_geo from configuration defaults to production geolocation."""
@@ -280,7 +421,7 @@ class TestAlgorithmUseGeoConfiguration:
             patch("libera_cam.l1b.Manifest.output_manifest_from_input_manifest", return_value=output_manifest),
             patch("libera_cam.l1b.read_all_input_data") as mock_read,
             patch("libera_cam.l1b.process_l1a_to_l1b") as mock_process,
-            patch("libera_cam.l1b.package_l1b_product") as mock_package,
+            patch("libera_cam.l1b.package_l1b_product"),
             patch("libera_cam.l1b.write_data_product") as mock_write,
         ):
             mock_from_file.return_value = Mock(files=[], configuration={})
@@ -293,6 +434,7 @@ class TestAlgorithmUseGeoConfiguration:
             l1b.algorithm(argparse.Namespace(manifest="input.json"))
             mock_read.assert_called_once_with(input_manifest)
             assert mock_process.call_args.kwargs["use_geo"] is True
+            assert mock_process.call_args.kwargs["jpss_only_mode"] is False
 
     def test_algorithm_missing_processing_path(self, tmp_path, monkeypatch):
         """Test error when PROCESSING_PATH is not set."""

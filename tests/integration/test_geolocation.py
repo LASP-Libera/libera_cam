@@ -128,8 +128,8 @@ def test_add_geolocation_with_static_mask(test_data_path, test_ditl_l1a_file_pat
     result = ds_geo.isel(camera_time=0).compute(scheduler="synchronous")
     lat = result["Latitude"].values.ravel()
 
-    # Masked-out pixels (index 10 onwards) must be NaN
-    assert np.isnan(lat[10:]).all(), "Masked-out pixels should be NaN"
+    # Masked-out pixels (index 10 onwards) get product fill value
+    assert np.all(lat[10:] == np.float32(-999)), "Masked-out pixels should be fill value -999"
 
 
 def test_add_geolocation_with_dynamic_mask_integration(test_data_path, test_ditl_l1a_file_path):
@@ -169,17 +169,17 @@ def test_add_geolocation_with_dynamic_mask_integration(test_data_path, test_ditl
     # full_results = ds_geo_full["Latitude"].compute(scheduler="synchronous").values
 
     # Verification Logic:
-    # We verify that masked-out regions are strictly NaN.
+    # We verify that masked-out regions use the product fill value.
     # We cannot verifying masked-in regions have values because the test data yields NaNs anyway.
 
-    # Frame 0: Bottom half should be NaN
-    assert np.isnan(results[0, 1024:, :]).all()
+    # Frame 0: Bottom half should be fill value
+    assert np.all(results[0, 1024:, :] == np.float32(-999))
 
-    # Frame 1: Top half should be NaN
-    assert np.isnan(results[1, :1024, :]).all()
+    # Frame 1: Top half should be fill value
+    assert np.all(results[1, :1024, :] == np.float32(-999))
 
-    # Frame 2: All NaN
-    assert np.isnan(results[2]).all()
+    # Frame 2: All fill value
+    assert np.all(results[2] == np.float32(-999))
 
 
 @pytest.mark.integration
