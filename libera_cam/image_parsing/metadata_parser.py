@@ -1,6 +1,9 @@
 """
 Image Metadata Parser
 Extracts FSW, FPGA metadata, and Compressed Payload from binary image blobs.
+
+See doc/wfov_fsw_header_reference.md for the 36-byte FSW header layout, img_mode
+semantics, pixel_mask_id values, and VIDEO double-image / duplicate-timestamp guidance.
 """
 
 import logging
