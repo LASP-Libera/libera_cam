@@ -56,8 +56,8 @@ def test_ditl_l1a_file_path(test_data_path):
     """Returns the Path to a sample L1A NetCDF file from the Day in the Life (DITL) test data"""
     return (
         test_data_path
-        / "DITL_short"
-        / "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        / "DITL_3min"
+        / "LIBERA_L1A_WFOV-SCI-DECODED_V5-8-4_20280212T080001_20280212T080342_R26157025734.nc"
     )
 
 

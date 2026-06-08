@@ -17,13 +17,13 @@ def test_read_ditl_l1a_cam_data(test_ditl_l1a_file_path):
     assert isinstance(image_dataset.image_data.data, da.Array), "Image data should be a Dask array"
     assert isinstance(image_dataset.integration_mask.data, da.Array), "Integration mask should be a Dask array"
 
-    assert len(image_dataset.camera_time) == 114
-    assert image_dataset.image_data.shape == (114, 2048, 2048)
-    assert image_dataset.integration_mask.shape == (114, 2048, 2048)
+    assert len(image_dataset.camera_time) == 3
+    assert image_dataset.image_data.shape == (3, 2048, 2048)
+    assert image_dataset.integration_mask.shape == (3, 2048, 2048)
 
     # count good images using the metadata field "good_image_flag"
     # This triggers computation if good_image_flag depends on image_data
-    assert image_dataset.good_image_flag.sum().values == 114
+    assert image_dataset.good_image_flag.sum().values == 3
 
     # Check valid_pixel_mask
     assert "valid_pixel_mask" in image_dataset

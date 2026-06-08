@@ -14,14 +14,14 @@ from libera_cam.version import version as libera_cam_version
 
 @pytest.fixture(scope="module")
 def input_manifest_path(tmp_path_factory, test_data_path):
-    """Generate a test input manifest from the DITL_short integration data."""
-    ditl_data_path = test_data_path / "DITL_short"
+    """Generate a test input manifest from the DITL_3min integration data."""
+    ditl_data_path = test_data_path / "DITL_3min"
 
     filenames = (
-        ditl_data_path / "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R26021234221.bc",
-        ditl_data_path / "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc",
-        ditl_data_path / "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc",
-        ditl_data_path / "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp",
+        ditl_data_path / "LIBERA_L1A_WFOV-SCI-DECODED_V5-8-4_20280212T080001_20280212T080342_R26157025734.nc",
+        ditl_data_path / "LIBERA_SPICE_AZROT-CK_V5-8-4_20280212T033106_20280212T040027_R26157131711.bc",
+        ditl_data_path / "LIBERA_SPICE_JPSS-CK_V5-4-2_20280212T000000_20280212T235959_R26006200637.bc",
+        ditl_data_path / "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280212T000000_20280212T235959_R26006200633.bsp",
     )
 
     input_manifest = Manifest(manifest_type=ManifestType.INPUT, files=filenames)
