@@ -16,7 +16,7 @@ def monkeypatch_session():
     mp.undo()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def test_data_path():
     """Returns the Path to the test_data directory"""
     return Path(sys.modules[__name__.split(".")[0]].__file__).parent / "test_data"

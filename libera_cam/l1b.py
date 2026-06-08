@@ -6,7 +6,6 @@ import logging
 import os
 from collections.abc import Sequence
 from datetime import datetime
-from importlib import resources
 from pathlib import Path
 
 import dask
@@ -18,6 +17,7 @@ from libera_utils.io.manifest import Manifest
 from libera_utils.io.netcdf import write_libera_data_product
 
 from libera_cam.camera import convert_dn_to_radiance
+from libera_cam.config import product_config_path
 from libera_cam.constants import DEFAULT_TIME_CHUNK_SIZE
 from libera_cam.geolocation import (
     GeolocationKernelConfig,
@@ -26,6 +26,7 @@ from libera_cam.geolocation import (
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 from libera_cam.packaging import package_l1b_product
+from libera_cam.version import version as libera_cam_version
 
 logger = logging.getLogger(__name__)
 
@@ -268,11 +269,13 @@ def write_data_product(processed_data: xr.Dataset, output_path: str) -> LiberaDa
     data_product_filenames: LiberaDataProductFilename
         The valid filename of the written data product(s)
     """
-    data_folder = resources.files("libera_cam.data")
-    product_def_path = data_folder / "L1B_CAM_product_definition.yml"
+    if not product_config_path.exists():
+        raise FileNotFoundError(f"Product definition file not found: {product_config_path}")
+
+    processed_data.attrs["algorithm_version"] = libera_cam_version()
 
     output_files = write_libera_data_product(
-        data_product_definition=product_def_path,
+        data_product_definition=product_config_path,
         data=processed_data,
         output_path=output_path,
         time_variable="CAMERA_TIME",

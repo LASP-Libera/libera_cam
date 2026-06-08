@@ -8,6 +8,7 @@ from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.manifest import Manifest
 
 from libera_cam import l1b
+from libera_cam.version import version as libera_cam_version
 
 
 class TestL1b(unittest.TestCase):
@@ -185,11 +186,10 @@ class TestL1b(unittest.TestCase):
         assert result is mock_lazy_ds
 
     @patch("libera_cam.l1b.write_libera_data_product")
-    @patch("libera_cam.l1b.resources.files")
-    def test_write_data_product(self, mock_resources, mock_write_libera):
+    def test_write_data_product(self, mock_write_libera):
         """Test data product writing wrapper."""
         mock_ds = MagicMock(spec=xr.Dataset)
-        mock_resources.return_value.joinpath.return_value = "product_def.yml"
+        mock_ds.attrs = {}
 
         mock_filenames = (MagicMock(), MagicMock())
         mock_write_libera.return_value = mock_filenames
@@ -197,4 +197,5 @@ class TestL1b(unittest.TestCase):
         result = l1b.write_data_product(mock_ds, "/tmp/out")
 
         assert result == mock_filenames
+        assert mock_ds.attrs["algorithm_version"] == libera_cam_version()
         mock_write_libera.assert_called_once()
