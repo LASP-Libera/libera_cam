@@ -11,6 +11,8 @@ from libera_utils.io.manifest import Manifest, ManifestType
 from libera_cam.l1b import algorithm
 from libera_cam.version import version as libera_cam_version
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(scope="module")
 def input_manifest_path(tmp_path_factory, test_data_path):
@@ -32,11 +34,15 @@ def input_manifest_path(tmp_path_factory, test_data_path):
 def l1b_product_file_path(input_manifest_path, tmp_path_factory):
     """Run the L1B algorithm once per test module and return the output data file path."""
     tmp_path = tmp_path_factory.mktemp("l1b_product")
+    previous_processing_path = os.environ.get("PROCESSING_PATH")
     os.environ["PROCESSING_PATH"] = str(tmp_path)
     try:
         output_manifest_path = algorithm(Namespace(manifest=str(input_manifest_path)))
     finally:
-        del os.environ["PROCESSING_PATH"]
+        if previous_processing_path is None:
+            os.environ.pop("PROCESSING_PATH", None)
+        else:
+            os.environ["PROCESSING_PATH"] = previous_processing_path
 
     output_manifest = Manifest.from_file(output_manifest_path)
     nc_files = [file for file in output_manifest.files if Path(file.filename).suffix == ".nc"]

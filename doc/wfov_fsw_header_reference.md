@@ -107,7 +107,7 @@ metadata["pixel_mask_id"] = struct.unpack("B", file.read(1))[0]
 # ...
 ```
 
-In libera*utils L1A products, these fields appear as `WFOV_FSW*\*`variables on the`CAMERA_TIME` dimension.
+In `libera_utils` L1A products, these fields appear as `WFOV_FSW_*` variables on the `CAMERA_TIME` dimension.
 
 ---
 
