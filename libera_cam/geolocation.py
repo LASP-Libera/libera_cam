@@ -152,11 +152,7 @@ def calculate_all_pixel_lat_lon_altitude(
     """
     kernel_manager.ensure_known_kernels_are_furnished()
 
-    # TODO[LIBSDC-611]: Add KernelManager.check_ck_frame_coverage(timestamps, frame_pairs)
-    # to warn when furnished motor-CK intervals do not cover sample times (migrate
-    # libera_utils.libera_spice.spice_utils.ls_kernel_coverage). Consumers such as
-    # libera_rad.geolocation.calculate_azimuth_elevation_for_timestamps currently leave
-    # fill values on pxform failures with only per-ET debug logs.
+    # TODO[LIBSDC-788]: CK coverage check via KernelManager before geolocation.
 
     # Could use more error handling here to support more options of inputs for time range
     if isinstance(image_times, list):

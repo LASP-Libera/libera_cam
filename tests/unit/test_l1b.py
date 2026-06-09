@@ -95,24 +95,40 @@ class TestL1b(unittest.TestCase):
         """Test manifest file reading and dataset loading."""
         mock_file_info = MagicMock()
         mock_file_info.filename = "test_l1a.nc"
+        az_file = MagicMock()
+        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R26021234221.bc"
+        jpss_spk = MagicMock()
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_ck = MagicMock()
+        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc"
         mock_manifest = MagicMock()
-        mock_manifest.files = [mock_file_info]
-        mock_manifest.configuration = {"use_geo": False}
+        mock_manifest.files = [mock_file_info, az_file, jpss_spk, jpss_ck]
+        mock_manifest.configuration = {}
 
         mock_ds = MagicMock(spec=xr.Dataset)
         mock_ds.variables = ["var1"]
         mock_open_ds.return_value.load.return_value = mock_ds
 
-        mock_filename = MagicMock()
-        mock_filename.data_product_id = DataProductIdentifier.l1a_icie_wfov_sci_decoded
-        mock_filename_cls.from_file_path.return_value = mock_filename
+        def _filename_from_path(path):
+            mock_filename = MagicMock()
+            if path.endswith(".nc"):
+                mock_filename.data_product_id = DataProductIdentifier.l1a_icie_wfov_sci_decoded
+            elif "AZROT-CK" in path:
+                mock_filename.data_product_id = DataProductIdentifier.spice_az_ck
+            elif "JPSS-SPK" in path:
+                mock_filename.data_product_id = DataProductIdentifier.spice_jpss_spk
+            elif "JPSS-CK" in path:
+                mock_filename.data_product_id = DataProductIdentifier.spice_jpss_ck
+            return mock_filename
+
+        mock_filename_cls.from_file_path.side_effect = _filename_from_path
 
         with patch("libera_cam.l1b.smart_open", return_value=_mock_smart_open_file()):
             all_data, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
 
         assert "test_l1a.nc" in all_data
         assert all_data["test_l1a.nc"] == mock_ds
-        assert dynamic_kernel_sources == []
+        assert dynamic_kernel_sources == [az_file.filename, jpss_spk.filename, jpss_ck.filename]
         mock_open_ds.return_value.load.assert_called_once()
 
     @patch("libera_cam.l1b.xr.open_dataset")
@@ -282,9 +298,12 @@ class TestReadAllInputDataSpiceKernels:
 
         mock_ds = MagicMock(spec=xr.Dataset)
         mock_ds.variables = ["var1"]
-        mock_open_ds.return_value = mock_ds
+        mock_open_ds.return_value.load.return_value = mock_ds
 
-        with caplog.at_level(logging.WARNING):
+        with (
+            patch("libera_cam.l1b.smart_open", return_value=_mock_smart_open_file()),
+            caplog.at_level(logging.WARNING),
+        ):
             _, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
 
         assert dynamic_kernel_sources == [jpss_spk.filename, jpss_ck.filename]
@@ -306,9 +325,10 @@ class TestReadAllInputDataSpiceKernels:
         mock_manifest.files = [nc_file, jpss_ck, az_file, jpss_spk]
         mock_manifest.configuration = {}
 
-        mock_open_ds.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
+        mock_open_ds.return_value.load.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
 
-        _, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
+        with patch("libera_cam.l1b.smart_open", return_value=_mock_smart_open_file()):
+            _, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
 
         assert dynamic_kernel_sources == [az_file.filename, jpss_spk.filename, jpss_ck.filename]
 
@@ -326,10 +346,11 @@ class TestReadAllInputDataSpiceKernels:
         mock_manifest.files = [nc_file, jpss_spk_a, jpss_spk_b]
         mock_manifest.configuration = {"jpss_only": True}
 
-        mock_open_ds.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
+        mock_open_ds.return_value.load.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
 
-        with pytest.raises(ValueError, match="Duplicate SPICE data product"):
-            l1b.read_all_input_data(mock_manifest)
+        with patch("libera_cam.l1b.smart_open", return_value=_mock_smart_open_file()):
+            with pytest.raises(ValueError, match="Duplicate SPICE data product"):
+                l1b.read_all_input_data(mock_manifest)
 
     @patch("libera_cam.l1b.xr.open_dataset")
     def test_read_all_input_data_missing_required_spice_raises(self, mock_open_ds):
@@ -343,10 +364,11 @@ class TestReadAllInputDataSpiceKernels:
         mock_manifest.files = [nc_file, jpss_spk]
         mock_manifest.configuration = {"jpss_only": True}
 
-        mock_open_ds.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
+        mock_open_ds.return_value.load.return_value = MagicMock(spec=xr.Dataset, variables=["var1"])
 
-        with pytest.raises(ValueError, match="missing required SPICE data products"):
-            l1b.read_all_input_data(mock_manifest)
+        with patch("libera_cam.l1b.smart_open", return_value=_mock_smart_open_file()):
+            with pytest.raises(ValueError, match="missing required SPICE data products"):
+                l1b.read_all_input_data(mock_manifest)
 
 
 class TestAlgorithmUseGeoConfiguration:
