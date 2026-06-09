@@ -11,6 +11,8 @@ from libera_utils.io.manifest import Manifest
 
 from libera_cam.l1b import algorithm
 
+pytestmark = pytest.mark.integration
+
 
 class TestL1bManifestUseGeoConfiguration:
     """Each manifest configuration case is a separate integration test."""

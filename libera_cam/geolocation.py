@@ -145,12 +145,18 @@ def calculate_all_pixel_lat_lon_altitude(
     -------
     dict[str, np.ndarray]
         A dictionary containing the following keys, each mapped to a NumPy array
-        with shape `(N_times, PIXEL_COUNT_X, PIXEL_COUNT_Y)`:
+        with shape `(N_times, PIXEL_COUNT_Y, PIXEL_COUNT_X)`:
         - "latitude" (np.float64): Latitude values in degrees north.
         - "longitude" (np.float64): Longitude values in degrees east.
         - "altitude" (np.float64): Altitude values in meters.
     """
     kernel_manager.ensure_known_kernels_are_furnished()
+
+    # TODO[LIBSDC-611]: Add KernelManager.check_ck_frame_coverage(timestamps, frame_pairs)
+    # to warn when furnished motor-CK intervals do not cover sample times (migrate
+    # libera_utils.libera_spice.spice_utils.ls_kernel_coverage). Consumers such as
+    # libera_rad.geolocation.calculate_azimuth_elevation_for_timestamps currently leave
+    # fill values on pxform failures with only per-ET debug logs.
 
     # Could use more error handling here to support more options of inputs for time range
     if isinstance(image_times, list):
@@ -255,9 +261,9 @@ def calculate_all_pixel_lat_lon_altitude(
                 full_alt = computed_alt
 
     return_dict = {
-        "latitude": full_lat.reshape(n_times, PIXEL_COUNT_X, PIXEL_COUNT_Y),
-        "longitude": full_lon.reshape(n_times, PIXEL_COUNT_X, PIXEL_COUNT_Y),
-        "altitude": full_alt.reshape(n_times, PIXEL_COUNT_X, PIXEL_COUNT_Y),
+        "latitude": full_lat.reshape(n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X),
+        "longitude": full_lon.reshape(n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X),
+        "altitude": full_alt.reshape(n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X),
     }
 
     return return_dict
@@ -521,16 +527,16 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
         time_chunks_tuple = (1,) * n_times
 
     placeholder_lat_lon = da.full(
-        (ds.sizes["camera_time"], PIXEL_COUNT_X, PIXEL_COUNT_Y),
+        (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X),
         fill_value=_GEO_FILL_LAT_LON,
         dtype=np.float32,
-        chunks=(time_chunks_tuple, (PIXEL_COUNT_X,), (PIXEL_COUNT_Y,)),
+        chunks=(time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,)),
     )
     placeholder_alt = da.full(
-        (ds.sizes["camera_time"], PIXEL_COUNT_X, PIXEL_COUNT_Y),
+        (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X),
         fill_value=_GEO_FILL_ALT,
         dtype=np.float32,
-        chunks=(time_chunks_tuple, (PIXEL_COUNT_X,), (PIXEL_COUNT_Y,)),
+        chunks=(time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,)),
     )
 
     ds["Latitude"] = (("camera_time", "y", "x"), placeholder_lat_lon)
