@@ -11,9 +11,9 @@ from pathlib import Path
 import dask
 import xarray as xr
 from cloudpathlib import AnyPath, S3Path
+from libera_utils import Manifest, smart_open
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
-from libera_utils.io.manifest import Manifest
 from libera_utils.io.netcdf import write_libera_data_product
 
 from libera_cam.camera import convert_dn_to_radiance
@@ -159,15 +159,11 @@ def read_all_input_data(
                 dynamic_kernel_sources.append(file_info.filename)
                 logger.info("Recorded SPICE kernel for KernelManager: %s", file_info.filename)
             else:
-                dataset = xr.open_dataset(file_info.filename)
-                libera_filename = LiberaDataProductFilename(file_info.filename)
-                if libera_filename.data_product_id is not DataProductIdentifier.l1a_icie_wfov_sci_decoded:
-                    raise ValueError(
-                        f"Unexpected data product ID {libera_filename.data_product_id} in file {file_info.filename}."
-                        f"Expected L1A WFOV SCI DECODED data."
-                    )
-                all_data[str(DataProductIdentifier.l1a_icie_wfov_sci_decoded)] = dataset
-                logger.info(f"Successfully opened dataset with variables: {list(dataset.variables)}")
+                with smart_open(file_info.filename) as file_handle:
+                    LiberaDataProductFilename.from_file_path(file_info.filename)  # Ensure file is Libera Data Product
+                    dataset = xr.open_dataset(file_handle, decode_times=True).load()
+                    all_data[file_info.filename] = dataset
+                    logger.info(f"Successfully loaded dataset: {file_handle}")
         except Exception as e:
             logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
             raise
@@ -182,6 +178,22 @@ def read_all_input_data(
         logger.warning("No data files were loaded from manifest")
 
     return all_data, dynamic_kernel_sources
+
+
+def _extract_camera_dataset(all_input_data: dict[str, xr.Dataset]) -> xr.Dataset:
+    """
+    Extract WFOV SCI DECODED camera dataset from input data.
+
+    Searches through the input data dictionary to identify the L1A WFOV science
+    dataset based on filename product id, matching the libera_rad pattern of
+    keying ``read_all_input_data`` results by manifest filename.
+    """
+    for file_name, dataset in all_input_data.items():
+        libera_filename = LiberaDataProductFilename.from_file_path(file_name)
+        if libera_filename.data_product_id == DataProductIdentifier.l1a_icie_wfov_sci_decoded.value:
+            return dataset
+
+    raise ValueError("No WFOV SCI DECODED data found in input files")
 
 
 def process_l1a_to_l1b(
@@ -225,8 +237,7 @@ def process_l1a_to_l1b(
     FileNotFoundError
         If the calibration data file is not found.
     """
-    # Initially, we only have WFOV-SCI-DECODED data to process
-    l1a_cam_data = all_input_data[str(DataProductIdentifier.l1a_icie_wfov_sci_decoded)]
+    l1a_cam_data = _extract_camera_dataset(all_input_data)
 
     # Output is a tuple of (images, metadata, integration time masks)
     cam_dataset = read_l1a_cam_data(l1a_cam_data)

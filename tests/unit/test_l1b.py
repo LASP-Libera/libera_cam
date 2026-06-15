@@ -1,7 +1,7 @@
 import argparse
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import xarray as xr
 from libera_utils.constants import DataProductIdentifier
@@ -9,6 +9,15 @@ from libera_utils.io.manifest import Manifest
 
 from libera_cam import l1b
 from libera_cam.version import version as libera_cam_version
+
+WFOV_L1A_FILENAME = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+
+
+def _mock_smart_open_file():
+    mock_file = MagicMock()
+    mock_file.__enter__ = Mock(return_value=mock_file)
+    mock_file.__exit__ = Mock(return_value=False)
+    return mock_file
 
 
 class TestL1b(unittest.TestCase):
@@ -91,21 +100,20 @@ class TestL1b(unittest.TestCase):
         # Setup Dataset mock
         mock_ds = MagicMock(spec=xr.Dataset)
         mock_ds.variables = ["var1"]
-        mock_open_ds.return_value = mock_ds
+        mock_open_ds.return_value.load.return_value = mock_ds
 
         # Setup Filename mock
         mock_filename = MagicMock()
         mock_filename.data_product_id = DataProductIdentifier.l1a_icie_wfov_sci_decoded
-        mock_filename_cls.return_value = mock_filename
+        mock_filename_cls.from_file_path.return_value = mock_filename
 
-        all_data, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
+        with patch("libera_cam.l1b.smart_open", return_value=_mock_smart_open_file()):
+            all_data, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
 
-        # Verify
-        assert "WFOV-SCI-DECODED" in all_data
-        assert all_data["WFOV-SCI-DECODED"] == mock_ds
+        assert "test_l1a.nc" in all_data
+        assert all_data["test_l1a.nc"] == mock_ds
         assert dynamic_kernel_sources == []
-        # Verify that .load() was NOT called (maintaining laziness)
-        mock_ds.load.assert_not_called()
+        mock_open_ds.return_value.load.assert_called_once()
 
     @patch("libera_cam.l1b.xr.open_dataset")
     @patch("libera_cam.l1b.LiberaDataProductFilename")
@@ -121,16 +129,17 @@ class TestL1b(unittest.TestCase):
 
         mock_ds = MagicMock(spec=xr.Dataset)
         mock_ds.variables = ["var1"]
-        mock_open_ds.return_value = mock_ds
+        mock_open_ds.return_value.load.return_value = mock_ds
 
         mock_filename = MagicMock()
         mock_filename.data_product_id = DataProductIdentifier.l1a_icie_wfov_sci_decoded
-        mock_filename_cls.return_value = mock_filename
+        mock_filename_cls.from_file_path.return_value = mock_filename
 
-        all_data, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest, no_geo_mode=True)
+        with patch("libera_cam.l1b.smart_open", return_value=_mock_smart_open_file()):
+            all_data, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest, no_geo_mode=True)
 
         assert dynamic_kernel_sources is None
-        assert "WFOV-SCI-DECODED" in all_data
+        assert "test_l1a.nc" in all_data
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
@@ -138,7 +147,7 @@ class TestL1b(unittest.TestCase):
     def test_process_l1a_to_l1b_spice_mode(self, mock_geo, mock_convert, mock_read_l1a):
         """Production mode: add_geolocation_to_dataset is called with a GeolocationKernelConfig."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
-        all_input = {DataProductIdentifier.l1a_icie_wfov_sci_decoded: mock_l1a_input}
+        all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
@@ -168,7 +177,7 @@ class TestL1b(unittest.TestCase):
     def test_process_l1a_to_l1b_no_geo_mode(self, mock_placeholder, mock_convert, mock_read_l1a):
         """No geolocation mode: add_placeholder_geolocation_to_dataset is called; SPICE path is not."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
-        all_input = {DataProductIdentifier.l1a_icie_wfov_sci_decoded: mock_l1a_input}
+        all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
