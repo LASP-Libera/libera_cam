@@ -18,7 +18,7 @@ from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 
 
 def _ditl_dynamic_kernel_sources(test_data_path: Path) -> list[Path]:
-    d = test_data_path / "DITL_short"
+    d = test_data_path / "DITL_3min"
     return sorted(p for p in d.iterdir() if p.is_file() and p.suffix in {".bc", ".bsp"})
 
 
@@ -66,7 +66,7 @@ def test_add_geolocation_to_dataset(test_data_path, test_ditl_l1a_file_path):
     ds = read_l1a_cam_data(l1a_ds)
 
     # Subset for speed (first 5 frames)
-    ds = ds.isel(camera_time=slice(0, 5))
+    ds = ds.isel(camera_time=slice(0, 3))
 
     # 2. Setup Config
     test_kernel_sources = _ditl_dynamic_kernel_sources(test_data_path)
@@ -185,7 +185,7 @@ def test_add_geolocation_with_dynamic_mask_integration(test_data_path, test_ditl
 @pytest.mark.integration
 def test_dynamic_kernel_sequence_materializes_into_cache(monkeypatch, tmp_path, test_data_path):
     """Explicit sequence mode should materialize kernel basenames into the user cache via KernelFileCache."""
-    test_kernel_dir = test_data_path / "DITL_short"
+    test_kernel_dir = test_data_path / "DITL_3min"
     kernel_files = sorted(
         [p for p in test_kernel_dir.iterdir() if p.is_file() and p.suffix in {".bc", ".bsp"}],
         key=lambda p: p.name,

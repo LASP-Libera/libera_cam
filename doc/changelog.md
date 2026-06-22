@@ -1,5 +1,11 @@
 # Version Changes
 
+## 0.2.4
+
+- Set `algorithm_version` dynamically from the installed package at write time (product definition YAML uses `null`, matching `libera_rad`). Added tests to ensure the bundled product definition stays in sync with the repo version.
+- Replace `DITL_short` integration fixtures with a smaller `DITL_3min` dataset (~3 minutes of WFOV L1A and SPICE kernels). Add a shared `generate_input_manifest` pytest fixture for manifest-driven integration tests.
+- Add `doc/wfov_fsw_header_reference.md`, documenting the 36-byte FSW metadata block, `img_mode` semantics, and guidance for separating VIDEO double-image pairs that share duplicate `CAMERA_TIME` timestamps. Cross-reference from `metadata_parser.py`.
+
 ## 0.2.3
 
 - Use `KernelManager.load_libera_dynamic_kernels(...)` with libera_utils `KernelFileCache` rather than copying `.bc`/`.bsp` kernels into a package-local directory during L1B processing. Dynamic kernels are provided as an explicit **sequence** of sources (e.g. manifest order); `GeolocationKernelConfig` and integration tests pass ordered `.bc`/`.bsp` source lists.

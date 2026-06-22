@@ -11,7 +11,7 @@ from libera_cam.geolocation import GeolocationKernelConfig, prefetch_kernels
 
 
 def _ditl_dynamic_kernel_files(test_data_path: Path, limit: int = 2) -> list[Path]:
-    kernel_dir = test_data_path / "DITL_short"
+    kernel_dir = test_data_path / "DITL_3min"
     kernel_files = sorted(
         [p for p in kernel_dir.iterdir() if p.is_file() and p.suffix in {".bc", ".bsp"}],
         key=lambda p: p.name,
