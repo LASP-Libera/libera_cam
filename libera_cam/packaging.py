@@ -114,5 +114,6 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         dataset["Longitude"].attrs["long_name"] = "Longitude. Coordinate Reference System WGS84"
     if "Altitude" in dataset:
         dataset["Altitude"].attrs["long_name"] = "Height above the WGS84 ellipsoid. EPSG:4979"
+        dataset["Altitude"].attrs["units"] = "meters"
 
     return dataset

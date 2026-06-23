@@ -187,21 +187,21 @@ def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
     assert result_chunk.shape == (2, 2, 2)
 
 
-@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 4)
-@patch("libera_cam.geolocation.PIXEL_COUNT_X", 4)
+@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 3)
+@patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
 def test_add_placeholder_geolocation_to_dataset():
-    """Placeholder function adds NaN-filled Latitude/Longitude/Altitude matching image_data chunks."""
+    """Placeholder function adds product fill-value Latitude/Longitude/Altitude."""
     import xarray as xr
 
     from libera_cam.geolocation import add_placeholder_geolocation_to_dataset
 
     n_times = 6
     times = pd.date_range("2025-01-01", periods=n_times, freq="s")
-    image_data = da.zeros((n_times, 4, 4), chunks=(3, 4, 4))
+    image_data = da.zeros((n_times, 3, 5), chunks=(3, 3, 5))
 
     ds = xr.Dataset(
         {"image_data": (("camera_time", "y", "x"), image_data)},
-        coords={"camera_time": times, "y": range(4), "x": range(4)},
+        coords={"camera_time": times, "y": range(3), "x": range(5)},
     )
 
     result = add_placeholder_geolocation_to_dataset(ds)
@@ -210,9 +210,70 @@ def test_add_placeholder_geolocation_to_dataset():
         assert var in result, f"{var} missing from result dataset"
         assert isinstance(result[var].data, da.Array), f"{var} should be a dask array"
         assert result[var].dtype == np.float32, f"{var} dtype should be float32"
-        # Time chunks must match image_data chunks
+        assert result[var].shape == (n_times, 3, 5), f"{var} should align with (y, x) dims"
         assert result[var].data.chunks[0] == image_data.chunks[0], f"{var} time chunks should match image_data"
 
-    # All values must be NaN when computed
-    computed = result["Latitude"].compute()
-    assert np.isnan(computed.values).all(), "Latitude placeholder should be all NaN"
+    lat = result["Latitude"].compute().values
+    lon = result["Longitude"].compute().values
+    alt = result["Altitude"].compute().values
+    assert np.all(lat == np.float32(-999))
+    assert np.all(lon == np.float32(-999))
+    assert np.all(alt == np.float32(-9999))
+
+
+@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 3)
+@patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
+@patch("libera_cam.geolocation.calculate_all_pixel_lat_lon_altitude")
+@patch("libera_cam.geolocation.np.load")
+@patch("libera_cam.geolocation.KernelManager")
+def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all):
+    """Worker output is (T, Y, X, 3) even when internal calc uses (T, X, Y)."""
+    from libera_cam.geolocation import GeolocationKernelConfig, calculate_chunk_geolocation
+
+    mock_km = MagicMock()
+    mock_km.__enter__ = MagicMock(return_value=mock_km)
+    mock_km.__exit__ = MagicMock(return_value=False)
+    mock_km_cls.return_value = mock_km
+    mock_load.return_value = np.zeros((15, 3))
+
+    n_times = 2
+    lat = np.arange(n_times * 3 * 5, dtype=np.float64).reshape(n_times, 3, 5)
+    lon = lat + 100
+    alt = lat + 200
+    mock_calc_all.return_value = {"latitude": lat, "longitude": lon, "altitude": alt}
+
+    camera_time = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"], dtype="datetime64[ns]")
+    result = calculate_chunk_geolocation(camera_time, GeolocationKernelConfig())
+
+    assert result.shape == (2, 3, 5, 3)
+    assert result[0, 2, 1, 0] == lat[0, 2, 1]
+
+
+@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
+@patch("libera_cam.geolocation.PIXEL_COUNT_X", 2)
+@patch("libera_cam.geolocation.spatial.compute_ellipsoid_intersection")
+@patch("libera_cam.geolocation.spicetime.adapt")
+@patch("libera_cam.geolocation.sp.obj.Body")
+def test_jpss_only_uses_libera_base_spice_body(
+    mock_body, mock_adapt, mock_compute, mock_kernel_manager, mock_pointing_vectors, mock_times
+):
+    """jpss_only geolocation intersects against LIBERA_BASE instead of LIBERA_WFOV_CAM."""
+    mock_adapt.return_value = np.array([100.0, 101.0, 102.0])
+    mock_body.return_value = MagicMock()
+
+    n_results = 3 * 2
+    mock_results = pd.DataFrame({"lat": np.zeros(n_results), "lon": np.zeros(n_results), "alt": np.zeros(n_results)})
+    mock_compute.return_value = (mock_results, None, None)
+
+    static_mask = np.array([True, False, True, False])
+
+    calculate_all_pixel_lat_lon_altitude(
+        mock_kernel_manager,
+        mock_times,
+        pointing_vectors=mock_pointing_vectors,
+        pixel_mask=static_mask,
+        spice_body="LIBERA_BASE",
+    )
+
+    assert mock_compute.call_count == 1
+    mock_body.assert_called_with("LIBERA_BASE", frame=True)
