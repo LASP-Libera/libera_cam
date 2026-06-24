@@ -78,14 +78,12 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "Terrain_Corrected_Latitude": (dims_3d, pixel_placeholder),
         "Terrain_Corrected_Longitude": (dims_3d, pixel_placeholder),
         "Terrain_Corrected_Altitude": (dims_3d, pixel_placeholder),
-        "Solar_Zenith_Surface": (dims_3d, pixel_placeholder),
-        "Relative_Azimuth_Surface": (dims_3d, pixel_placeholder),
-        "Viewing_Zenith_Surface": (dims_3d, pixel_placeholder),
         "Camera_Mask": (dims_3d, pixel_placeholder.astype(np.uint8)),
     }
 
     for name, (dims, data) in placeholders.items():
-        dataset[name] = (dims, data)
+        if name not in dataset:
+            dataset[name] = (dims, data)
 
     # 4. Ensure Types (Cast if necessary)
     # Using explicit casting to float32/uint types
@@ -100,6 +98,9 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "Latitude": np.float32,
         "Longitude": np.float32,
         "Altitude": np.float32,
+        "Solar_Zenith_Surface": np.float32,
+        "Viewing_Zenith_Surface": np.float32,
+        "Relative_Azimuth_Surface": np.float32,
     }
 
     for var_name, dtype in type_map.items():

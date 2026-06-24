@@ -206,7 +206,14 @@ def test_add_placeholder_geolocation_to_dataset():
 
     result = add_placeholder_geolocation_to_dataset(ds)
 
-    for var in ("Latitude", "Longitude", "Altitude"):
+    for var in (
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Solar_Zenith_Surface",
+        "Viewing_Zenith_Surface",
+        "Relative_Azimuth_Surface",
+    ):
         assert var in result, f"{var} missing from result dataset"
         assert isinstance(result[var].data, da.Array), f"{var} should be a dask array"
         assert result[var].dtype == np.float32, f"{var} dtype should be float32"
@@ -220,14 +227,18 @@ def test_add_placeholder_geolocation_to_dataset():
     assert np.all(lon == np.float32(-999))
     assert np.all(alt == np.float32(-9999))
 
+    for angle_var in ("Solar_Zenith_Surface", "Viewing_Zenith_Surface", "Relative_Azimuth_Surface"):
+        assert np.all(result[angle_var].compute().values == np.float32(-999))
+
 
 @patch("libera_cam.geolocation.PIXEL_COUNT_Y", 3)
 @patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
+@patch("libera_cam.geolocation.calculate_pixel_surface_geometry_angles")
 @patch("libera_cam.geolocation.calculate_all_pixel_lat_lon_altitude")
 @patch("libera_cam.geolocation.np.load")
 @patch("libera_cam.geolocation.KernelManager")
-def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all):
-    """Worker output is (T, Y, X, 3) even when internal calc uses (T, X, Y)."""
+def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all, mock_calc_angles):
+    """Worker output is (T, Y, X, 6) with LLA followed by surface geometry angles."""
     from libera_cam.geolocation import GeolocationKernelConfig, calculate_chunk_geolocation
 
     mock_km = MagicMock()
@@ -241,12 +252,20 @@ def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, m
     lon = lat + 100
     alt = lat + 200
     mock_calc_all.return_value = {"latitude": lat, "longitude": lon, "altitude": alt}
+    mock_calc_angles.return_value = {
+        "solar_zenith": np.full((n_times, 3, 5), 45.0, dtype=np.float32),
+        "viewing_zenith": np.full((n_times, 3, 5), 12.0, dtype=np.float32),
+        "relative_azimuth": np.full((n_times, 3, 5), 90.0, dtype=np.float32),
+    }
 
     camera_time = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"], dtype="datetime64[ns]")
     result = calculate_chunk_geolocation(camera_time, GeolocationKernelConfig())
 
-    assert result.shape == (2, 3, 5, 3)
+    assert result.shape == (2, 3, 5, 6)
     assert result[0, 2, 1, 0] == lat[0, 2, 1]
+    assert result[0, 2, 1, 3] == pytest.approx(45.0)
+    assert result[0, 2, 1, 4] == pytest.approx(12.0)
+    assert result[0, 2, 1, 5] == pytest.approx(90.0)
 
 
 @patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
@@ -277,3 +296,46 @@ def test_jpss_only_uses_libera_base_spice_body(
 
     assert mock_compute.call_count == 1
     mock_body.assert_called_with("LIBERA_BASE", frame=True)
+
+
+@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
+@patch("libera_cam.geolocation.PIXEL_COUNT_X", 2)
+@patch("libera_cam.geolocation.spatial.surface_angles")
+@patch("libera_cam.geolocation.spatial.geodetic_to_ecef")
+@patch("libera_cam.geolocation.spicetime.adapt")
+@patch("libera_cam.geolocation.sp.obj.Body")
+def test_calculate_pixel_surface_geometry_angles(
+    mock_body, mock_adapt, mock_geodetic_to_ecef, mock_surface_angles, mock_kernel_manager, mock_times
+):
+    """Surface angles are computed for valid pixels and invalid pixels get fill value."""
+    from libera_cam.geolocation import calculate_pixel_surface_geometry_angles
+
+    mock_adapt.return_value = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"])
+    mock_body.return_value = MagicMock()
+    mock_geodetic_to_ecef.return_value = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+    sun_df = pd.DataFrame({"zenith": [30.0, 40.0], "azimuth": [10.0, 20.0]})
+    sat_df = pd.DataFrame({"zenith": [5.0, 6.0], "azimuth": [100.0, 250.0]})
+    mock_surface_angles.side_effect = [sun_df, sat_df, sun_df, sat_df]
+
+    lat = np.array([[[10.0, np.nan], [20.0, np.nan]], [[30.0, np.nan], [40.0, np.nan]]])
+    lon = lat + 1.0
+    alt = lat + 2.0
+
+    angles = calculate_pixel_surface_geometry_angles(
+        mock_kernel_manager,
+        mock_times[:2],
+        lat,
+        lon,
+        alt,
+        spacecraft_body="LIBERA_WFOV_CAM",
+    )
+
+    assert angles["solar_zenith"].shape == (2, 2, 2)
+    assert angles["viewing_zenith"].shape == (2, 2, 2)
+    assert angles["relative_azimuth"].shape == (2, 2, 2)
+    assert angles["solar_zenith"][0, 0, 0] == pytest.approx(30.0)
+    assert angles["viewing_zenith"][0, 0, 0] == pytest.approx(5.0)
+    assert angles["relative_azimuth"][0, 0, 0] == pytest.approx(90.0)
+    assert angles["solar_zenith"][0, 0, 1] == np.float32(-999)
+    mock_body.assert_called_with("LIBERA_WFOV_CAM", frame=True)

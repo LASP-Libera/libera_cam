@@ -342,6 +342,9 @@ def process_l1a_to_l1b(
     - In production mode (AZROT-CK present), compute motor ``Azimuth`` from SPICE CK
       and log min/max/std of the difference vs L1A FSW azimuth before writing the
       product value
+    - Add geolocation and per-pixel surface geometry angles (SZA, VZA, RAA) via lazy
+      Dask ``map_blocks``, JPSS-only LIBERA_BASE geolocation, or placeholders when
+      ``use_geo`` is false
 
     Parameters
     ----------

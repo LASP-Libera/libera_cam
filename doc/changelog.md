@@ -1,5 +1,9 @@
 # Version Changes
 
+## 0.2.8
+
+- Compute per-pixel surface geometry angles (`Solar_Zenith_Surface`, `Viewing_Zenith_Surface`, `Relative_Azimuth_Surface`) during SPICE geolocation using curryer `surface_angles` at each pixel's Earth observation point (geodetic zenith convention; RAA = satellite azimuth minus solar azimuth mod 360°). Angles are computed in the same Dask chunk worker as lat/lon/alt. `use_geo: false` writes product fill `-999` for all three fields. Bump `libera-utils` lower bound to `>= 5.8.4`.
+
 ## 0.2.7
 
 - **SPICE motor azimuth**: In production L1B mode (AZROT-CK present), compute per-frame motor azimuth from SPICE CK (`LIBERA_BASE_COORD → LIBERA_AZ_COORD`, aligned with `libera_rad`) via `apply_spice_azimuth_to_dataset` and write it to `azimuth_angle` in degrees on `[0, 360)`. When L1A FSW azimuth metadata is present, log min/max/std of the SPICE vs FSW difference before overwriting. `jpss_only` and `use_geo: false` modes continue to use constant azimuth fill values (0° and -999).

@@ -76,6 +76,9 @@ class TestL1bManifestUseGeoConfiguration:
             assert np.all(dataset["Longitude"].values == np.float32(-999))
             assert np.all(dataset["Altitude"].values == np.float32(-9999))
             assert np.all(dataset["Azimuth"].values == np.float32(-999))
+            assert np.all(dataset["Solar_Zenith_Surface"].values == np.float32(-999))
+            assert np.all(dataset["Viewing_Zenith_Surface"].values == np.float32(-999))
+            assert np.all(dataset["Relative_Azimuth_Surface"].values == np.float32(-999))
             assert np.any(np.isfinite(dataset["Radiance"].values))
 
     def test_jpss_only_runs_per_pixel_geolocation(self, generate_input_manifest, monkeypatch, tmp_path):
@@ -113,6 +116,21 @@ class TestL1bManifestUseGeoConfiguration:
                 )
 
             assert np.all(dataset["Azimuth"].values == 0)
-            assert np.all(dataset["Solar_Zenith_Surface"].values == 0)
-            assert np.all(dataset["Viewing_Zenith_Surface"].values == 0)
-            assert np.all(dataset["Relative_Azimuth_Surface"].values == 0)
+
+            sza = dataset["Solar_Zenith_Surface"].values
+            vza = dataset["Viewing_Zenith_Surface"].values
+            raa = dataset["Relative_Azimuth_Surface"].values
+            angle_valid = valid & (sza != -999)
+            assert np.all(sza[~valid] == np.float32(-999))
+            assert np.all(vza[~valid] == np.float32(-999))
+            assert np.all(raa[~valid] == np.float32(-999))
+
+            if np.any(angle_valid):
+                assert np.all((sza[angle_valid] >= 0) & (sza[angle_valid] <= 180))
+                assert np.all((vza[angle_valid] >= 0) & (vza[angle_valid] <= 180))
+                assert np.all((raa[angle_valid] >= 0) & (raa[angle_valid] < 360))
+            else:
+                # DITL 2028 timestamps may exceed NAIF ITRF93 coverage for surface_angles.
+                assert np.all(sza[valid] == np.float32(-999))
+                assert np.all(vza[valid] == np.float32(-999))
+                assert np.all(raa[valid] == np.float32(-999))

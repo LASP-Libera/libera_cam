@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 # Product fill values (L1B_CAM_product_definition.yml)
 _GEO_FILL_LAT_LON = np.float32(-999.0)
 _GEO_FILL_ALT = np.float32(-9999.0)
+_ANGLE_FILL = np.float32(-999.0)
+_SURFACE_CHANNELS = 6
 
 _TWO_PI = float(2.0 * np.pi)
 # L1A FSW header field (radians); ``azimuth_angle`` is the parsed image-metadata name.
@@ -414,6 +416,123 @@ def calculate_all_pixel_lat_lon_altitude(
     return return_dict
 
 
+def calculate_pixel_surface_geometry_angles(
+    kernel_manager: KernelManager,
+    image_times: list[xr.DataArray] | pd.DatetimeIndex,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    alt_m: np.ndarray,
+    spacecraft_body: str,
+    fill_value: float = -999.0,
+) -> dict[str, np.ndarray]:
+    """
+    Compute per-pixel surface solar zenith, viewing zenith, and relative azimuth.
+
+    Angles are evaluated at each Earth observation point using curryer
+    ``surface_angles`` (geodetic zenith convention). Relative azimuth is the
+    satellite azimuth minus the solar azimuth, wrapped to ``[0, 360)`` degrees
+    clockwise from north at the surface.
+
+    Parameters
+    ----------
+    kernel_manager : KernelManager
+        Kernel manager with SPICE kernels already loaded (including NAIF for the Sun).
+    image_times : pd.DatetimeIndex or list[xr.DataArray]
+        Image times aligned with the leading dimension of ``lat``/``lon``/``alt_m``.
+    lat, lon, alt_m : np.ndarray
+        Geodetic coordinates with shape ``(N_times, PIXEL_COUNT_Y, PIXEL_COUNT_X)``.
+        Invalid pixels should be NaN before product fill is applied.
+    spacecraft_body : str
+        NAIF body for the viewing direction (e.g. ``LIBERA_WFOV_CAM`` or ``LIBERA_BASE``).
+    fill_value : float
+        Product fill for pixels where angles cannot be computed.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        ``solar_zenith``, ``viewing_zenith``, and ``relative_azimuth`` arrays (float32)
+        with the same shape as ``lat``.
+    """
+    kernel_manager.ensure_known_kernels_are_furnished()
+
+    if isinstance(image_times, list):
+        image_strings = [str(time.values) for time in image_times]
+        image_times = pd.to_datetime(image_strings)
+    elif isinstance(image_times, xr.DataArray):
+        image_times = pd.to_datetime(image_times.values)
+
+    n_times = lat.shape[0]
+    fill = np.float32(fill_value)
+    sza = np.full(lat.shape, fill, dtype=np.float32)
+    vza = np.full(lat.shape, fill, dtype=np.float32)
+    raa = np.full(lat.shape, fill, dtype=np.float32)
+
+    ugps_times = np.asarray(spicetime.adapt(pd.DatetimeIndex(image_times), "iso")).ravel()
+    sat_body = sp.obj.Body(spacecraft_body, frame=True)
+
+    for t in range(n_times):
+        lat_t = lat[t].ravel()
+        lon_t = lon[t].ravel()
+        alt_t = alt_m[t].ravel()
+        valid = np.isfinite(lat_t) & np.isfinite(lon_t) & np.isfinite(alt_t)
+        if not np.any(valid):
+            continue
+
+        lon_lat_alt_km = np.column_stack(
+            [lon_t[valid], lat_t[valid], alt_t[valid] / 1000.0],
+        )
+        surface_xyz = spatial.geodetic_to_ecef(lon_lat_alt_km, meters=False, degrees=True)
+        surface_positions = pd.DataFrame(
+            surface_xyz,
+            columns=["x", "y", "z"],
+            index=pd.Index(np.full(int(np.sum(valid)), ugps_times[t]), name="ugps"),
+        )
+
+        try:
+            sun_angles = spatial.surface_angles(
+                surface_positions,
+                target_obj="SUN",
+                degrees=True,
+                geocentric=False,
+                allow_nans=True,
+            )
+            sat_angles = spatial.surface_angles(
+                surface_positions,
+                target_obj=sat_body,
+                degrees=True,
+                geocentric=False,
+                allow_nans=True,
+            )
+        except Exception:
+            logger.warning(
+                "Surface angle computation failed for frame %d; leaving fill values.",
+                t,
+                exc_info=True,
+            )
+            continue
+
+        sza_valid = sun_angles["zenith"].to_numpy(dtype=np.float64)
+        vza_valid = sat_angles["zenith"].to_numpy(dtype=np.float64)
+        raa_valid = (sat_angles["azimuth"] - sun_angles["azimuth"]).to_numpy(dtype=np.float64) % 360.0
+
+        flat_sza = sza[t].ravel()
+        flat_vza = vza[t].ravel()
+        flat_raa = raa[t].ravel()
+
+        flat_sza[valid] = np.where(np.isfinite(sza_valid), sza_valid, np.nan).astype(np.float32)
+        flat_vza[valid] = np.where(np.isfinite(vza_valid), vza_valid, np.nan).astype(np.float32)
+        flat_raa[valid] = np.where(np.isfinite(raa_valid), raa_valid, np.nan).astype(np.float32)
+
+        for arr in (flat_sza, flat_vza, flat_raa):
+            arr[~np.isfinite(arr)] = fill
+
+        sza[t] = flat_sza.reshape(lat[t].shape)
+        vza[t] = flat_vza.reshape(lat[t].shape)
+        raa[t] = flat_raa.reshape(lat[t].shape)
+
+    return {"solar_zenith": sza, "viewing_zenith": vza, "relative_azimuth": raa}
+
+
 def calculate_chunk_geolocation(
     camera_time: np.ndarray,
     config: GeolocationKernelConfig,
@@ -440,7 +559,8 @@ def calculate_chunk_geolocation(
     Returns
     -------
     np.ndarray
-        Array of shape (T, Y, X, 3) containing [Latitude, Longitude, Altitude].
+        Array of shape (T, Y, X, 6) containing
+        [Latitude, Longitude, Altitude, Solar_Zenith, Viewing_Zenith, Relative_Azimuth].
     """
     # Instantiate fresh manager for this process
     km = KernelManager(
@@ -479,13 +599,24 @@ def calculate_chunk_geolocation(
             spice_body=spice_body,
         )
 
-        # Stack into (T, Y, X, 3)
-        # Order: Latitude, Longitude, Altitude
+        angle_dict = calculate_pixel_surface_geometry_angles(
+            km,
+            times,
+            result_dict["latitude"],
+            result_dict["longitude"],
+            result_dict["altitude"],
+            spacecraft_body=spice_body,
+        )
+
+        # Stack into (T, Y, X, 6)
         stacked_result = np.stack(
             [
                 result_dict["latitude"],
                 result_dict["longitude"],
                 result_dict["altitude"],
+                angle_dict["solar_zenith"],
+                angle_dict["viewing_zenith"],
+                angle_dict["relative_azimuth"],
             ],
             axis=-1,
         )
@@ -523,7 +654,9 @@ def add_geolocation_to_dataset(
     Returns
     -------
     xr.Dataset
-        The dataset with added 'latitude', 'longitude', 'altitude' variables.
+        The dataset with added geolocation and surface geometry variables:
+        ``Latitude``, ``Longitude``, ``Altitude``, ``Solar_Zenith_Surface``,
+        ``Viewing_Zenith_Surface``, and ``Relative_Azimuth_Surface``.
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
@@ -551,7 +684,7 @@ def add_geolocation_to_dataset(
     map_blocks_args = [config]
 
     # Determine new axes for map_blocks
-    # Default: Input is 1D (Time), Output is 4D (Time, Y, X, 3) -> Add axes 1, 2, 3
+    # Default: Input is 1D (Time), Output is 4D (Time, Y, X, 6) -> Add axes 1, 2, 3
     new_axes_indices = [1, 2, 3]
 
     if pixel_mask is not None:
@@ -573,7 +706,7 @@ def add_geolocation_to_dataset(
             pixel_mask_da = pixel_mask_da.rechunk({0: time_chunks_tuple})
             map_blocks_args.append(pixel_mask_da)
 
-            # If input is 1D (Time), Output is 4D (Time, Y, X, 3) -> Add axes 1, 2, 3
+            # If input is 1D (Time), Output is 4D (Time, Y, X, 6) -> Add axes 1, 2, 3
             # Dask aligns 1D and 3D arrays by right-broadcasting.
             # We want Time (Dim 0) to align with Time (Dim 0).
             # So we must reshape times_da to 3D: (Time, 1, 1).
@@ -589,10 +722,10 @@ def add_geolocation_to_dataset(
 
     # 5. Map Blocks over Time
     # Input chunk: (Time_Chunk,) or (Time_Chunk, 1, 1)
-    # Output chunk: (Time_Chunk, Y, X, 3)
+    # Output chunk: (Time_Chunk, Y, X, 6)
 
     # Explicitly format chunks as tuple of tuples for all dimensions
-    output_chunks = (time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,), (3,))
+    output_chunks = (time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,), (_SURFACE_CHANNELS,))
 
     geo_data = da.map_blocks(
         calculate_chunk_geolocation,
@@ -604,18 +737,31 @@ def add_geolocation_to_dataset(
     )
 
     # 7. Assign variables to Dataset (apply product fill values for off-Earth / uncomputed pixels)
+    geo_dims = ("camera_time", "y", "x")
     valid_geo = da.isfinite(geo_data[..., 0])
     ds["Latitude"] = (
-        ("camera_time", "y", "x"),
+        geo_dims,
         da.where(valid_geo, geo_data[..., 0], _GEO_FILL_LAT_LON).astype(np.float32),
     )
     ds["Longitude"] = (
-        ("camera_time", "y", "x"),
+        geo_dims,
         da.where(valid_geo, geo_data[..., 1], _GEO_FILL_LAT_LON).astype(np.float32),
     )
     ds["Altitude"] = (
-        ("camera_time", "y", "x"),
+        geo_dims,
         da.where(valid_geo, geo_data[..., 2], _GEO_FILL_ALT).astype(np.float32),
+    )
+    ds["Solar_Zenith_Surface"] = (
+        geo_dims,
+        da.where(valid_geo, geo_data[..., 3], _ANGLE_FILL).astype(np.float32),
+    )
+    ds["Viewing_Zenith_Surface"] = (
+        geo_dims,
+        da.where(valid_geo, geo_data[..., 4], _ANGLE_FILL).astype(np.float32),
+    )
+    ds["Relative_Azimuth_Surface"] = (
+        geo_dims,
+        da.where(valid_geo, geo_data[..., 5], _ANGLE_FILL).astype(np.float32),
     )
 
     ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
@@ -684,14 +830,27 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
         chunks=(time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,)),
     )
 
-    ds["Latitude"] = (("camera_time", "y", "x"), placeholder_lat_lon)
-    ds["Longitude"] = (("camera_time", "y", "x"), placeholder_lat_lon)
-    ds["Altitude"] = (("camera_time", "y", "x"), placeholder_alt)
+    placeholder_angles = da.full(
+        (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X),
+        fill_value=_ANGLE_FILL,
+        dtype=np.float32,
+        chunks=(time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,)),
+    )
+
+    geo_dims = ("camera_time", "y", "x")
+    ds["Latitude"] = (geo_dims, placeholder_lat_lon)
+    ds["Longitude"] = (geo_dims, placeholder_lat_lon)
+    ds["Altitude"] = (geo_dims, placeholder_alt)
+    ds["Solar_Zenith_Surface"] = (geo_dims, placeholder_angles)
+    ds["Viewing_Zenith_Surface"] = (geo_dims, placeholder_angles)
+    ds["Relative_Azimuth_Surface"] = (geo_dims, placeholder_angles)
 
     ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
     ds["Longitude"].attrs = {"units": "degrees_east", "long_name": "Pixel Longitude"}
     ds["Altitude"].attrs = {"units": "meters", "long_name": "Pixel Altitude"}
 
-    logger.info("use_geo is false: using placeholder geolocation (Latitude, Longitude, Altitude).")
+    logger.info(
+        "use_geo is false: using placeholder geolocation and surface geometry angles.",
+    )
 
     return ds

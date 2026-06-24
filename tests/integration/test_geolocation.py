@@ -78,11 +78,16 @@ def test_add_geolocation_to_dataset(test_data_path, test_ditl_l1a_file_path):
     # Using default pixel_mask=None (Calculate All)
     ds_geo = add_geolocation_to_dataset(ds, config)
 
-    assert "Latitude" in ds_geo
-    assert "Longitude" in ds_geo
-    assert "Altitude" in ds_geo
-
-    assert isinstance(ds_geo["Latitude"].data, da.Array)
+    for var in (
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Solar_Zenith_Surface",
+        "Viewing_Zenith_Surface",
+        "Relative_Azimuth_Surface",
+    ):
+        assert var in ds_geo
+        assert isinstance(ds_geo[var].data, da.Array)
 
     # 4. Compute (Trigger Dask)
     # Compute first frame
