@@ -153,7 +153,7 @@ def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
     # Dask calls this to determine output array type (numpy vs cupy etc)
     # Output shape should be (Time, Y, X, 3)
     # The chunk size in the test is (2, 2, 2)
-    mock_calc_chunk.return_value = np.zeros((2, 2, 2, 3), dtype=np.float64)
+    mock_calc_chunk.return_value = np.zeros((2, 2, 2, 8), dtype=np.float64)
 
     # Call function
     ds_out = add_geolocation_to_dataset(ds, config)
@@ -213,6 +213,8 @@ def test_add_placeholder_geolocation_to_dataset():
         "Solar_Zenith_Surface",
         "Viewing_Zenith_Surface",
         "Relative_Azimuth_Surface",
+        "Solar_Azimuth_Surface_WRT_North",
+        "Viewing_Azimuth_Surface_WRT_North",
     ):
         assert var in result, f"{var} missing from result dataset"
         assert isinstance(result[var].data, da.Array), f"{var} should be a dask array"
@@ -227,7 +229,13 @@ def test_add_placeholder_geolocation_to_dataset():
     assert np.all(lon == np.float32(-999))
     assert np.all(alt == np.float32(-9999))
 
-    for angle_var in ("Solar_Zenith_Surface", "Viewing_Zenith_Surface", "Relative_Azimuth_Surface"):
+    for angle_var in (
+        "Solar_Zenith_Surface",
+        "Viewing_Zenith_Surface",
+        "Relative_Azimuth_Surface",
+        "Solar_Azimuth_Surface_WRT_North",
+        "Viewing_Azimuth_Surface_WRT_North",
+    ):
         assert np.all(result[angle_var].compute().values == np.float32(-999))
 
 
@@ -238,7 +246,7 @@ def test_add_placeholder_geolocation_to_dataset():
 @patch("libera_cam.geolocation.np.load")
 @patch("libera_cam.geolocation.KernelManager")
 def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all, mock_calc_angles):
-    """Worker output is (T, Y, X, 6) with LLA followed by surface geometry angles."""
+    """Worker output is (T, Y, X, 8) with LLA followed by surface geometry angles."""
     from libera_cam.geolocation import GeolocationKernelConfig, calculate_chunk_geolocation
 
     mock_km = MagicMock()
@@ -256,16 +264,20 @@ def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, m
         "solar_zenith": np.full((n_times, 3, 5), 45.0, dtype=np.float32),
         "viewing_zenith": np.full((n_times, 3, 5), 12.0, dtype=np.float32),
         "relative_azimuth": np.full((n_times, 3, 5), 90.0, dtype=np.float32),
+        "solar_azimuth": np.full((n_times, 3, 5), 10.0, dtype=np.float32),
+        "viewing_azimuth": np.full((n_times, 3, 5), 100.0, dtype=np.float32),
     }
 
     camera_time = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"], dtype="datetime64[ns]")
     result = calculate_chunk_geolocation(camera_time, GeolocationKernelConfig())
 
-    assert result.shape == (2, 3, 5, 6)
+    assert result.shape == (2, 3, 5, 8)
     assert result[0, 2, 1, 0] == lat[0, 2, 1]
     assert result[0, 2, 1, 3] == pytest.approx(45.0)
     assert result[0, 2, 1, 4] == pytest.approx(12.0)
     assert result[0, 2, 1, 5] == pytest.approx(90.0)
+    assert result[0, 2, 1, 6] == pytest.approx(10.0)
+    assert result[0, 2, 1, 7] == pytest.approx(100.0)
 
 
 @patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
@@ -334,8 +346,12 @@ def test_calculate_pixel_surface_geometry_angles(
     assert angles["solar_zenith"].shape == (2, 2, 2)
     assert angles["viewing_zenith"].shape == (2, 2, 2)
     assert angles["relative_azimuth"].shape == (2, 2, 2)
+    assert angles["solar_azimuth"].shape == (2, 2, 2)
+    assert angles["viewing_azimuth"].shape == (2, 2, 2)
     assert angles["solar_zenith"][0, 0, 0] == pytest.approx(30.0)
     assert angles["viewing_zenith"][0, 0, 0] == pytest.approx(5.0)
     assert angles["relative_azimuth"][0, 0, 0] == pytest.approx(90.0)
+    assert angles["solar_azimuth"][0, 0, 0] == pytest.approx(10.0)
+    assert angles["viewing_azimuth"][0, 0, 0] == pytest.approx(100.0)
     assert angles["solar_zenith"][0, 0, 1] == np.float32(-999)
     mock_body.assert_called_with("LIBERA_WFOV_CAM", frame=True)

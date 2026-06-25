@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 _GEO_FILL_LAT_LON = np.float32(-999.0)
 _GEO_FILL_ALT = np.float32(-9999.0)
 _ANGLE_FILL = np.float32(-999.0)
-_SURFACE_CHANNELS = 6
+_SURFACE_CHANNELS = 8
 
 _TWO_PI = float(2.0 * np.pi)
 # L1A FSW header field (radians); ``azimuth_angle`` is the parsed image-metadata name.
@@ -426,12 +426,14 @@ def calculate_pixel_surface_geometry_angles(
     fill_value: float = -999.0,
 ) -> dict[str, np.ndarray]:
     """
-    Compute per-pixel surface solar zenith, viewing zenith, and relative azimuth.
+    Compute per-pixel surface solar/viewing zenith, relative azimuth, and azimuths.
 
     Angles are evaluated at each Earth observation point using curryer
     ``surface_angles`` (geodetic zenith convention). Relative azimuth is the
     satellite azimuth minus the solar azimuth, wrapped to ``[0, 360)`` degrees
-    clockwise from north at the surface.
+    clockwise from north at the surface. Solar and viewing azimuths are the
+    respective ``surface_angles`` azimuth values wrapped to ``[0, 360)`` degrees
+    clockwise from north (east=90, south=180, west=270).
 
     Parameters
     ----------
@@ -450,8 +452,8 @@ def calculate_pixel_surface_geometry_angles(
     Returns
     -------
     dict[str, np.ndarray]
-        ``solar_zenith``, ``viewing_zenith``, and ``relative_azimuth`` arrays (float32)
-        with the same shape as ``lat``.
+        ``solar_zenith``, ``viewing_zenith``, ``relative_azimuth``, ``solar_azimuth``,
+        and ``viewing_azimuth`` arrays (float32) with the same shape as ``lat``.
     """
     kernel_manager.ensure_known_kernels_are_furnished()
 
@@ -466,6 +468,8 @@ def calculate_pixel_surface_geometry_angles(
     sza = np.full(lat.shape, fill, dtype=np.float32)
     vza = np.full(lat.shape, fill, dtype=np.float32)
     raa = np.full(lat.shape, fill, dtype=np.float32)
+    saa = np.full(lat.shape, fill, dtype=np.float32)
+    vaa = np.full(lat.shape, fill, dtype=np.float32)
 
     ugps_times = np.asarray(spicetime.adapt(pd.DatetimeIndex(image_times), "iso")).ravel()
     sat_body = sp.obj.Body(spacecraft_body, frame=True)
@@ -514,23 +518,37 @@ def calculate_pixel_surface_geometry_angles(
         sza_valid = sun_angles["zenith"].to_numpy(dtype=np.float64)
         vza_valid = sat_angles["zenith"].to_numpy(dtype=np.float64)
         raa_valid = (sat_angles["azimuth"] - sun_angles["azimuth"]).to_numpy(dtype=np.float64) % 360.0
+        saa_valid = sun_angles["azimuth"].to_numpy(dtype=np.float64) % 360.0
+        vaa_valid = sat_angles["azimuth"].to_numpy(dtype=np.float64) % 360.0
 
         flat_sza = sza[t].ravel()
         flat_vza = vza[t].ravel()
         flat_raa = raa[t].ravel()
+        flat_saa = saa[t].ravel()
+        flat_vaa = vaa[t].ravel()
 
         flat_sza[valid] = np.where(np.isfinite(sza_valid), sza_valid, np.nan).astype(np.float32)
         flat_vza[valid] = np.where(np.isfinite(vza_valid), vza_valid, np.nan).astype(np.float32)
         flat_raa[valid] = np.where(np.isfinite(raa_valid), raa_valid, np.nan).astype(np.float32)
+        flat_saa[valid] = np.where(np.isfinite(saa_valid), saa_valid, np.nan).astype(np.float32)
+        flat_vaa[valid] = np.where(np.isfinite(vaa_valid), vaa_valid, np.nan).astype(np.float32)
 
-        for arr in (flat_sza, flat_vza, flat_raa):
+        for arr in (flat_sza, flat_vza, flat_raa, flat_saa, flat_vaa):
             arr[~np.isfinite(arr)] = fill
 
         sza[t] = flat_sza.reshape(lat[t].shape)
         vza[t] = flat_vza.reshape(lat[t].shape)
         raa[t] = flat_raa.reshape(lat[t].shape)
+        saa[t] = flat_saa.reshape(lat[t].shape)
+        vaa[t] = flat_vaa.reshape(lat[t].shape)
 
-    return {"solar_zenith": sza, "viewing_zenith": vza, "relative_azimuth": raa}
+    return {
+        "solar_zenith": sza,
+        "viewing_zenith": vza,
+        "relative_azimuth": raa,
+        "solar_azimuth": saa,
+        "viewing_azimuth": vaa,
+    }
 
 
 def calculate_chunk_geolocation(
@@ -559,8 +577,9 @@ def calculate_chunk_geolocation(
     Returns
     -------
     np.ndarray
-        Array of shape (T, Y, X, 6) containing
-        [Latitude, Longitude, Altitude, Solar_Zenith, Viewing_Zenith, Relative_Azimuth].
+        Array of shape (T, Y, X, 8) containing
+        [Latitude, Longitude, Altitude, Solar_Zenith, Viewing_Zenith, Relative_Azimuth,
+        Solar_Azimuth, Viewing_Azimuth].
     """
     # Instantiate fresh manager for this process
     km = KernelManager(
@@ -608,7 +627,7 @@ def calculate_chunk_geolocation(
             spacecraft_body=spice_body,
         )
 
-        # Stack into (T, Y, X, 6)
+        # Stack into (T, Y, X, 8)
         stacked_result = np.stack(
             [
                 result_dict["latitude"],
@@ -617,6 +636,8 @@ def calculate_chunk_geolocation(
                 angle_dict["solar_zenith"],
                 angle_dict["viewing_zenith"],
                 angle_dict["relative_azimuth"],
+                angle_dict["solar_azimuth"],
+                angle_dict["viewing_azimuth"],
             ],
             axis=-1,
         )
@@ -656,7 +677,8 @@ def add_geolocation_to_dataset(
     xr.Dataset
         The dataset with added geolocation and surface geometry variables:
         ``Latitude``, ``Longitude``, ``Altitude``, ``Solar_Zenith_Surface``,
-        ``Viewing_Zenith_Surface``, and ``Relative_Azimuth_Surface``.
+        ``Viewing_Zenith_Surface``, ``Relative_Azimuth_Surface``,
+        ``Solar_Azimuth_Surface_WRT_North``, and ``Viewing_Azimuth_Surface_WRT_North``.
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
@@ -684,7 +706,7 @@ def add_geolocation_to_dataset(
     map_blocks_args = [config]
 
     # Determine new axes for map_blocks
-    # Default: Input is 1D (Time), Output is 4D (Time, Y, X, 6) -> Add axes 1, 2, 3
+    # Default: Input is 1D (Time), Output is 4D (Time, Y, X, 8) -> Add axes 1, 2, 3
     new_axes_indices = [1, 2, 3]
 
     if pixel_mask is not None:
@@ -706,7 +728,7 @@ def add_geolocation_to_dataset(
             pixel_mask_da = pixel_mask_da.rechunk({0: time_chunks_tuple})
             map_blocks_args.append(pixel_mask_da)
 
-            # If input is 1D (Time), Output is 4D (Time, Y, X, 6) -> Add axes 1, 2, 3
+            # If input is 1D (Time), Output is 4D (Time, Y, X, 8) -> Add axes 1, 2, 3
             # Dask aligns 1D and 3D arrays by right-broadcasting.
             # We want Time (Dim 0) to align with Time (Dim 0).
             # So we must reshape times_da to 3D: (Time, 1, 1).
@@ -722,7 +744,7 @@ def add_geolocation_to_dataset(
 
     # 5. Map Blocks over Time
     # Input chunk: (Time_Chunk,) or (Time_Chunk, 1, 1)
-    # Output chunk: (Time_Chunk, Y, X, 6)
+    # Output chunk: (Time_Chunk, Y, X, 8)
 
     # Explicitly format chunks as tuple of tuples for all dimensions
     output_chunks = (time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,), (_SURFACE_CHANNELS,))
@@ -762,6 +784,14 @@ def add_geolocation_to_dataset(
     ds["Relative_Azimuth_Surface"] = (
         geo_dims,
         da.where(valid_geo, geo_data[..., 5], _ANGLE_FILL).astype(np.float32),
+    )
+    ds["Solar_Azimuth_Surface_WRT_North"] = (
+        geo_dims,
+        da.where(valid_geo, geo_data[..., 6], _ANGLE_FILL).astype(np.float32),
+    )
+    ds["Viewing_Azimuth_Surface_WRT_North"] = (
+        geo_dims,
+        da.where(valid_geo, geo_data[..., 7], _ANGLE_FILL).astype(np.float32),
     )
 
     ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
@@ -844,6 +874,8 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     ds["Solar_Zenith_Surface"] = (geo_dims, placeholder_angles)
     ds["Viewing_Zenith_Surface"] = (geo_dims, placeholder_angles)
     ds["Relative_Azimuth_Surface"] = (geo_dims, placeholder_angles)
+    ds["Solar_Azimuth_Surface_WRT_North"] = (geo_dims, placeholder_angles)
+    ds["Viewing_Azimuth_Surface_WRT_North"] = (geo_dims, placeholder_angles)
 
     ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
     ds["Longitude"].attrs = {"units": "degrees_east", "long_name": "Pixel Longitude"}

@@ -101,6 +101,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "Solar_Zenith_Surface": np.float32,
         "Viewing_Zenith_Surface": np.float32,
         "Relative_Azimuth_Surface": np.float32,
+        "Solar_Azimuth_Surface_WRT_North": np.float32,
+        "Viewing_Azimuth_Surface_WRT_North": np.float32,
     }
 
     for var_name, dtype in type_map.items():

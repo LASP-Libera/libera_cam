@@ -97,6 +97,22 @@ variables:
       units: degrees
       valid_range: [0, 180]
       _FillValue: -999
+  Solar_Azimuth_Surface_WRT_North:
+    dtype: float32
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
+    attributes:
+      long_name: Libera solar azimuth angle at the surface with respect to North
+      units: degrees
+      valid_range: [0, 360]
+      _FillValue: -999
+  Viewing_Azimuth_Surface_WRT_North:
+    dtype: float32
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
+    attributes:
+      long_name: Libera viewing azimuth angle at the surface with respect to North
+      units: degrees
+      valid_range: [0, 360]
+      _FillValue: -999
   Azimuth:
     dtype: float32
     dimensions: ["CAMERA_TIME"]

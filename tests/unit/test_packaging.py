@@ -24,6 +24,8 @@ def test_package_l1b_product_preserves_surface_geometry_angles():
             "Solar_Zenith_Surface": (dims, angle_data),
             "Viewing_Zenith_Surface": (dims, angle_data + 1),
             "Relative_Azimuth_Surface": (dims, angle_data + 2),
+            "Solar_Azimuth_Surface_WRT_North": (dims, angle_data + 3),
+            "Viewing_Azimuth_Surface_WRT_North": (dims, angle_data + 4),
             "Latitude": (dims, angle_data),
             "Longitude": (dims, angle_data),
             "Altitude": (dims, angle_data),
@@ -43,3 +45,5 @@ def test_package_l1b_product_preserves_surface_geometry_angles():
     assert np.all(packaged["Solar_Zenith_Surface"].values == pytest.approx(42.0))
     assert np.all(packaged["Viewing_Zenith_Surface"].values == pytest.approx(43.0))
     assert np.all(packaged["Relative_Azimuth_Surface"].values == pytest.approx(44.0))
+    assert np.all(packaged["Solar_Azimuth_Surface_WRT_North"].values == pytest.approx(45.0))
+    assert np.all(packaged["Viewing_Azimuth_Surface_WRT_North"].values == pytest.approx(46.0))

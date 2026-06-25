@@ -85,6 +85,8 @@ def test_add_geolocation_to_dataset(test_data_path, test_ditl_l1a_file_path):
         "Solar_Zenith_Surface",
         "Viewing_Zenith_Surface",
         "Relative_Azimuth_Surface",
+        "Solar_Azimuth_Surface_WRT_North",
+        "Viewing_Azimuth_Surface_WRT_North",
     ):
         assert var in ds_geo
         assert isinstance(ds_geo[var].data, da.Array)

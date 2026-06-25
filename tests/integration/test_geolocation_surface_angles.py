@@ -53,8 +53,12 @@ def test_calculate_pixel_surface_geometry_angles_jpss_kernels():
     sza = angles["solar_zenith"].ravel()
     vza = angles["viewing_zenith"].ravel()
     raa = angles["relative_azimuth"].ravel()
+    saa = angles["solar_azimuth"].ravel()
+    vaa = angles["viewing_azimuth"].ravel()
 
     assert np.all((sza >= 0) & (sza <= 180))
     assert np.all((vza >= 0) & (vza <= 180))
     assert np.all((raa >= 0) & (raa < 360))
+    assert np.all((saa >= 0) & (saa < 360))
+    assert np.all((vaa >= 0) & (vaa < 360))
     assert np.all(sza != -999)

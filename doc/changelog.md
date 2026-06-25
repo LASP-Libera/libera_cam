@@ -2,7 +2,7 @@
 
 ## 0.2.8
 
-- Compute per-pixel surface geometry angles (`Solar_Zenith_Surface`, `Viewing_Zenith_Surface`, `Relative_Azimuth_Surface`) during SPICE geolocation using curryer `surface_angles` at each pixel's Earth observation point (geodetic zenith convention; RAA = satellite azimuth minus solar azimuth mod 360°). Angles are computed in the same Dask chunk worker as lat/lon/alt. `use_geo: false` writes product fill `-999` for all three fields. Bump `libera-utils` lower bound to `>= 5.8.4`.
+- Compute per-pixel surface geometry angles (`Solar_Zenith_Surface`, `Viewing_Zenith_Surface`, `Relative_Azimuth_Surface`, `Solar_Azimuth_Surface_WRT_North`, `Viewing_Azimuth_Surface_WRT_North`) during SPICE geolocation using curryer `surface_angles` at each pixel's Earth observation point (geodetic zenith convention; RAA = satellite azimuth minus solar azimuth mod 360°; SAA/VAA = solar/viewing azimuth mod 360° clockwise from north). Angles are computed in the same Dask chunk worker as lat/lon/alt. `use_geo: false` writes product fill `-999` for all five fields. Bump `libera-utils` lower bound to `>= 5.8.4`.
 
 ## 0.2.7
 
