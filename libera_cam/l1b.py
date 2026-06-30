@@ -26,6 +26,7 @@ from libera_cam.geolocation import (
     add_geolocation_to_dataset,
     add_jpss_only_geolocation_to_dataset,
     add_placeholder_geolocation_to_dataset,
+    apply_spice_azimuth_to_dataset,
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 from libera_cam.packaging import package_l1b_product
@@ -348,6 +349,9 @@ def process_l1a_to_l1b(
     - Convert DN to radiance (lazy when backed by Dask arrays)
     - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
       or placeholders when ``use_geo`` is false
+    - In production mode (AZROT-CK present), compute motor ``Azimuth`` from SPICE CK
+      and log min/max/std of the difference vs L1A FSW azimuth before writing the
+      product value
 
     Parameters
     ----------
@@ -414,6 +418,7 @@ def process_l1a_to_l1b(
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
         cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
+        cam_dataset = apply_spice_azimuth_to_dataset(cam_dataset, geo_config)
 
     return cam_dataset
 
