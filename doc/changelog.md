@@ -1,5 +1,9 @@
 # Version Changes
 
+## 0.2.7
+
+- **SPICE motor azimuth**: In production L1B mode (AZROT-CK present), compute per-frame motor azimuth from SPICE CK (`LIBERA_BASE_COORD → LIBERA_AZ_COORD`, aligned with `libera_rad`) via `apply_spice_azimuth_to_dataset` and write it to `azimuth_angle` in degrees on `[0, 360)`. When L1A FSW azimuth metadata is present, log min/max/std of the SPICE vs FSW difference before overwriting. `jpss_only` and `use_geo: false` modes continue to use constant azimuth fill values (0° and -999).
+
 ## 0.2.6
 
 - **Process Parallelism**: Tested with Dask schedulers; **`synchronous`** (default) and **`distributed`** work reliably. **`threads`** and **`processes`** are rejected at runtime because CSPICE/SPICE is not thread-safe within a worker process.

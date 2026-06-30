@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 _GEO_FILL_LAT_LON = np.float32(-999.0)
 _GEO_FILL_ALT = np.float32(-9999.0)
 
+_TWO_PI = float(2.0 * np.pi)
+# L1A FSW header field (radians); ``azimuth_angle`` is the parsed image-metadata name.
+_FSW_AZIMUTH_VAR_NAMES = ("WFOV_FSW_AZIMUTH_ANGLE", "azimuth_angle")
+
 _SPICE_BODY_PRODUCTION = "LIBERA_WFOV_CAM"
 _SPICE_BODY_JPSS_ONLY = "LIBERA_BASE"
 
@@ -96,6 +100,151 @@ def prefetch_kernels(config: GeolocationKernelConfig) -> None:
         # We don't want to pollute the global SPICE pool if the client
         # later does other SPICE operations.
         km.unload_all()
+
+
+def _angular_diff_deg(a_deg: np.ndarray, b_deg: np.ndarray) -> np.ndarray:
+    """Shortest signed difference a - b on a circle, in degrees."""
+    return (a_deg.astype(np.float64) - b_deg.astype(np.float64) + 180.0) % 360.0 - 180.0
+
+
+def _fsw_azimuth_radians_from_dataset(ds: xr.Dataset) -> np.ndarray | None:
+    """Return per-frame FSW azimuth in radians from L1A metadata variables."""
+    for name in _FSW_AZIMUTH_VAR_NAMES:
+        if name in ds:
+            return np.asarray(ds[name].values, dtype=np.float64)
+    return None
+
+
+def calculate_azimuth_for_timestamps(
+    km: KernelManager,
+    timestamps: np.ndarray,
+    fill_value: float = -999.0,
+) -> np.ndarray:
+    """
+    Calculate motor encoder azimuth (degrees) for the given timestamps.
+
+    Uses the same SPICE CK frame chain as ``libera_rad``:
+    ``LIBERA_BASE_COORD → LIBERA_AZ_COORD``, with Euler conventions validated in
+    ``libera_utils`` tier-0 kernel tests. Azimuth is wrapped to ``[0, 360)`` degrees.
+
+    Parameters
+    ----------
+    km : KernelManager
+        Initialized kernel manager with motor and static kernels loaded.
+    timestamps : np.ndarray
+        Camera timestamps aligned to the L1B output time grid as ``datetime64[ns]``.
+    fill_value : float
+        Fill value for samples where SPICE frame transforms are unavailable.
+
+    Returns
+    -------
+    np.ndarray
+        Azimuth in degrees, shape ``(N,)``, dtype float32.
+    """
+    km.ensure_known_kernels_are_furnished()
+
+    dt64_times = np.asarray(timestamps, dtype="datetime64[ns]")
+    et_times = spicetime.adapt(dt64_times, "dt64", "et")
+    az = np.full(shape=len(dt64_times), fill_value=fill_value, dtype=np.float32)
+
+    for i, et in enumerate(np.asarray(et_times, dtype=np.float64)):
+        try:
+            m_az = sp.pxform("LIBERA_BASE_COORD", "LIBERA_AZ_COORD", float(et))
+            az_rad = float(sp.m2eul(m_az, 1, 2, 3)[2])
+            az_deg = np.degrees((az_rad + _TWO_PI) % _TWO_PI)
+            az[i] = np.float32(az_deg)
+        except Exception:
+            logger.debug(
+                "SPICE frame transform unavailable at ET %.6f; leaving azimuth fill",
+                et,
+                exc_info=True,
+            )
+
+    return az
+
+
+def log_spice_vs_fsw_azimuth_differences(
+    spice_az_deg: np.ndarray,
+    fsw_az_rad: np.ndarray,
+    *,
+    fill_value: float = -999.0,
+) -> None:
+    """
+    Log min, max, and std of SPICE azimuth minus FSW azimuth (shortest arc, degrees).
+
+    FSW azimuth is expected in radians (``WFOV_FSW_AZIMUTH_ANGLE`` / ``azimuth_angle``).
+    """
+    spice = np.asarray(spice_az_deg, dtype=np.float64)
+    fsw_rad = np.asarray(fsw_az_rad, dtype=np.float64)
+    if spice.shape != fsw_rad.shape:
+        logger.warning(
+            "SPICE/FSW azimuth length mismatch (%d vs %d); skipping comparison",
+            spice.size,
+            fsw_rad.size,
+        )
+        return
+
+    fsw_deg = np.degrees(fsw_rad) % 360.0
+    fill = float(fill_value)
+    valid = (spice != fill) & np.isfinite(spice) & np.isfinite(fsw_rad)
+    if not np.any(valid):
+        logger.info("SPICE vs FSW azimuth comparison: no overlapping valid samples")
+        return
+
+    diff_deg = _angular_diff_deg(spice[valid], fsw_deg[valid])
+    logger.info(
+        "SPICE vs FSW azimuth comparison (n=%d): diff_deg min=%.6f max=%.6f std=%.6f",
+        int(np.sum(valid)),
+        float(np.min(diff_deg)),
+        float(np.max(diff_deg)),
+        float(np.std(diff_deg)),
+    )
+
+
+def apply_spice_azimuth_to_dataset(
+    ds: xr.Dataset,
+    config: GeolocationKernelConfig,
+    fill_value: float = -999.0,
+) -> xr.Dataset:
+    """
+    Compute motor azimuth from SPICE CK and assign it to ``azimuth_angle``.
+
+    When FSW azimuth metadata is present, logs min/max/std of the difference between
+    SPICE and FSW values before overwriting ``azimuth_angle`` with the SPICE result
+    (degrees, ``[0, 360)``).
+    """
+    if "camera_time" not in ds.coords:
+        raise ValueError("Dataset must have 'camera_time' coordinate.")
+
+    fsw_az_rad = _fsw_azimuth_radians_from_dataset(ds)
+
+    prefetch_kernels(config)
+
+    km = KernelManager(
+        temp_dir_base=config.temp_dir_base,
+        download_naif_url=config.download_naif_url,
+        use_test_naif_url=config.use_test_naif_url,
+        use_high_precision_earth=config.use_high_precision_earth,
+        cache_timeout_days=config.cache_timeout_days,
+    )
+
+    with km:
+        if config.dynamic_kernel_sources:
+            km.load_libera_dynamic_kernels(
+                config.dynamic_kernel_sources,
+                needs_naif_kernels=True,
+                needs_static_kernels=True,
+            )
+        timestamps = np.asarray(ds.camera_time.values, dtype="datetime64[ns]")
+        spice_az = calculate_azimuth_for_timestamps(km, timestamps, fill_value=fill_value)
+
+    if fsw_az_rad is not None:
+        log_spice_vs_fsw_azimuth_differences(spice_az, fsw_az_rad, fill_value=fill_value)
+    else:
+        logger.info("No FSW azimuth metadata found; skipping SPICE vs FSW comparison")
+
+    ds["azimuth_angle"] = (("camera_time",), spice_az.astype(np.float32))
+    return ds
 
 
 def calculate_all_pixel_lat_lon_altitude(
