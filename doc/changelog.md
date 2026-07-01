@@ -2,9 +2,10 @@
 
 ## 0.2.6
 
-- **Process Parallelism**: Tested with all Dask schedulers, finding that both synchronous and distributed work reliably with all calculations. Threads (race conditions) and processes (out of memory) should not be used.
-- **Tuning**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments. Also exposed `DASK_SCHEDULER`, `DASK_NUM_WORKERS`, and `DASK_MEMORY_LIMIT` for further Dask tuning.
-- **Testing Tools**: Added `make_l1a_data.py` to create large L1A files for testing and `profile_l1b.py` for configurable test runs with profiling support.
+- **Process Parallelism**: Tested with Dask schedulers; **`synchronous`** (default) and **`distributed`** work reliably. **`threads`** and **`processes`** are rejected at runtime because CSPICE/SPICE is not thread-safe within a worker process.
+- **Tuning**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments. Also exposed `DASK_SCHEDULER`, `DASK_NUM_WORKERS`, and `DASK_MEMORY_LIMIT` for Dask parallelization (see [doc/overview.md](overview.md)).
+- **NetCDF write path**: Removed unused runtime encoding dict from `write_data_product`; compression (`zlib` + `complevel: 4`) is applied by libera_utils product-definition enforcement.
+- **Testing Tools**: Moved L1A fixture scaling to `tests/helpers/l1a_scaling.py` (`make_extended_l1a`) with a `make_extended_l1a` pytest fixture in `tests/conftest.py`. Added integration tests `tests/integration/test_l1a_scaling.py` and `tests/integration/test_l1b_profiling.py` (`@pytest.mark.profiling` diagnostic smoke test with visible Dask profiling output in CI). Removed script-style `tests/make_l1a_data.py` and `tests/profile_l1b.py`.
 
 ## 0.2.5
 
@@ -34,7 +35,6 @@
 - **Test Refactoring**: Rewrote `tests/unit/test_l1b.py` and `tests/unit/test_camera.py` to decouple them from legacy data files and non-linearity logic. Used rigorous mocking for orchestration tests.
 - **Integration Stability**: Updated integration tests to use `synchronous` Dask scheduling to avoid CSPICE kernel conflicts during parallel test execution.
 - **Cleanup**: Removed unused test data files (`camera_calibration_data.h5`) and obsolete code related to non-linearity corrections.
-- **Testing Tools**: Added `make_l1a_data.py` to create large L1A files for testing and `profile_l1b.py` for configurable test runs with profiling support.
 
 ## 0.2.1
 

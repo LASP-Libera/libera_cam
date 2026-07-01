@@ -7,6 +7,7 @@ intentionally forward-looking; items here are not commitments for any single rel
 
 **Related documentation**
 
+- [overview.md](overview.md) — L1B pipeline usage, manifest configuration, and Dask parallelization
 - [wfov_fsw_header_reference.md](wfov_fsw_header_reference.md) — FSW metadata, `img_mode`, VIDEO
   pairing, and duplicate-timestamp behavior
 - [changelog.md](changelog.md) — shipped changes by version
@@ -18,10 +19,13 @@ intentionally forward-looking; items here are not commitments for any single rel
 Recent work on `feature/kim-speed-up` improves L1B throughput on today's L1A products:
 
 - Batch JPEG-LS decompression with pre-chunked Dask arrays in `read_l1a_cam_data.py`
-- Configurable Dask execution (`DASK_SCHEDULER`, `DASK_NUM_WORKERS`, `DASK_MEMORY_LIMIT`,
-  `LIBERA_CAM_CHUNK_SIZE`)
-- Explicit NetCDF/HDF5 write encoding for large 3D variables
-- Profiling helpers (`tests/profile_l1b.py`, `tests/make_l1a_data.py`)
+- Configurable Dask execution via environment variables (`DASK_SCHEDULER`, `DASK_NUM_WORKERS`,
+  `DASK_MEMORY_LIMIT`, `LIBERA_CAM_CHUNK_SIZE`); see [overview.md](overview.md) for operator guidance
+- NetCDF compression from libera_utils product-definition enforcement (no runtime encoding dict
+  in `write_data_product`)
+- Pytest integration helpers: `make_extended_l1a` (`tests/helpers/l1a_scaling.py` +
+  `tests/conftest.py` fixture) for larger L1A fixtures; `tests/integration/test_l1b_profiling.py`
+  for diagnostic Dask profiling smoke tests in CI
 
 These optimizations help within the constraints described below. Several roadmap items
 require L1A product or metadata changes in **libera_utils** before L1B can fully benefit.
@@ -220,7 +224,7 @@ flowchart TD
     pixel_time --> surface_perf
 ```
 
-1. **Now** — Land PR #11; use profiling tools to baseline geolocation vs. radiometry costs.
+1. **Now** — Land PR #11; use `tests/integration/test_l1b_profiling.py` to baseline geolocation vs. radiometry costs.
 2. **L1A (libera_utils)** — Image-aligned products and VIDEO timestamp offsets (can proceed
    in parallel).
 3. **L1B** — VIDEO stream separation and timestamp undo for geolocation.

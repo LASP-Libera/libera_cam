@@ -4,9 +4,9 @@ from collections.abc import Generator
 from datetime import datetime
 
 import dask.array as da
-import dask.delayed
 import numpy as np
 import xarray as xr
+from dask import delayed
 from libera_utils.time import multipart_to_dt64
 
 # Import the new separated parser functions
@@ -126,7 +126,29 @@ def reassemble_image_blobs(l1a_data: xr.Dataset, stats: dict = None) -> Generato
 
 
 def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
+    """Reconstruct a lazy WFOV camera dataset from stitched L1A packet data.
+
+    Stitches CCSDS packets into image blobs, parses per-image metadata, and builds
+    a Dask-backed xarray Dataset. Image decompression runs in batches controlled
+    by ``LIBERA_CAM_CHUNK_SIZE`` (default from ``DEFAULT_TIME_CHUNK_SIZE``).
+
+    Parameters
+    ----------
+    cam_dataset : xr.Dataset
+        Raw L1A WFOV SCI DECODED dataset containing packet dump variables.
+
+    Returns
+    -------
+    xr.Dataset
+        Lazy dataset with ``image_data``, ``integration_mask``, per-frame metadata
+        variables on ``camera_time``, and derived flags ``good_image_flag`` and
+        ``valid_pixel_mask``. Returns an empty dataset when no complete images
+        are found.
+    """
     chunk_size = int(os.getenv("LIBERA_CAM_CHUNK_SIZE", DEFAULT_TIME_CHUNK_SIZE))
+    if chunk_size < 1:
+        raise ValueError(f"LIBERA_CAM_CHUNK_SIZE must be >= 1, got {chunk_size}")
+    logger.info(f"Using LIBERA_CAM_CHUNK_SIZE={chunk_size}")
 
     def decompress_batch(blobs_batch):
         """Decompress a list of blobs and return stacked (images, masks) arrays."""
@@ -137,7 +159,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
             masks.append(mask)
         return np.stack(images, axis=0), np.stack(masks, axis=0)
 
-    delayed_decompress_batch = dask.delayed(decompress_batch, nout=2, pure=True)
+    delayed_decompress_batch = delayed(decompress_batch, nout=2, pure=True)
 
     # 1. Extract raw binary blobs from the packet stream
     logger.info("Stitching binary blobs from L1A packets...")
@@ -145,12 +167,10 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
 
     metadata_list = []
     stitching_stats = {}
-    image_count = 0
 
     # Collect blobs and metadata eagerly
     blobs = []
     for blob in reassemble_image_blobs(cam_dataset, stats=stitching_stats):
-        image_count += 1
         meta = l1a_parser.parse_image_metadata(blob)
         meta["camera_time"] = multipart_to_dt64(meta, s_field="timestamp_seconds", us_field="timestamp_subseconds")
         metadata_list.append(meta)

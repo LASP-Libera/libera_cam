@@ -158,9 +158,8 @@ def verify_crc(metadata: dict, image_data: bytes, config: ParserConfig = DEFAULT
         if config.validate_crc:
             raise CRCValidationError(error_msg)
         else:
-            # disable for now, clogs up the log
-            pass
-            # logger.warning(error_msg)
+            # FSW CRC mismatch rate is not tracked yet; log at debug until metrics exist.
+            logger.debug(error_msg)
 
     return match
 

@@ -109,3 +109,7 @@ source .venv/Scripts/activate
 ```
 
 This will install the project dependencies and activate the virtual environment in the current shell session.
+
+## Further Documentation
+
+- [L1B overview and Dask parallelization](doc/overview.md)

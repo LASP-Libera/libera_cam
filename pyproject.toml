@@ -76,7 +76,8 @@ bokeh = "*"
 
 [tool.pytest.ini_options]
 markers = [
-    "integration: mark a test as an integration test. Skip these tests with `pytest -m 'not integration' tests`"
+    "integration: mark a test as an integration test. Skip these tests with `pytest -m 'not integration' tests`",
+    "profiling: diagnostic L1B profiling smoke test; runs in CI; fails only on uncaught exceptions, not on timing/output checks",
 ]
 addopts = [
     "-s"  # Don't capture output (print it)

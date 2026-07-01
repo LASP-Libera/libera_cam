@@ -75,8 +75,8 @@ venv
 .python-version
 pytest.ini
 
-# added by Hong Chen #
-######################
+# Local folders #
+##################
 !examples
 !examples/*.py
 
@@ -90,4 +90,3 @@ gemini_plans
 GEMINI.md
 Claude.md
 fort.*
-spice_files/

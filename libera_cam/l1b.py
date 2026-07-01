@@ -5,6 +5,7 @@ import argparse
 import logging
 import os
 from collections.abc import Sequence
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,6 @@ from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.netcdf import write_libera_data_product
 
-from libera_cam import constants
 from libera_cam.camera import convert_dn_to_radiance
 from libera_cam.config import product_config_path
 from libera_cam.geolocation import (
@@ -32,6 +32,8 @@ from libera_cam.packaging import package_l1b_product
 from libera_cam.version import version as libera_cam_version
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_DASK_SCHEDULERS = frozenset({"synchronous", "distributed"})
 
 # Required dynamic SPICE inputs keyed by Libera data product id (see libera_utils.constants).
 _REQUIRED_SPICE_JPSS_ONLY: tuple[DataProductIdentifier, ...] = (
@@ -87,100 +89,103 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
     frame, Azimuth 0°) and cannot be combined with ``use_geo: false``.
     """
-    start = datetime.now()
-
     dask_scheduler = os.getenv("DASK_SCHEDULER", "synchronous")
+    if dask_scheduler not in _ALLOWED_DASK_SCHEDULERS:
+        raise ValueError(
+            f"DASK_SCHEDULER must be one of {sorted(_ALLOWED_DASK_SCHEDULERS)}; "
+            f"got {dask_scheduler!r}. threads and processes are not supported because "
+            "CSPICE/SPICE is not thread-safe within a worker process."
+        )
+
     dask_num_workers = int(os.getenv("DASK_NUM_WORKERS", "1"))
-    if dask_scheduler != "distributed":
-        logger.info(f"Proceeding with Dask scheduler {dask_scheduler}")
-        dask.config.set(scheduler=dask_scheduler)
-        if dask_scheduler != "synchronous":
-            dask.config.set(scheduler=dask_scheduler, num_workers=dask_num_workers)
-            logger.info(f"Dask number of workers {dask_num_workers}")
-        client = None
-    else:
+    if dask_scheduler == "distributed":
         logger.info("Creating distributed client and LocalCluster")
         dask_memory_limit = os.getenv("DASK_MEMORY_LIMIT", "8GB")
         # avoid disconnecting from the bokeh dashboard
         dask.config.set({"distributed.scheduler.dashboard.bokeh-application.session-token-expiration": 3600000})
-        client = Client(
+        client_ctx = Client(
             n_workers=dask_num_workers,
             threads_per_worker=1,
             memory_limit=dask_memory_limit,  # per worker
         )
         logger.info(f"Dask number of workers {dask_num_workers}, Dask memory limit per worker {dask_memory_limit}")
-        client.forward_logging()
-        logger.info(f"Dask dashboard URL: {client.dashboard_link}")
-
-    # Set the output location to write to in the output dropbox
-    dropbox_path = os.getenv("PROCESSING_PATH")
-    if not dropbox_path:
-        raise ValueError("PROCESSING_PATH environment variable is not set")
-
-    logger.info("Reading the input manifest file")
-    # Step 1: Read and use the Input Manifest
-    logger.info("Step 1: Reading the input manifest file")
-    input_manifest = Manifest.from_file(parsed_cli_args.manifest)
-    logger.info(f"Loaded manifest with {len(input_manifest.files)} files")
-    use_geo, jpss_only_mode = _manifest_geo_flags(input_manifest)
-    if not use_geo and jpss_only_mode:
-        raise ValueError("use_geo: false and jpss_only cannot both be enabled")
-    if not use_geo:
-        logger.info("use_geo is false: placeholder geolocation will be used.")
-    if jpss_only_mode:
-        logger.info("jpss_only mode detected: LIBERA_BASE per-pixel geolocation will be used.")
-
-    # Step 2: Read and store ALL input data from manifest files
-    logger.info("Step 2: Reading all input data from manifest files")
-    l1a_data, dynamic_kernel_sources = read_all_input_data(input_manifest)
-
-    # Step 3: Calculate science data variables (YOUR SCIENCE GOES HERE)
-    logger.info("Step 3: Calculating science data variables")
-    processed_data = process_l1a_to_l1b(
-        l1a_data,
-        dynamic_kernel_sources,
-        use_geo=use_geo,
-        jpss_only_mode=jpss_only_mode,
-    )
-
-    # Steps 4: Store data with metadata and write to output folder
-    logger.info("Step 4: Creating and writing data product")
-    # This is where the compute happens!
-    start = datetime.now()
-    packaged_data = package_l1b_product(processed_data)
-    output_files = write_data_product(packaged_data, dropbox_path)
-    end = datetime.now()
-    logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
-
-    # Step 6: Create output manifest
-    logger.info("Step 5: Creating output manifest")
-    output_manifest = Manifest.output_manifest_from_input_manifest(input_manifest)
-    # Propagate the full input configuration block so downstream users can
-    # inspect processing mode, time ranges, and any other operator settings.
-    output_manifest.configuration.update(input_manifest.configuration)
-
-    # Step 7: Add data files to output manifest
-    logger.info("Step 6: Adding data files to output manifest")
-    # write_libera_data_product can return a single filename or a tuple
-    if isinstance(output_files, list | tuple):
-        for file in output_files:
-            output_manifest.add_files(file.path)
     else:
-        output_manifest.add_files(output_files.path)
+        logger.info(f"Proceeding with Dask scheduler {dask_scheduler}")
+        dask.config.set(scheduler=dask_scheduler)
+        if dask_scheduler != "synchronous":
+            dask.config.set(scheduler=dask_scheduler, num_workers=dask_num_workers)
+            logger.info(f"Dask number of workers {dask_num_workers}")
+        client_ctx = nullcontext()
 
-    # Step 8: Write output manifest to output dropbox folder
-    logger.info("Step 7: Writing the output manifest")
-    output_manifest_filepath = output_manifest.write(dropbox_path)
-    logger.info(f"Output manifest written to: {output_manifest_filepath}")
+    with client_ctx as client:
+        if client is not None:
+            client.forward_logging()
+            logger.info(f"Dask dashboard URL: {client.dashboard_link}")
 
-    logger.info(f"Processing complete. Output manifest: {output_manifest_filepath}")
+        # Set the output location to write to in the output dropbox
+        dropbox_path = os.getenv("PROCESSING_PATH")
+        if not dropbox_path:
+            raise ValueError("PROCESSING_PATH environment variable is not set")
 
-    if client:
-        # uncomment input statement to keep the dask dashboard live when the processing is complete
-        # input("Press Enter to release the distributed client")
-        client.close()
+        logger.info("Reading the input manifest file")
+        # Step 1: Read and use the Input Manifest
+        logger.info("Step 1: Reading the input manifest file")
+        input_manifest = Manifest.from_file(parsed_cli_args.manifest)
+        logger.info(f"Loaded manifest with {len(input_manifest.files)} files")
+        use_geo, jpss_only_mode = _manifest_geo_flags(input_manifest)
+        if not use_geo and jpss_only_mode:
+            raise ValueError("use_geo: false and jpss_only cannot both be enabled")
+        if not use_geo:
+            logger.info("use_geo is false: placeholder geolocation will be used.")
+        if jpss_only_mode:
+            logger.info("jpss_only mode detected: LIBERA_BASE per-pixel geolocation will be used.")
 
-    return output_manifest_filepath
+        # Step 2: Read and store ALL input data from manifest files
+        logger.info("Step 2: Reading all input data from manifest files")
+        l1a_data, dynamic_kernel_sources = read_all_input_data(input_manifest)
+
+        # Step 3: Calculate science data variables (YOUR SCIENCE GOES HERE)
+        logger.info("Step 3: Calculating science data variables")
+        processed_data = process_l1a_to_l1b(
+            l1a_data,
+            dynamic_kernel_sources,
+            use_geo=use_geo,
+            jpss_only_mode=jpss_only_mode,
+        )
+
+        # Steps 4: Store data with metadata and write to output folder
+        logger.info("Step 4: Creating and writing data product")
+        # This is where the compute happens!
+        start = datetime.now()
+        packaged_data = package_l1b_product(processed_data)
+        output_files = write_data_product(packaged_data, dropbox_path)
+        end = datetime.now()
+        logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
+
+        # Step 6: Create output manifest
+        logger.info("Step 5: Creating output manifest")
+        output_manifest = Manifest.output_manifest_from_input_manifest(input_manifest)
+        # Propagate the full input configuration block so downstream users can
+        # inspect processing mode, time ranges, and any other operator settings.
+        output_manifest.configuration.update(input_manifest.configuration)
+
+        # Step 7: Add data files to output manifest
+        logger.info("Step 6: Adding data files to output manifest")
+        # write_libera_data_product can return a single filename or a tuple
+        if isinstance(output_files, list | tuple):
+            for file in output_files:
+                output_manifest.add_files(file.path)
+        else:
+            output_manifest.add_files(output_files.path)
+
+        # Step 8: Write output manifest to output dropbox folder
+        logger.info("Step 7: Writing the output manifest")
+        output_manifest_filepath = output_manifest.write(dropbox_path)
+        logger.info(f"Output manifest written to: {output_manifest_filepath}")
+
+        logger.info(f"Processing complete. Output manifest: {output_manifest_filepath}")
+
+        return output_manifest_filepath
 
 
 def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset], list[str]]:
@@ -425,26 +430,6 @@ def write_data_product(
         raise FileNotFoundError(f"Product definition file not found: {product_config_path}")
 
     processed_data.attrs["algorithm_version"] = libera_cam_version()
-
-    # build encoding to ensure reasonable hdf5 chunk sizes
-    encoding = {}
-    for name, arr in processed_data.data_vars.items():
-        if arr.ndim == 3:
-            # For large arrays, the dask chunk size should be an integer multiple of the first size
-            encoding[name] = {
-                "zlib": True,
-                "complevel": 1,
-                "chunksizes": (10, constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X),
-            }
-        elif "camera_time" in arr.dims:
-            # May have unlimited dim — must be chunked, keep chunking consistent with 3D arrays
-            encoding[name] = {"zlib": False, "chunksizes": (10,)}
-        else:
-            # shouldn't happen, but just in case
-            encoding[name] = {
-                "zlib": False,
-                "contiguous": True,
-            }
 
     output_files = write_libera_data_product(
         data_product_definition=product_config_path,
