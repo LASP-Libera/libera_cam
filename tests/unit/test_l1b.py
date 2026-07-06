@@ -164,9 +164,8 @@ class TestL1b(unittest.TestCase):
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
-    @patch("libera_cam.l1b.apply_spice_azimuth_to_dataset")
     @patch("libera_cam.l1b.add_geolocation_to_dataset")
-    def test_process_l1a_to_l1b_spice_mode(self, mock_geo, mock_apply_az, mock_convert, mock_read_l1a):
+    def test_process_l1a_to_l1b_spice_mode(self, mock_geo, mock_convert, mock_read_l1a):
         """Production mode: add_geolocation_to_dataset is called with a GeolocationKernelConfig."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
@@ -182,13 +181,11 @@ class TestL1b(unittest.TestCase):
         mock_convert.return_value = mock_radiance
 
         mock_geo.return_value = mock_lazy_ds
-        mock_apply_az.return_value = mock_lazy_ds
 
         dynamic_kernel_sources = ["/tmp/spice/orbit.bc"]
         l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, use_geo=True)
 
         mock_geo.assert_called_once()
-        mock_apply_az.assert_called_once()
         call_kwargs = mock_geo.call_args
         assert call_kwargs.args[1].dynamic_kernel_sources == dynamic_kernel_sources
         assert call_kwargs.kwargs["pixel_mask"] is mock_lazy_ds.valid_pixel_mask

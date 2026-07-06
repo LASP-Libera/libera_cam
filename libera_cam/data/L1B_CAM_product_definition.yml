@@ -117,7 +117,7 @@ variables:
         Radiometer operational mode (details TBD; indicators for
         nominal, video, dark, LED, lunar cal,
         and maybe something like 'transition' just in case?
-      valid_range: [0, 511] #TBC
+      valid_range: [0, 2047] #TBC
       _FillValue: 0
   Camera_Operational_Mode:
     dtype: uint16
@@ -127,7 +127,7 @@ variables:
         Camera operational mode (details TBD; indicators for
         nominal, video, dark, LED, lunar cal,
         and maybe something like 'transition' just in case?
-      valid_range: [0, 511] #TBC
+      valid_range: [0, 2047] #TBC
       _FillValue: 0
 
   ###########
@@ -140,7 +140,7 @@ variables:
     attributes:
       long_name: Original Pixel counts from camera before any corrections
       units: dn
-      valid_range: [0, 10000]
+      valid_range: [0, 100000]
   Radiance:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -149,7 +149,7 @@ variables:
         Measured, spectrally integrated radiance emerging from the TOA, where the spectral
         integration is weighted by the spectral throughput of the camera's channel (555 nm)
       units: W/(m^2*sr*nm)
-      valid_range: [0, 1000]
+      valid_range: [0, 100000]
       _FillValue: -999
   Camera_Mask:
     #If we need to save storage space, this can become a per-image trace to the mask that was applied,
