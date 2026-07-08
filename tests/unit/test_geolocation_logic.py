@@ -122,7 +122,8 @@ def test_geolocation_logic_dynamic_path(
     assert len(kwargs2["custom_pointing_vectors"]) == 2
 
 
-@patch("libera_cam.geolocation._calculate_chunk_geolocation_packed")
+@patch("libera_cam.geolocation._assign_spice_azimuth", side_effect=lambda ds, _config: ds)
+@patch("libera_cam.geolocation.calculate_chunk_geolocation")
 @patch("libera_cam.geolocation.prefetch_kernels")
 @patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
 @patch("libera_cam.geolocation.PIXEL_COUNT_X", 2)
@@ -151,12 +152,9 @@ def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
 
     # Configure mock to return a valid array for metadata inference/computation
     # Dask calls this to determine output array type (numpy vs cupy etc)
-    # Output shape should be (Time, Y, X, 4)
+    # Output shape should be (Time, Y, X, 3)
     # The chunk size in the test is (2, 2, 2)
-    geo = np.zeros((2, 2, 2, 3), dtype=np.float64)
-    az = np.zeros(2, dtype=np.float64)
-    az_plane = np.broadcast_to(az[:, None, None, None], (2, 2, 2, 1))
-    mock_calc_chunk.return_value = np.concatenate([geo, az_plane], axis=-1)
+    mock_calc_chunk.return_value = np.zeros((2, 2, 2, 3), dtype=np.float64)
 
     # Call function
     ds_out = add_geolocation_to_dataset(ds, config)
@@ -226,12 +224,11 @@ def test_add_placeholder_geolocation_to_dataset():
 
 @patch("libera_cam.geolocation.PIXEL_COUNT_Y", 3)
 @patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
-@patch("libera_cam.geolocation.calculate_azimuth_for_timestamps")
 @patch("libera_cam.geolocation.calculate_all_pixel_lat_lon_altitude")
 @patch("libera_cam.geolocation.np.load")
 @patch("libera_cam.geolocation.KernelManager")
-def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all, mock_calc_az):
-    """Worker output is (T, Y, X, 3) geo plus (T,) azimuth."""
+def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all):
+    """Worker output is (T, Y, X, 3)."""
     from libera_cam.geolocation import GeolocationKernelConfig, calculate_chunk_geolocation
 
     mock_km = MagicMock()
@@ -245,16 +242,12 @@ def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, m
     lon = lat + 100
     alt = lat + 200
     mock_calc_all.return_value = {"latitude": lat, "longitude": lon, "altitude": alt}
-    mock_calc_az.return_value = np.array([45.0, 90.0], dtype=np.float32)
 
     camera_time = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"], dtype="datetime64[ns]")
-    geo_result, az_result = calculate_chunk_geolocation(camera_time, GeolocationKernelConfig())
+    result = calculate_chunk_geolocation(camera_time, GeolocationKernelConfig())
 
-    assert geo_result.shape == (2, 3, 5, 3)
-    assert geo_result[0, 2, 1, 0] == lat[0, 2, 1]
-    assert az_result.shape == (2,)
-    np.testing.assert_array_equal(az_result, np.array([45.0, 90.0], dtype=np.float32))
-    mock_calc_az.assert_called_once()
+    assert result.shape == (2, 3, 5, 3)
+    assert result[0, 2, 1, 0] == lat[0, 2, 1]
 
 
 @patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)

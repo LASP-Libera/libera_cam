@@ -349,8 +349,8 @@ def process_l1a_to_l1b(
     - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
       or placeholders when ``use_geo`` is false
     - In production mode (AZROT-CK present), compute motor ``azimuth_angle`` from SPICE CK
-      in the same per-chunk ``KernelManager`` context as geolocation and log
-      min/max/std of the difference vs L1A FSW azimuth when FSW metadata is present
+      eagerly on the client and log min/max/std of the difference vs L1A FSW azimuth when
+      FSW metadata is present
 
     Parameters
     ----------

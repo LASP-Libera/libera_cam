@@ -164,6 +164,46 @@ def calculate_azimuth_for_timestamps(
     return az
 
 
+def _assign_spice_azimuth(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
+    """
+    Compute per-frame motor azimuth eagerly on the client and assign ``azimuth_angle``.
+
+    When FSW azimuth metadata is present, logs min/max/std of the difference between
+    SPICE and FSW values before overwriting ``azimuth_angle`` with the SPICE result
+    (degrees, ``[0, 360)``).
+
+    Caller must prefetch kernels (e.g. via ``add_geolocation_to_dataset``) before
+    calling when dynamic kernels are required.
+    """
+    fsw_az_rad = _fsw_azimuth_radians_from_dataset(ds)
+
+    km = KernelManager(
+        temp_dir_base=config.temp_dir_base,
+        download_naif_url=config.download_naif_url,
+        use_test_naif_url=config.use_test_naif_url,
+        use_high_precision_earth=config.use_high_precision_earth,
+        cache_timeout_days=config.cache_timeout_days,
+    )
+
+    with km:
+        if config.dynamic_kernel_sources:
+            km.load_libera_dynamic_kernels(
+                config.dynamic_kernel_sources,
+                needs_naif_kernels=True,
+                needs_static_kernels=True,
+            )
+        timestamps = np.asarray(ds.camera_time.values, dtype="datetime64[ns]")
+        spice_az = calculate_azimuth_for_timestamps(km, timestamps, fill_value=float(_AZIMUTH_FILL))
+
+    if fsw_az_rad is not None:
+        log_spice_vs_fsw_azimuth_differences(spice_az, fsw_az_rad, fill_value=float(_AZIMUTH_FILL))
+    else:
+        logger.info("No FSW azimuth metadata found; skipping SPICE vs FSW comparison")
+
+    ds["azimuth_angle"] = (("camera_time",), spice_az.astype(np.float32))
+    return ds
+
+
 def log_spice_vs_fsw_azimuth_differences(
     spice_az_deg: np.ndarray,
     fsw_az_rad: np.ndarray,
@@ -375,13 +415,13 @@ def calculate_chunk_geolocation(
     config: GeolocationKernelConfig,
     pixel_mask: np.ndarray | None = None,
     is_dynamic_mask: bool | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     """
-    Worker function to compute geolocation and motor azimuth for a chunk of times.
+    Worker function to compute per-pixel geolocation for a chunk of times.
 
     This function instantiates a local KernelManager, loads kernels, computes
-    per-pixel geolocation and (in production mode) per-frame motor azimuth within
-    the same SPICE context, then rigorously cleans up (unloads kernels).
+    geolocation, and then rigorously cleans up (unloads kernels). Motor azimuth
+    is computed separately on the client via :func:`_assign_spice_azimuth`.
 
     Parameters
     ----------
@@ -396,10 +436,8 @@ def calculate_chunk_geolocation(
 
     Returns
     -------
-    tuple[np.ndarray, np.ndarray]
-        - Geolocation array of shape (T, Y, X, 3) containing [Latitude, Longitude, Altitude].
-        - Motor azimuth in degrees, shape (T,), dtype float32. In ``jpss_only`` mode the
-          azimuth array is unused (filled with ``_AZIMUTH_FILL``); callers apply a constant.
+    np.ndarray
+        Array of shape (T, Y, X, 3) containing [Latitude, Longitude, Altitude].
     """
     # Instantiate fresh manager for this process
     km = KernelManager(
@@ -445,36 +483,7 @@ def calculate_chunk_geolocation(
         stacked_result[..., 1] = result_dict["longitude"]
         stacked_result[..., 2] = result_dict["altitude"]
 
-        if config.jpss_only:
-            azimuth = np.full(len(flat_camera_time), _AZIMUTH_FILL, dtype=np.float32)
-        else:
-            azimuth = calculate_azimuth_for_timestamps(
-                km,
-                flat_camera_time,
-                fill_value=float(_AZIMUTH_FILL),
-            )
-
-    return stacked_result, azimuth
-
-
-def _pack_chunk_geolocation_result(geo: np.ndarray, azimuth: np.ndarray) -> np.ndarray:
-    """Pack per-pixel geolocation and per-frame azimuth for a single ``map_blocks`` output."""
-    azimuth_plane = np.broadcast_to(
-        azimuth[:, None, None, None],
-        (geo.shape[0], PIXEL_COUNT_Y, PIXEL_COUNT_X, 1),
-    )
-    return np.concatenate([geo, azimuth_plane], axis=-1)
-
-
-def _calculate_chunk_geolocation_packed(
-    camera_time: np.ndarray,
-    config: GeolocationKernelConfig,
-    pixel_mask: np.ndarray | None = None,
-    is_dynamic_mask: bool | None = None,
-) -> np.ndarray:
-    """``map_blocks`` worker returning ``(T, Y, X, 4)`` with azimuth in the last channel."""
-    geo, azimuth = calculate_chunk_geolocation(camera_time, config, pixel_mask, is_dynamic_mask)
-    return _pack_chunk_geolocation_result(geo, azimuth)
+    return stacked_result
 
 
 def add_geolocation_to_dataset(
@@ -509,12 +518,10 @@ def add_geolocation_to_dataset(
     xr.Dataset
         The dataset with added 'latitude', 'longitude', 'altitude' variables.
         In production mode (not ``jpss_only``), also adds ``azimuth_angle`` from SPICE CK
-        computed in the same per-chunk ``KernelManager`` context as geolocation.
+        computed eagerly on the client (one ``pxform`` per frame).
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
-
-    fsw_az_rad = None if config.jpss_only else _fsw_azimuth_radians_from_dataset(ds)
 
     # 1. Safe Pre-fetch (Client Side)
     # Ensures kernel cache is populated serially to avoid race conditions on workers
@@ -577,19 +584,17 @@ def add_geolocation_to_dataset(
 
     # 5. Map Blocks over Time
     # Input chunk: (Time_Chunk,) or (Time_Chunk, 1, 1)
-    # Output chunk: (Time_Chunk, Y, X, 4) — last channel is per-frame azimuth broadcast to pixels
-    output_chunks = (time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,), (4,))
+    # Output chunk: (Time_Chunk, Y, X, 3)
+    output_chunks = (time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,), (3,))
 
-    packed_data = da.map_blocks(
-        _calculate_chunk_geolocation_packed,
+    geo_data = da.map_blocks(
+        calculate_chunk_geolocation,
         times_da,
         *map_blocks_args,
         dtype=np.float32,
         chunks=output_chunks,
         new_axis=new_axes_indices,
     )
-    geo_data = packed_data[..., :3]
-    az_data = packed_data[:, 0, 0, 3]
 
     # 7. Assign variables to Dataset (apply product fill values for off-Earth / uncomputed pixels)
     valid_geo = da.isfinite(geo_data[..., 0])
@@ -611,12 +616,7 @@ def add_geolocation_to_dataset(
     ds["Altitude"].attrs = {"units": "meters", "long_name": "Pixel Altitude"}
 
     if not config.jpss_only:
-        ds["azimuth_angle"] = (("camera_time",), az_data.astype(np.float32))
-        if fsw_az_rad is not None:
-            spice_az = ds["azimuth_angle"].compute()
-            log_spice_vs_fsw_azimuth_differences(spice_az, fsw_az_rad, fill_value=float(_AZIMUTH_FILL))
-        else:
-            logger.info("No FSW azimuth metadata found; skipping SPICE vs FSW comparison")
+        ds = _assign_spice_azimuth(ds, config)
 
     return ds
 

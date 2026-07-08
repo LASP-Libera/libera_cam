@@ -2,7 +2,7 @@
 
 ## 0.2.7
 
-- **SPICE motor azimuth**: In production L1B mode (AZROT-CK present), compute per-frame motor azimuth from SPICE CK (`LIBERA_BASE_COORD → LIBERA_AZ_COORD`, aligned with `libera_rad`) in the same per-chunk `KernelManager` context as geolocation via `add_geolocation_to_dataset`, writing it to `azimuth_angle` in degrees (SPICE values wrapped to `[0, 360)`). Product metadata `valid_range` is `[-360, 360]` with `_FillValue` `-999`. When L1A FSW azimuth metadata is present, log min/max/std of the SPICE vs FSW difference before overwriting. `jpss_only` and `use_geo: false` modes continue to use constant azimuth fill values (0° and -999).
+- **SPICE motor azimuth**: In production L1B mode (AZROT-CK present), compute per-frame motor azimuth from SPICE CK (`LIBERA_BASE_COORD → LIBERA_AZ_COORD`, aligned with `libera_rad`) eagerly on the client via `add_geolocation_to_dataset`, writing it to `azimuth_angle` in degrees (SPICE values wrapped to `[0, 360)`). Product metadata `valid_range` is `[-360, 360]` with `_FillValue` `-999`. When L1A FSW azimuth metadata is present, log min/max/std of the SPICE vs FSW difference before overwriting. `jpss_only` and `use_geo: false` modes continue to use constant azimuth fill values (0° and -999).
 
 ## 0.2.6
 
