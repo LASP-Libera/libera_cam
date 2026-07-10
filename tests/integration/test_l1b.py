@@ -3,6 +3,7 @@
 from argparse import Namespace
 from pathlib import Path
 
+import numpy as np
 import pytest
 import xarray as xr
 from libera_utils.io.manifest import Manifest, ManifestType
@@ -58,3 +59,39 @@ def test_algorithm(l1b_product_dataset):
 def test_algorithm_version_matches_package(l1b_product_dataset):
     """The algorithm_version global attribute must match the installed package version."""
     assert l1b_product_dataset.attrs["algorithm_version"] == libera_cam_version()
+
+
+def test_earth_sun_distance_plausible(l1b_product_dataset):
+    """The granule Earth-Sun distance must land within Earth's orbital range."""
+    distance_au = float(l1b_product_dataset.attrs["Earth_Sun_Distance_AU"])
+    assert 0.95 <= distance_au <= 1.05, f"Earth_Sun_Distance_AU={distance_au:.4f} is outside [0.95, 1.05]"
+
+
+@pytest.mark.parametrize(
+    ("variable", "low", "high"),
+    [
+        ("Subsatellite_Latitude", -90.0, 90.0),
+        ("Subsatellite_Longitude", -180.0, 180.0),
+        ("Subsatellite_Colatitude", 0.0, 180.0),
+        ("Subsolar_Latitude", -90.0, 90.0),
+        ("Subsolar_Longitude", -180.0, 180.0),
+        ("Subsolar_Colatitude", 0.0, 180.0),
+        ("Radius_of_Satellite_from_Center_of_Earth", 6000.0, 8000.0),
+    ],
+)
+def test_spacecraft_geometry_is_computed_per_frame(l1b_product_dataset, variable, low, high):
+    """Each spacecraft-level field is one covered value per camera frame, inside its valid range."""
+    data_array = l1b_product_dataset[variable]
+    assert data_array.dims == ("CAMERA_TIME",)
+
+    values = data_array.to_numpy()
+    assert not np.any(values <= -999.0), f"{variable} contains _FillValue; SPICE coverage was expected"
+    assert values.min() >= low
+    assert values.max() <= high
+
+
+def test_subsatellite_colatitude_complements_latitude(l1b_product_dataset):
+    """Colatitude is the geodetic complement of latitude, so the two must stay consistent."""
+    latitude = l1b_product_dataset["Subsatellite_Latitude"].to_numpy()
+    colatitude = l1b_product_dataset["Subsatellite_Colatitude"].to_numpy()
+    np.testing.assert_allclose(colatitude, 90.0 - latitude, atol=1e-4)
