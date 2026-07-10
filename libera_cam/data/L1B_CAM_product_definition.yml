@@ -1,6 +1,7 @@
 attributes:
   ProductID: CAM
   algorithm_version: null
+  Earth_Sun_Distance_AU:
 
 coordinates:
   CAMERA_TIME: # TODO[LIBSDC-707]: Validate that time is unique for each image and can be used as a UID
@@ -67,10 +68,66 @@ variables:
       units: meters
       valid_range: [-1000, 30000]
       _FillValue: -9999
+  Subsatellite_Latitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Latitude of subsatellite point at observation
+      units: degrees_north
+      valid_range: [-90, 90]
+      _FillValue: -999 #off Earth
+  Subsatellite_Longitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Longitude of subsatellite point at observation
+      units: degrees_east
+      valid_range: [-180, 180]
+      _FillValue: -999 #off Earth
+  Subsatellite_Colatitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Colatitude of subsatellite point at observation
+      units: degrees
+      valid_range: [0, 180]
+      _FillValue: -999 #off Earth
+  Subsolar_Latitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Latitude of subsolar point at observation
+      units: degrees_north
+      valid_range: [-90, 90]
+      _FillValue: -999 #off Earth
+  Subsolar_Longitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Longitude of subsolar point at observation
+      units: degrees_east
+      valid_range: [-180, 180]
+      _FillValue: -999 #off Earth
+  Subsolar_Colatitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Colatitude of subsolar point at observation
+      units: degrees
+      valid_range: [0, 180]
+      _FillValue: -999 #off Earth
 
   ############
   # Geometry #
   ############
+  Radius_of_Satellite_from_Center_of_Earth:
+    dtype: float64
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Radius of the satellite from the center of the Earth
+      units: km
+      valid_range: [6000, 8000]
+      _FillValue: -9999
   Solar_Zenith_Surface:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]

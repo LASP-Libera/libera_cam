@@ -25,6 +25,8 @@ from libera_cam.geolocation import (
     add_geolocation_to_dataset,
     add_jpss_only_geolocation_to_dataset,
     add_placeholder_geolocation_to_dataset,
+    add_placeholder_spacecraft_geometry_to_dataset,
+    add_spacecraft_geometry_to_dataset,
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 from libera_cam.packaging import package_l1b_product
@@ -307,6 +309,8 @@ def process_l1a_to_l1b(
     - Convert DN to radiance (lazy when backed by Dask arrays)
     - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
       or placeholders when ``use_geo`` is false
+    - Add the spacecraft-level geometry (sub-point, satellite radius, Earth-Sun distance),
+      or placeholders when ``use_geo`` is false
 
     Parameters
     ----------
@@ -354,9 +358,12 @@ def process_l1a_to_l1b(
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
 
-    # Apply Geolocation (Lazy)
+    # Apply Geolocation (Lazy) and the spacecraft-level geometry (eager, one value per frame).
+    # The spacecraft geometry call is the same in both SPICE modes: its fields need only the
+    # spacecraft ephemeris, never the camera's instrument frame.
     if not use_geo:
         cam_dataset = add_placeholder_geolocation_to_dataset(cam_dataset)
+        cam_dataset = add_placeholder_spacecraft_geometry_to_dataset(cam_dataset)
         cam_dataset = _apply_azimuth_fill(cam_dataset, fill_value=-999.0)
     elif jpss_only_mode:
         if not dynamic_kernel_sources:
@@ -368,6 +375,7 @@ def process_l1a_to_l1b(
         cam_dataset = add_jpss_only_geolocation_to_dataset(
             cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask
         )
+        cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
         cam_dataset = _apply_azimuth_fill(cam_dataset, fill_value=0.0)
     else:
         if not dynamic_kernel_sources:
@@ -377,6 +385,7 @@ def process_l1a_to_l1b(
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
         cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
+        cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
 
     return cam_dataset
 

@@ -164,8 +164,9 @@ class TestL1b(unittest.TestCase):
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
+    @patch("libera_cam.l1b.add_spacecraft_geometry_to_dataset")
     @patch("libera_cam.l1b.add_geolocation_to_dataset")
-    def test_process_l1a_to_l1b_spice_mode(self, mock_geo, mock_convert, mock_read_l1a):
+    def test_process_l1a_to_l1b_spice_mode(self, mock_geo, mock_spacecraft_geo, mock_convert, mock_read_l1a):
         """Production mode: add_geolocation_to_dataset is called with a GeolocationKernelConfig."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
@@ -181,6 +182,7 @@ class TestL1b(unittest.TestCase):
         mock_convert.return_value = mock_radiance
 
         mock_geo.return_value = mock_lazy_ds
+        mock_spacecraft_geo.return_value = mock_lazy_ds
 
         dynamic_kernel_sources = ["/tmp/spice/orbit.bc"]
         l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, use_geo=True)
@@ -190,11 +192,17 @@ class TestL1b(unittest.TestCase):
         assert call_kwargs.args[1].dynamic_kernel_sources == dynamic_kernel_sources
         assert call_kwargs.kwargs["pixel_mask"] is mock_lazy_ds.valid_pixel_mask
 
+        # The spacecraft-level fields share the geolocation kernel config.
+        mock_spacecraft_geo.assert_called_once_with(mock_lazy_ds, call_kwargs.args[1])
+
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
     @patch("libera_cam.l1b._apply_azimuth_fill")
+    @patch("libera_cam.l1b.add_spacecraft_geometry_to_dataset")
     @patch("libera_cam.l1b.add_jpss_only_geolocation_to_dataset")
-    def test_process_l1a_to_l1b_jpss_only_mode(self, mock_jpss_geo, mock_az_fill, mock_convert, mock_read_l1a):
+    def test_process_l1a_to_l1b_jpss_only_mode(
+        self, mock_jpss_geo, mock_spacecraft_geo, mock_az_fill, mock_convert, mock_read_l1a
+    ):
         """jpss_only uses LIBERA_BASE per-pixel geolocation and zero Azimuth."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
@@ -208,6 +216,7 @@ class TestL1b(unittest.TestCase):
 
         mock_convert.return_value = MagicMock()
         mock_jpss_geo.return_value = mock_lazy_ds
+        mock_spacecraft_geo.return_value = mock_lazy_ds
         mock_az_fill.return_value = mock_lazy_ds
 
         dynamic_kernel_sources = [
@@ -217,14 +226,19 @@ class TestL1b(unittest.TestCase):
         result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, jpss_only_mode=True)
 
         mock_jpss_geo.assert_called_once()
+        # The spacecraft fields need no instrument frame, so jpss_only takes the same path.
+        mock_spacecraft_geo.assert_called_once()
         mock_az_fill.assert_called_once_with(mock_lazy_ds, fill_value=0.0)
         assert result is mock_lazy_ds
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
+    @patch("libera_cam.l1b.add_placeholder_spacecraft_geometry_to_dataset")
     @patch("libera_cam.l1b.add_placeholder_geolocation_to_dataset")
-    def test_process_l1a_to_l1b_use_geo_false(self, mock_placeholder, mock_convert, mock_read_l1a):
-        """use_geo false: add_placeholder_geolocation_to_dataset is called; SPICE path is not."""
+    def test_process_l1a_to_l1b_use_geo_false(
+        self, mock_placeholder, mock_placeholder_spacecraft, mock_convert, mock_read_l1a
+    ):
+        """use_geo false: the placeholder paths are called; SPICE path is not."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
@@ -238,10 +252,12 @@ class TestL1b(unittest.TestCase):
         mock_radiance = MagicMock()
         mock_convert.return_value = mock_radiance
         mock_placeholder.return_value = mock_lazy_ds
+        mock_placeholder_spacecraft.return_value = mock_lazy_ds
 
         result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources=[], use_geo=False)
 
         mock_placeholder.assert_called_once_with(mock_lazy_ds)
+        mock_placeholder_spacecraft.assert_called_once_with(mock_lazy_ds)
         assert result is mock_lazy_ds
 
     @patch("libera_cam.l1b.read_l1a_cam_data")

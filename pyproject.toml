@@ -40,6 +40,9 @@ classifiers = [
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
     "libera-utils >= 5.8.0,<6.0.0",
+    # Imported directly by geolocation.py. 0.4.0 is the first release with
+    # curryer.compute.geometry, which supplies the spacecraft-level geometry fields.
+    "lasp-curryer>=0.4.0,<1.0",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images

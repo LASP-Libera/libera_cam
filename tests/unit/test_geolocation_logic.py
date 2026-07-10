@@ -4,8 +4,15 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
-from libera_cam.geolocation import calculate_all_pixel_lat_lon_altitude
+from libera_cam.geolocation import (
+    GeolocationKernelConfig,
+    add_placeholder_spacecraft_geometry_to_dataset,
+    add_spacecraft_geometry_to_dataset,
+    calculate_all_pixel_lat_lon_altitude,
+    calculate_spacecraft_geometry,
+)
 
 
 @pytest.fixture
@@ -129,7 +136,6 @@ def test_geolocation_logic_dynamic_path(
 def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
     """Verify that add_geolocation_to_dataset returns a lazy dataset with correct graph."""
     import dask.array as da
-    import xarray as xr
 
     from libera_cam.geolocation import (
         GeolocationKernelConfig,
@@ -191,7 +197,6 @@ def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
 @patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
 def test_add_placeholder_geolocation_to_dataset():
     """Placeholder function adds product fill-value Latitude/Longitude/Altitude."""
-    import xarray as xr
 
     from libera_cam.geolocation import add_placeholder_geolocation_to_dataset
 
@@ -228,7 +233,7 @@ def test_add_placeholder_geolocation_to_dataset():
 @patch("libera_cam.geolocation.KernelManager")
 def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all):
     """Worker output is (T, Y, X, 3) even when internal calc uses (T, X, Y)."""
-    from libera_cam.geolocation import GeolocationKernelConfig, calculate_chunk_geolocation
+    from libera_cam.geolocation import calculate_chunk_geolocation
 
     mock_km = MagicMock()
     mock_km.__enter__ = MagicMock(return_value=mock_km)
@@ -277,3 +282,115 @@ def test_jpss_only_uses_libera_base_spice_body(
 
     assert mock_compute.call_count == 1
     mock_body.assert_called_with("LIBERA_BASE", frame=True)
+
+
+# --- Spacecraft-level geometry (per camera frame, no instrument frame involved) ---
+
+
+@pytest.fixture
+def spacecraft_geometry_frame():
+    """Two frames of curryer geometry output; the second is a SPICE coverage gap."""
+    return pd.DataFrame(
+        {
+            "subsatellite_latitude": [10.0, np.nan],
+            "subsatellite_longitude": [20.0, np.nan],
+            "subsatellite_colatitude": [80.0, np.nan],
+            "subsolar_latitude": [-5.0, np.nan],
+            "subsolar_longitude": [100.0, np.nan],
+            "subsolar_colatitude": [95.0, np.nan],
+            "spacecraft_radius": [7000.0, np.nan],
+            "earth_sun_distance": [0.985, np.nan],
+        }
+    )
+
+
+@pytest.fixture
+def camera_dataset():
+    times = pd.to_datetime(["2025-01-01T00:00:00", "2025-01-01T00:00:01"])
+    return xr.Dataset(coords={"camera_time": times})
+
+
+@patch("libera_cam.geolocation.geometry.GeometryData")
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2]))
+def test_calculate_spacecraft_geometry_requests_ephemeris_only_fields(
+    mock_adapt, mock_geometry_data, mock_kernel_manager, spacecraft_geometry_frame
+):
+    """The observer is the spacecraft and the fields need no pointing CK."""
+    mock_geometry_data.return_value.get_geometry.return_value = spacecraft_geometry_frame
+
+    result = calculate_spacecraft_geometry(
+        mock_kernel_manager, pd.to_datetime(["2025-01-01T00:00:00", "2025-01-01T00:00:01"])
+    )
+
+    mock_kernel_manager.ensure_known_kernels_are_furnished.assert_called_once()
+    mock_geometry_data.assert_called_once_with("JPSS4_SC")
+    assert mock_geometry_data.return_value.get_geometry.call_args.kwargs["fields"] == [
+        "subsatellite",
+        "subsolar",
+        "sc_radius",
+        "earth_sun_distance",
+    ]
+    assert result is spacecraft_geometry_frame
+
+
+@patch("libera_cam.geolocation.KernelManager")
+@patch("libera_cam.geolocation.geometry.GeometryData")
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2]))
+def test_add_spacecraft_geometry_maps_columns_and_applies_fill(
+    mock_adapt, mock_geometry_data, mock_km_cls, camera_dataset, spacecraft_geometry_frame
+):
+    """curryer columns map onto product variables; coverage gaps become _FillValue."""
+    mock_geometry_data.return_value.get_geometry.return_value = spacecraft_geometry_frame
+    config = GeolocationKernelConfig(dynamic_kernel_sources=["some.bsp"])
+
+    result = add_spacecraft_geometry_to_dataset(camera_dataset, config)
+
+    assert result["Subsatellite_Latitude"].dims == ("camera_time",)
+    np.testing.assert_allclose(result["Subsatellite_Latitude"].values, [10.0, -999.0])
+    np.testing.assert_allclose(result["Subsolar_Longitude"].values, [100.0, -999.0])
+    np.testing.assert_allclose(result["Subsatellite_Colatitude"].values, [80.0, -999.0])
+    np.testing.assert_allclose(result["Radius_of_Satellite_from_Center_of_Earth"].values, [7000.0, -9999.0])
+
+    assert result["Subsatellite_Latitude"].dtype == np.float32
+    assert result["Radius_of_Satellite_from_Center_of_Earth"].dtype == np.float64
+
+    # The granule attribute ignores the gap rather than averaging it in.
+    assert result.attrs["Earth_Sun_Distance_AU"] == pytest.approx(0.985)
+
+    # Kernels are furnished and released within the call.
+    mock_km_cls.return_value.__exit__.assert_called_once()
+
+
+@patch("libera_cam.geolocation.KernelManager")
+@patch("libera_cam.geolocation.geometry.GeometryData")
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2]))
+def test_add_spacecraft_geometry_all_gap_uses_fill_attribute(
+    mock_adapt, mock_geometry_data, mock_km_cls, camera_dataset, spacecraft_geometry_frame
+):
+    """With no covered frame at all the Earth-Sun distance falls back to the fill value."""
+    spacecraft_geometry_frame["earth_sun_distance"] = [np.nan, np.nan]
+    mock_geometry_data.return_value.get_geometry.return_value = spacecraft_geometry_frame
+
+    result = add_spacecraft_geometry_to_dataset(camera_dataset, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+
+    assert result.attrs["Earth_Sun_Distance_AU"] == -999.0
+
+
+def test_add_spacecraft_geometry_requires_kernel_sources(camera_dataset):
+    with pytest.raises(ValueError, match="SPICE kernel sources are required"):
+        add_spacecraft_geometry_to_dataset(camera_dataset, GeolocationKernelConfig())
+
+
+def test_add_spacecraft_geometry_requires_camera_time():
+    with pytest.raises(ValueError, match="camera_time"):
+        add_spacecraft_geometry_to_dataset(xr.Dataset(), GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+
+
+def test_add_placeholder_spacecraft_geometry(camera_dataset):
+    result = add_placeholder_spacecraft_geometry_to_dataset(camera_dataset)
+
+    assert np.all(result["Subsatellite_Latitude"].values == np.float32(-999))
+    assert np.all(result["Subsolar_Colatitude"].values == np.float32(-999))
+    assert np.all(result["Radius_of_Satellite_from_Center_of_Earth"].values == np.float64(-9999))
+    assert result["Radius_of_Satellite_from_Center_of_Earth"].dims == ("camera_time",)
+    assert result.attrs["Earth_Sun_Distance_AU"] == -999.0

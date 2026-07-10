@@ -17,7 +17,7 @@ import xarray as xr
 from cloudpathlib import S3Path
 from curryer import spicetime
 from curryer import spicierpy as sp
-from curryer.compute import spatial
+from curryer.compute import geometry, spatial
 from libera_utils.libera_spice.kernel_manager import KernelManager
 
 from libera_cam.constants import GROUND_CAL_PIXEL_MAPPING, PIXEL_COUNT_X, PIXEL_COUNT_Y
@@ -27,9 +27,24 @@ logger = logging.getLogger(__name__)
 # Product fill values (L1B_CAM_product_definition.yml)
 _GEO_FILL_LAT_LON = np.float32(-999.0)
 _GEO_FILL_ALT = np.float32(-9999.0)
+_GEO_FILL_ANGLE = np.float32(-999.0)
+_GEO_FILL_RADIUS = np.float64(-9999.0)
+_GEO_FILL_DISTANCE = -999.0
 
 _SPICE_BODY_PRODUCTION = "LIBERA_WFOV_CAM"
 _SPICE_BODY_JPSS_ONLY = "LIBERA_BASE"
+_SPICE_BODY_SPACECRAFT = "JPSS4_SC"
+
+# curryer geometry column -> product variable, for the spacecraft sub-point fields.
+_SUBPOINT_VARIABLES = {
+    "subsatellite_latitude": "Subsatellite_Latitude",
+    "subsatellite_longitude": "Subsatellite_Longitude",
+    "subsatellite_colatitude": "Subsatellite_Colatitude",
+    "subsolar_latitude": "Subsolar_Latitude",
+    "subsolar_longitude": "Subsolar_Longitude",
+    "subsolar_colatitude": "Subsolar_Colatitude",
+}
+_RADIUS_VARIABLE = "Radius_of_Satellite_from_Center_of_Earth"
 
 
 @dataclass
@@ -96,6 +111,143 @@ def prefetch_kernels(config: GeolocationKernelConfig) -> None:
         # We don't want to pollute the global SPICE pool if the client
         # later does other SPICE operations.
         km.unload_all()
+
+
+def _apply_fill(values: np.ndarray, fill: np.floating, dtype: type) -> np.ndarray:
+    """Replace SPICE coverage gaps (NaN) with the product ``_FillValue``."""
+    return np.where(np.isfinite(values), values, fill).astype(dtype)
+
+
+def _granule_earth_sun_distance(distances: np.ndarray) -> float:
+    """
+    Reduce the per-frame Earth-Sun distance to the single granule-level attribute.
+
+    The distance moves by well under 1e-4 AU across a granule, so any covered frame
+    represents the whole granule. The median is taken over the covered frames only, so a
+    SPICE gap at a fixed index (e.g. the midpoint) cannot poison the attribute.
+    """
+    if not np.isfinite(distances).any():
+        return _GEO_FILL_DISTANCE
+    return float(np.nanmedian(distances))
+
+
+def calculate_spacecraft_geometry(
+    kernel_manager: KernelManager,
+    camera_times: pd.DatetimeIndex,
+    spacecraft_observer: str = _SPICE_BODY_SPACECRAFT,
+) -> pd.DataFrame:
+    """
+    Compute the spacecraft-level geometry fields via curryer ``GeometryData``.
+
+    These fields describe where the spacecraft and the Sun are, not where the camera
+    points, so they depend only on the spacecraft ephemeris (SPK) and Earth orientation
+    (PCK) -- never on a pointing CK or the camera's instrument frame. That is why a single
+    call serves both the production and ``jpss_only`` geolocation modes, and why the
+    per-pixel camera frame plays no part in it.
+
+    curryer's selective-compute registry queries each SPICE input exactly once, vectorized,
+    and surfaces coverage gaps as NaN.
+
+    Parameters
+    ----------
+    kernel_manager : KernelManager
+        Kernel manager with the spacecraft SPK and the generic/static kernels furnished.
+    camera_times : pd.DatetimeIndex
+        Camera frame times on the L1B output time grid.
+    spacecraft_observer : str, optional
+        SPICE body name for the spacecraft. Default ``"JPSS4_SC"``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by uGPS, with the curryer sub-point, satellite-radius, and Earth-Sun
+        distance columns.
+    """
+    kernel_manager.ensure_known_kernels_are_furnished()
+
+    u_gps_times = spicetime.adapt(pd.DatetimeIndex(camera_times), "iso")
+
+    return geometry.GeometryData(spacecraft_observer).get_geometry(
+        u_gps_times,
+        fields=["subsatellite", "subsolar", "sc_radius", "earth_sun_distance"],
+    )
+
+
+def add_spacecraft_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
+    """
+    Compute the spacecraft-level geometry fields and add them to the dataset.
+
+    Unlike the per-pixel geolocation, these fields are one value per camera frame, so they
+    are computed eagerly on the client rather than through Dask ``map_blocks``: the arrays
+    are (N,), and a map_blocks round-trip would cost more than the calculation. Kernels are
+    furnished and unloaded within this call so the SPICE pool is left as it was found.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        The input dataset containing a ``camera_time`` coordinate.
+    config : GeolocationKernelConfig
+        Configuration for SPICE kernel management. ``config.jpss_only`` is irrelevant here:
+        no field in this set resolves through the instrument frame.
+
+    Returns
+    -------
+    xr.Dataset
+        The dataset with the sub-point and satellite-radius variables added, and the
+        granule-level ``Earth_Sun_Distance_AU`` attribute set.
+    """
+    if "camera_time" not in ds.coords:
+        raise ValueError("Dataset must have 'camera_time' coordinate.")
+    if not config.dynamic_kernel_sources:
+        raise ValueError("SPICE kernel sources are required to compute spacecraft geometry")
+
+    km = KernelManager(
+        temp_dir_base=config.temp_dir_base,
+        download_naif_url=config.download_naif_url,
+        use_test_naif_url=config.use_test_naif_url,
+        use_high_precision_earth=config.use_high_precision_earth,
+        cache_timeout_days=config.cache_timeout_days,
+    )
+
+    with km:
+        km.load_libera_dynamic_kernels(
+            config.dynamic_kernel_sources,
+            needs_naif_kernels=True,
+            needs_static_kernels=True,
+        )
+        fields = calculate_spacecraft_geometry(km, pd.DatetimeIndex(ds.camera_time.values))
+
+    for column, variable in _SUBPOINT_VARIABLES.items():
+        ds[variable] = (("camera_time",), _apply_fill(fields[column].to_numpy(), _GEO_FILL_ANGLE, np.float32))
+
+    ds[_RADIUS_VARIABLE] = (
+        ("camera_time",),
+        _apply_fill(fields["spacecraft_radius"].to_numpy(), _GEO_FILL_RADIUS, np.float64),
+    )
+    ds.attrs["Earth_Sun_Distance_AU"] = _granule_earth_sun_distance(fields["earth_sun_distance"].to_numpy())
+
+    return ds
+
+
+def add_placeholder_spacecraft_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Add product fill-value placeholder spacecraft geometry to the dataset.
+
+    Used in ground-data mode, where no SPICE kernels are available. The product definition
+    declares these variables and the ``Earth_Sun_Distance_AU`` attribute, and the writer
+    rejects a dataset that omits a declared field, so they must be present even unfilled.
+    """
+    n_times = ds.sizes["camera_time"]
+
+    for variable in _SUBPOINT_VARIABLES.values():
+        ds[variable] = (("camera_time",), np.full(n_times, _GEO_FILL_ANGLE, dtype=np.float32))
+
+    ds[_RADIUS_VARIABLE] = (("camera_time",), np.full(n_times, _GEO_FILL_RADIUS, dtype=np.float64))
+    ds.attrs["Earth_Sun_Distance_AU"] = _GEO_FILL_DISTANCE
+
+    logger.info("use_geo is false: using placeholder spacecraft geometry.")
+
+    return ds
 
 
 def calculate_all_pixel_lat_lon_altitude(
