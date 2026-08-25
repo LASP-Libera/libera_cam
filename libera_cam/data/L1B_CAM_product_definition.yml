@@ -109,31 +109,63 @@ variables:
   ##############
   # Instrument #
   ##############
-  Radiometer_Operational_Mode:
+  Radiometer_Observation_ID:
     dtype: uint16
     dimensions: ["CAMERA_TIME"]
     attributes:
-      long_name: >-
-        Radiometer operational mode (details TBD; indicators for
-        nominal, video, dark, LED, lunar cal,
-        and maybe something like 'transition' just in case?
-      valid_range: [0, 511] #TBC
+      long_name: FSW radiometer observation ID
       _FillValue: 0
-  Camera_Operational_Mode:
+  Camera_Observation_ID:
     dtype: uint16
     dimensions: ["CAMERA_TIME"]
     attributes:
-      long_name: >-
-        Camera operational mode (details TBD; indicators for
-        nominal, video, dark, LED, lunar cal,
-        and maybe something like 'transition' just in case?
-      valid_range: [0, 511] #TBC
+      long_name: FSW camera observation ID
       _FillValue: 0
+  Image_Mode:
+    dtype: uint8
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: FSW FPGA image processing mode
+      comment: >-
+        0=DUAL, 1=VIDEO, 2=IMGA, 3=IMGB. Under VIDEO, CAMERA_TIME may duplicate;
+        use Camera_Packet_Index as a composite key.
+      valid_range: [0, 3]
+  Camera_Packet_Index:
+    dtype: int32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Originating L1A packet index for each complete image
+  Actual_Exposure_Time_1:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: FPGA actual exposure time 1 converted to milliseconds
+      units: milliseconds
+      comment: >-
+        Converted from L1A WFOV_IMAGE_HEADER_ACTUAL_EXP_TIME_1 raw counts using
+        ms = (value + 0.43*20) * 129.0 * 0.15625 / 1000.
+  Actual_Exposure_Time_2:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: FPGA actual exposure time 2 converted to milliseconds
+      units: milliseconds
+      comment: >-
+        Converted from L1A WFOV_IMAGE_HEADER_ACTUAL_EXP_TIME_2 raw counts using
+        ms = (value + 0.43*20) * 129.0 * 0.15625 / 1000. Second exposure in DUAL.
+  Exposure_Delta:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: FPGA DELTA_EXP between dual frame requests converted to milliseconds
+      units: milliseconds
+      comment: >-
+        Converted from L1A WFOV_IMAGE_HEADER_DELTA raw counts using
+        ms = value * 0.15625 / 1000.
 
   ###########
   # Science #
   ###########
-  # TODO[LIBSDC-709]: Add any camera telemetry needed for calibration or L2 processing
   Pixel_Counts:
     dtype: uint16
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]

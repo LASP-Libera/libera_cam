@@ -31,6 +31,38 @@ Manifest **`configuration`** keys (optional):
 
 ---
 
+## L1A inputs
+
+L1B requires image-centric WFOV L1A products from libera-utils ≥ 5.10.5. Complete SOP→EOP images
+are stitched onto a `CAMERA_TIME` dimension, JPEG-LS payloads are stored in
+`WFOV_COMPRESSED_IMAGE` with per-image valid byte lengths in `WFOV_COMPRESSED_IMAGE_LENGTH`, and
+FSW/FPGA header metadata is decoded into `WFOV_FSW_HEADER_*`, `WFOV_IMAGE_HEADER_*`,
+`WFOV_IMAGE_FOOTER_*`, and `WFOV_FPGA_STATUS_*` variables. A packet-only L1A product raises a
+`ValueError` naming the missing fields.
+
+Images whose `WFOV_HEADER_PARSE_VALID` is false are dropped with a logged warning — they carry a
+NaT `CAMERA_TIME` and cannot be geolocated. L1B raises if no image survives.
+
+L1A header fields reach the L1B product as:
+
+| L1B variable                    | L1A source                                   | Notes                           |
+| ------------------------------- | -------------------------------------------- | ------------------------------- |
+| `Radiometer_Observation_ID`     | `WFOV_FSW_HEADER_RAD_OBS_ID`                 |                                 |
+| `Camera_Observation_ID`         | `WFOV_FSW_HEADER_CAM_OBS_ID`                 |                                 |
+| `Image_Mode`                    | `WFOV_FSW_HEADER_IMG_MODE`                   | 0=DUAL, 1=VIDEO, 2=IMGA, 3=IMGB |
+| `Camera_Packet_Index`           | `CAMERA_PACKET_INDEX`                        | Originating L1A packet index    |
+| `Actual_Exposure_Time_1` / `_2` | `WFOV_IMAGE_HEADER_ACTUAL_EXP_TIME_1` / `_2` | Converted to milliseconds       |
+| `Exposure_Delta`                | `WFOV_IMAGE_HEADER_DELTA`                    | Converted to milliseconds       |
+
+Exposure register conversions are documented in
+[wfov_fsw_header_reference.md](wfov_fsw_header_reference.md#exposure-timing).
+
+`CAMERA_TIME` is not unique. In VIDEO mode (`Image_Mode == 1`) one camera trigger produces two
+images sharing a single FSW timestamp; `Camera_Packet_Index` distinguishes them. See
+[roadmap.md](roadmap.md) for the planned resolution.
+
+---
+
 ## Dask parallelization
 
 L1B uses Dask for lazy L1A decompression, radiometry, and geolocation. Tune execution with

@@ -1,5 +1,20 @@
 # Version Changes
 
+## 0.3.0
+
+- **L1A consumption:** Require image-centric WFOV L1A from libera-utils ≥ 5.10.5
+  (`CAMERA_TIME`, `WFOV_COMPRESSED_IMAGE`). Remove `reassemble_image_blobs` and the FSW/FPGA
+  header parser; JPEG-LS decompression operates on pre-sliced blob payloads. Drop images whose
+  `WFOV_HEADER_PARSE_VALID` is false.
+- **Exposure metadata:** Convert FPGA actual exposure registers and `WFOV_IMAGE_HEADER_DELTA` to
+  milliseconds; write `Actual_Exposure_Time_1/2` and `Exposure_Delta` on L1B.
+- **L1B product definition:** Rename misnamed operational-mode fields to
+  `Radiometer_Observation_ID` / `Camera_Observation_ID`; add `Image_Mode` and
+  `Camera_Packet_Index`.
+- **Fixtures / docs:** Replace DITL L1A fixture with enhanced product; scale fixtures along
+  `CAMERA_TIME`. Document exposure timing equations in
+  `doc/wfov_fsw_header_reference.md`.
+
 ## 0.2.6
 
 - **Process Parallelism**: Tested with Dask schedulers; **`synchronous`** (default) and **`distributed`** work reliably. **`threads`** and **`processes`** are rejected at runtime because CSPICE/SPICE is not thread-safe within a worker process.
