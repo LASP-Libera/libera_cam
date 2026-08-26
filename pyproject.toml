@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "0.2.5"
+version = "0.2.6"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar" },
@@ -39,11 +39,13 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    "libera-utils >= 5.8.0,<6.0.0",
+    "libera-utils >= 5.8.0,<5.10.3",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images
-    "dask>=2026.1.1"
+    "dask>=2026.1.1",
+    "distributed>=2026.1.1",
+    "netCDF4>=1.6.0"
 ]
 
 [tool.poetry.scripts]
@@ -70,13 +72,12 @@ ruff = "*"
 pytest-profiling = "*"
 memory-profiler = "*"
 snakeviz = "*"
+bokeh = "*"
 
 [tool.pytest.ini_options]
 markers = [
-    "integration: mark a test as an integration test. Skip these tests with `pytest -m 'not integration' tests`"
-]
-addopts = [
-    "-s"  # Don't capture output (print it)
+    "integration: mark a test as an integration test. Skip these tests with `pytest -m 'not integration' tests`",
+    "profiling: diagnostic L1B profiling smoke test; runs in CI; fails only on uncaught exceptions, not on timing/output checks",
 ]
 minversion = 6.0
 xfail_strict = true

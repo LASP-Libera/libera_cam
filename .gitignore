@@ -20,6 +20,7 @@ coverage_report
 corbertura_report.xml
 tests/test_data/hidden
 prof
+spice_files
 
 # Local Installation Artifacts #
 ################################
@@ -75,7 +76,7 @@ venv
 pytest.ini
 
 # Local folders #
-######################
+##################
 !examples
 !examples/*.py
 
@@ -89,4 +90,3 @@ gemini_plans
 GEMINI.md
 Claude.md
 fort.*
-spice_files/

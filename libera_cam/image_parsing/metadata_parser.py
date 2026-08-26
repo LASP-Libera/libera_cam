@@ -158,7 +158,8 @@ def verify_crc(metadata: dict, image_data: bytes, config: ParserConfig = DEFAULT
         if config.validate_crc:
             raise CRCValidationError(error_msg)
         else:
-            logger.warning(error_msg)
+            # FSW CRC mismatch rate is not tracked yet; log at debug until metrics exist.
+            logger.debug(error_msg)
 
     return match
 
@@ -329,7 +330,8 @@ def extract_dict_from_bytearray(source: bytearray, config: ParserConfig = DEFAUL
     combined["raw_footer"] = footer_bytes
 
     # CRC Validation
-    # We use the extracted payload for validation
+    # TODO LIBSDC-747: Validate the CRC algorithm. Might be proprietary and we
+    # won't be able to reproduce it.
     if config.validate_crc:
         combined["crc_valid"] = verify_crc(combined, compressed_image_bytes, config)
     else:

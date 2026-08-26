@@ -122,3 +122,18 @@ def test_reassemble_image_blobs_dask_backed():
     # Each packet contributes 'lengths' bytes to the blob, so total should be 200 bytes of 'D'
     assert blobs[0] == bytearray(b"D" * 200)
     assert stats["n_images_stitched"] == 1
+
+
+def test_validate_execution_config():
+    import pytest
+
+    from libera_cam.image_parsing.read_l1a_cam_data import _validate_execution_config
+
+    with pytest.raises(ValueError, match="LIBERA_CAM_CHUNK_SIZE must be >= 1"):
+        _validate_execution_config(0)
+
+    with pytest.raises(ValueError, match="LIBERA_CAM_CHUNK_SIZE must be >= 1"):
+        _validate_execution_config(-5)
+
+    # Valid chunk size passes
+    _validate_execution_config(10)

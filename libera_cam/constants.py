@@ -43,5 +43,5 @@ class IntegrationTime(IntEnum):
 
 # Default chunk size for the time dimension in Dask arrays.
 # This balances memory usage (smaller chunks) against SPICE setup overhead (larger chunks).
-# 50 images * 2048 * 2048 * 4 bytes ~= 800 MB per chunk.
+# 50 images: ~800 MB raw data + ~2.5 GB float32 geolocation arrays ~= 3.3 GB total per chunk.
 DEFAULT_TIME_CHUNK_SIZE = 50
