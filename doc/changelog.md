@@ -3,12 +3,9 @@
 ## 0.2.6
 
 - **Process Parallelism**: Tested with Dask schedulers; **`synchronous`** (default) and **`distributed`** work reliably. **`threads`** and **`processes`** are rejected at runtime because CSPICE/SPICE is not thread-safe within a worker process.
-- **Tuning**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments. Also exposed `DASK_SCHEDULER`, `DASK_NUM_WORKERS`, and `DASK_MEMORY_LIMIT` for Dask parallelization (see [doc/overview.md](overview.md)).
-- **NetCDF write path**: Removed unused runtime encoding dict from `write_data_product`; compression (`zlib` + `complevel: 4`) is applied by libera_utils product-definition enforcement.
-- **Testing Tools**: Moved L1A fixture scaling to `tests/helpers/l1a_scaling.py` (`make_extended_l1a`) with a `make_extended_l1a` pytest fixture in `tests/conftest.py`. Added integration tests `tests/integration/test_l1a_scaling.py` and `tests/integration/test_l1b_profiling.py` (`@pytest.mark.profiling` diagnostic smoke test with visible Dask profiling output in CI). Removed script-style `tests/make_l1a_data.py` and `tests/profile_l1b.py`.
-
-## 0.2.5
-
+- **Tuning & Ingestion**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments. Batch JPEG-LS decompression now builds pre-chunked Dask arrays at ingestion. Added operator configuration guide and tuning relationships in [doc/overview.md](overview.md).
+- **Geolocation Memory Optimization**: Switched worker geolocation calculations to `float32` preallocated arrays in `libera_cam/geolocation.py`, eliminating duplicate array copies from `np.stack` and reducing worker live memory peak by ~4×.
+- **Dependencies**: Added `netCDF4>=1.6.0` and `distributed>=2026.1.1` to package dependencies for distributed execution and NetCDF file inspection.
 - Replace `no_geo` manifest key with `use_geo` (default true; `use_geo: false` for ground-calibration placeholder geolocation). Reject incompatible `use_geo: false` + `jpss_only: true` combinations. Align `use_geo: false` placeholder geolocation with product `_FillValue` (-999 lat/lon, -9999 alt) and Azimuth -999.
 - Add `jpss_only` manifest configuration: load only JPSS-SPK and JPSS-CK dynamic kernels, compute per-pixel geolocation using `wfov_pixel_vectors.npy` with `LIBERA_BASE` reference frame (zero-azimuth approximation), and write Azimuth as 0°. Validate required SPICE data products in `read_all_input_data` (production: AZROT-CK + JPSS-SPK + JPSS-CK; jpss_only: JPSS-SPK + JPSS-CK). Reject duplicate kernel types in the manifest. Warn when other SPICE files are listed but skipped. Apply product `_FillValue` for off-Earth and masked pixels; fix Altitude units metadata to meters.
 

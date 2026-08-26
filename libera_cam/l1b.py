@@ -34,6 +34,10 @@ from libera_cam.version import version as libera_cam_version
 logger = logging.getLogger(__name__)
 
 _ALLOWED_DASK_SCHEDULERS = frozenset({"synchronous", "distributed"})
+_USE_DASK_DASHBOARD = False  # Set to True to enable Dask dashboard for debugging; requires distributed scheduler
+_DASK_DASHBOARD_SESSION_TOKEN_EXPIRATION_MS = 3_600_000
+_DEFAULT_DASK_NUM_WORKERS = 1
+_DEFAULT_DASK_MEMORY_LIMIT = "8GB"
 
 # Required dynamic SPICE inputs keyed by Libera data product id (see libera_utils.constants).
 _REQUIRED_SPICE_JPSS_ONLY: tuple[DataProductIdentifier, ...] = (
@@ -97,28 +101,34 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
             "CSPICE/SPICE is not thread-safe within a worker process."
         )
 
-    dask_num_workers = int(os.getenv("DASK_NUM_WORKERS", "1"))
+    dask_num_workers = int(os.getenv("DASK_NUM_WORKERS", str(_DEFAULT_DASK_NUM_WORKERS)))
     if dask_scheduler == "distributed":
         logger.info("Creating distributed client and LocalCluster")
-        dask_memory_limit = os.getenv("DASK_MEMORY_LIMIT", "8GB")
+        dask_memory_limit = os.getenv("DASK_MEMORY_LIMIT", _DEFAULT_DASK_MEMORY_LIMIT)
         # avoid disconnecting from the bokeh dashboard
-        dask.config.set({"distributed.scheduler.dashboard.bokeh-application.session-token-expiration": 3600000})
-        client_ctx = Client(
-            n_workers=dask_num_workers,
-            threads_per_worker=1,
-            memory_limit=dask_memory_limit,  # per worker
-        )
+        bokeh_expiration_config = "distributed.scheduler.dashboard.bokeh-application.session-token-expiration"
+        dask.config.set({bokeh_expiration_config: _DASK_DASHBOARD_SESSION_TOKEN_EXPIRATION_MS})
+        if not _USE_DASK_DASHBOARD:
+            client_ctx = Client(
+                n_workers=dask_num_workers,
+                threads_per_worker=1,
+                memory_limit=dask_memory_limit,  # per worker
+                dashboard_address=None,
+            )
+        else:
+            client_ctx = Client(
+                n_workers=dask_num_workers,
+                threads_per_worker=1,
+                memory_limit=dask_memory_limit,  # per worker
+            )
         logger.info(f"Dask number of workers {dask_num_workers}, Dask memory limit per worker {dask_memory_limit}")
     else:
         logger.info(f"Proceeding with Dask scheduler {dask_scheduler}")
         dask.config.set(scheduler=dask_scheduler)
-        if dask_scheduler != "synchronous":
-            dask.config.set(scheduler=dask_scheduler, num_workers=dask_num_workers)
-            logger.info(f"Dask number of workers {dask_num_workers}")
         client_ctx = nullcontext()
 
     with client_ctx as client:
-        if client is not None:
+        if client is not None and _USE_DASK_DASHBOARD:
             client.forward_logging()
             logger.info(f"Dask dashboard URL: {client.dashboard_link}")
 
@@ -155,7 +165,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
         # Steps 4: Store data with metadata and write to output folder
         logger.info("Step 4: Creating and writing data product")
-        # This is where the compute happens!
+        # This is where the Dask compute happens. NetCDF writing funnels computed blocks through the client process.
         start = datetime.now()
         packaged_data = package_l1b_product(processed_data)
         output_files = write_data_product(packaged_data, dropbox_path)

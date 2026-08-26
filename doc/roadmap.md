@@ -1,34 +1,14 @@
 # libera_cam L1B Roadmap
 
-High-level plan for WFOV camera L1B processing beyond the current performance work
-([PR #11](https://github.com/LASP-Libera/libera_cam/pull/11)). This document captures
-known upstream dependencies, open design questions, and expected sequencing. It is
-intentionally forward-looking; items here are not commitments for any single release.
+High-level plan for WFOV camera L1B processing. This document captures known upstream
+dependencies, open design questions, and forward-looking engineering priorities.
 
 **Related documentation**
 
 - [overview.md](overview.md) — L1B pipeline usage, manifest configuration, and Dask parallelization
 - [wfov_fsw_header_reference.md](wfov_fsw_header_reference.md) — FSW metadata, `img_mode`, VIDEO
-  pairing, and duplicate-timestamp behavior
+  pairing, and duplicate-timestamp guidance
 - [changelog.md](changelog.md) — shipped changes by version
-
----
-
-## Current Dask Baseline (PR #11)
-
-Recent work on `feature/kim-speed-up` improves L1B throughput on today's L1A products:
-
-- Batch JPEG-LS decompression with pre-chunked Dask arrays in `read_l1a_cam_data.py`
-- Configurable Dask execution via environment variables (`DASK_SCHEDULER`, `DASK_NUM_WORKERS`,
-  `DASK_MEMORY_LIMIT`, `LIBERA_CAM_CHUNK_SIZE`); see [overview.md](overview.md) for operator guidance
-- NetCDF compression from libera_utils product-definition enforcement (no runtime encoding dict
-  in `write_data_product`)
-- Pytest integration helpers: `make_extended_l1a` (`tests/helpers/l1a_scaling.py` +
-  `tests/conftest.py` fixture) for larger L1A fixtures; `tests/integration/test_l1b_profiling.py`
-  for diagnostic Dask profiling smoke tests in CI
-
-These optimizations help within the constraints described below. Several roadmap items
-require L1A product or metadata changes in **libera_utils** before L1B can fully benefit.
 
 ---
 
@@ -54,8 +34,8 @@ distinction between `PACKET_ICIE_TIME` and `CAMERA_TIME`.
 
 ### Target state
 
-Move blob reassembly (and maybe decompression) into the **libera_utils L1A pipeline**. Future L1A
-products should be:
+Move packet stitching and blob reassembly into the **libera_utils L1A pipeline** (tracked in
+the associated `libera_utils` L1A camera ingest update). Future L1A products will be:
 
 - Indexed on **`camera_time`** (or an equivalent per-image coordinate)
 - Written in **chunks that contain only complete images**
@@ -73,7 +53,7 @@ With image-aligned L1A chunks, L1B can:
 
 - Chunk size policy (images per chunk vs. target byte size)
 - Whether decoded 12-bit arrays or compressed payloads are stored at L1A
-- Should L1A files be only complete images or can incomplete images be on the edges?
+- Ensuring L1A chunk boundaries contain only complete images
 
 ---
 
@@ -81,42 +61,34 @@ With image-aligned L1A chunks, L1B can:
 
 ### Problem today
 
-When the FPGA runs in **VIDEO** mode (`img_mode == 1`), a single camera trigger produces
-**two NAND images** with identical FSW timestamps: a full-frame write (bitmask bypass) and a
-masked/stripe write. Both share the same `timestamp_seconds` and `timestamp_subseconds`, so
+When the FPGA runs in **VIDEO** mode (`img_mode == 1`), a single camera exposure produces
+**two downlinked NAND images** with identical FSW timestamps: a full-frame write (bitmask bypass)
+and a masked/stripe write. Both share the same `timestamp_seconds` and `timestamp_subseconds`, so
 `camera_time` is **not unique**.
 
-Duplicate time coordinates break many NetCDF viewers and complicate any logic that assumes
-one row per acquisition instant. See
-[Images per timestamp](wfov_fsw_header_reference.md#images-per-timestamp) and
+Duplicate time coordinates break standard NetCDF indexing and complicate downstream analysis.
+See [Images per timestamp](wfov_fsw_header_reference.md#images-per-timestamp) and
 [Separating duplicate-timestamp pairs](wfov_fsw_header_reference.md#separating-duplicate-timestamp-pairs).
 
-### Proposed L1A fix
+### Target architecture
 
-Introduce a small synthetic sub-microsecond offset (on the order of **1 µs**) within each
-duplicate-timestamp pair so that stored coordinates are unique and monotonic in packet
-order. The offset is a **storage convenience**, not a physical acquisition-time correction.
+Rather than altering timestamps (which introduces synthetic errors), candidate approaches include:
 
-Document the offset scheme in the L1A product definition and propagate a flag or auxiliary
-coordinate so downstream code can recover the true trigger time.
+1. **Auxiliary Time Coordinate**: Configure the dataset along an integer frame index dimension
+   and store acquisition time as a non-unique auxiliary coordinate variable.
+2. **Stream Separation**: Split VIDEO pairs into distinct logical variables or datasets:
+   - **ScienceStill**: Masked member of each VIDEO pair plus nominal non-VIDEO frames.
+   - **VideoFull**: Full-frame member only.
+3. **Metadata Constant Offsets**: If nominal timing differences exist between modes, document
+   them in product metadata attributes rather than modifying coordinates.
 
 ### L1B responsibilities
 
-| Step                   | Requirement                                                                                                                        |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Geolocation input time | **Undo** the synthetic offset before SPICE lookups so pointing uses the true trigger time                                          |
-| Product separation     | Split VIDEO pairs into distinct logical streams (e.g. science still vs. video full-frame); exact output schema **not yet decided** |
-| Validation             | Use packet order, `img_mode`, and content heuristics (`valid_pixel_mask`, `integration_mask`) to confirm pair assignment           |
-
-Candidate stream names from the FSW reference doc: **ScienceStill** (masked member of each
-VIDEO pair plus non-VIDEO frames) and **VideoFull** (full-frame member only).
-
-### Open questions
-
-- Whether L1B emits separate products, separate variables within one product, or filters one
-  stream at write time
-- How to represent the "true" vs. "storage" timestamp in L1B output metadata
-- Whether all VIDEO frames in a sequence need splitting or only `img_mode == 1` pairs
+| Step                   | Requirement                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Geolocation input time | Use true acquisition epoch for SPICE lookups                                                                             |
+| Product separation     | Split VIDEO pairs into distinct logical streams (e.g. science still vs. video full-frame)                                |
+| Validation             | Use packet order, `img_mode`, and content heuristics (`valid_pixel_mask`, `integration_mask`) to confirm pair assignment |
 
 ---
 
@@ -129,112 +101,72 @@ Each downlinked pixel is encoded as **13 bits** in the JPEG-LS payload:
 - **Bits 0–11**: DN value (12-bit science data)
 - **Bit 12**: integration-time flag (short vs. long exposure)
 
-The camera acquires **two images at different integration times** within a single readout
-cycle. Pixels from the short and long integrations therefore correspond to **different
-effective acquisition times**, even though they share one `camera_time` coordinate and one
-FSW header timestamp.
+The camera acquires **two exposures at different integration times** within a single readout
+cycle. Pixels from short and long integrations correspond to **different effective acquisition
+times**, even though they share one `camera_time` frame coordinate.
 
-L1B already extracts the per-pixel flag as `integration_mask` in `l1a_parser.py` and uses it
-for radiometric calibration (`convert_dn_to_radiance`). Geolocation, however, still
-evaluates SPICE at the **frame-level** `camera_time` for all pixels in the image.
+L1B extracts `integration_mask` in `l1a_parser.py` for radiometric calibration, but geolocation
+currently evaluates SPICE at the frame-level `camera_time` for all active un-masked pixels.
 
 ### Target state
 
-Accurate geolocation requires knowing **when each pixel was effectively exposed**. At minimum:
-
 1. Model the short/long integration timing relative to the frame timestamp (exposure start,
-   readout order, and any known FPGA timing offsets)
-2. Assign a per-pixel or per-integration-group time array for SPICE interpolation
-3. Apply the correct time when computing lat/lon/alt (and any surface geometry angles) for
-   each pixel
-
-### Likely work areas
-
-- Instrument timing reference from FSW/FPGA documentation (`commanded_exp_time_1/2` in the
-  FSW header may be inputs)
-- Decide whether geolocation runs per integration class (two SPICE solves per frame) or with
-  a full per-pixel time grid
-- Coordinate with the VIDEO/timestamp work (item 2) so time corrections are applied in the
-  right order
-- Product-definition updates if per-pixel time or integration-specific geometry fields are
-  written to L1B output
-
-### Status
-
-Approach is **not fully defined**. This item is a prerequisite for science-grade geolocation
-on dual-integration data.
+   readout order, and FPGA timing offsets)
+2. Assign per-pixel or per-integration-group time offsets for SPICE interpolation
+3. Apply the correct time when computing lat/lon/alt and surface geometry angles for each pixel
 
 ---
 
-## 4. Surface geometry geolocation performance
+## 4. Surface geometry geolocation performance & sparse geometry
 
 ### Problem today
 
-Sub-satellite geolocation (lat/lon/alt via SPICE ray–ellipsoid intersection) is already the
-dominant cost for large products. Adding **surface geometry** angles — solar zenith, viewing
-zenith, relative azimuth, and related fields at each pixel — multiplies SPICE work
-substantially. Prototype logic exists on `feature/add-surface-calcs` (following the
-`libera_rad` `calculate_surface_geometry_angles` pattern with per-pixel `surface_angles`
-calls), and profiling shows it is **not yet viable at operational scale** without further
-optimization.
+Sub-satellite geolocation (lat/lon/alt via SPICE ray–ellipsoid intersection) is computationally
+intensive. Adding **surface geometry** angles — solar zenith, viewing zenith, relative azimuth,
+and related fields at each pixel — multiplies SPICE work substantially.
+
+### Optimization strategies
+
+| Approach                    | Notes                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Sparse geometry**         | Restrict geometry calculations strictly to unmasked/active pixels (e.g. within stripes), skipping masked-off areas entirely |
+| **Reduce SPICE call count** | Batch by unique timestamps or integration groups before per-pixel expansion                                                 |
+| **Coarser geometry grid**   | Compute angles on a subsampled grid and interpolate (with science validation)                                               |
+| **Worker-local caching**    | Reuse Sun/spacecraft orientation for all pixels sharing a timestamp                                                         |
+| **Vectorized evaluation**   | Evaluate whether curryer vectorized paths or precomputed ephemeris tables help at full camera resolution (2048×2048)        |
+
+---
+
+## 5. Direct worker NetCDF chunk output
+
+### Problem today
+
+Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_product`, which
+funnels all computed Dask blocks back through the client process. Client process memory and I/O
+become a bottleneck on large multi-gigabyte datasets.
 
 ### Target state
 
-Ship surface geometry fields required by the L1B product definition without dominating
-total processing time. Optimization strategies under consideration:
-
-| Approach                | Notes                                                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Reduce SPICE call count | Batch by unique timestamps or integration groups before per-pixel expansion                                               |
-| Coarser geometry grid   | Compute angles on a subsampled grid and interpolate (science validation required)                                         |
-| Worker-local caching    | Reuse sun/s spacecraft orientation for all pixels sharing a timestamp                                                     |
-| Skip masked pixels      | Extend existing `pixel_mask` / `valid_pixel_mask` short-circuit to surface-angle paths                                    |
-| Algorithm selection     | Evaluate whether curryer vectorized paths or precomputed ephemeris tables help at camera resolution (2048×2048 per frame) |
-
-### Dependencies
-
-- Item 3 (per-pixel time) determines how many distinct SPICE epochs must be evaluated
-- Item 1 (image-aligned L1A) improves Dask parallelism for any per-chunk geometry kernel
-- PR #11 Dask tuning provides the execution framework; this item focuses on **algorithmic**
-  cost reduction inside `libera_cam.geolocation`
-
-### Status
-
-Surface angle **correctness** is being developed separately from **performance**. Both must
-be satisfied before merging to `main`.
+Investigate and prototype direct worker-to-disk or worker-to-S3 NetCDF chunk writes (e.g., using
+region-based HDF5/NetCDF-4 writes or Zarr storage targets). This allows distributed workers to
+write their completed chunks independently without returning payload data to the client driver.
 
 ---
 
-## Suggested sequencing
+## 6. Automated performance regression benchmarking
 
-```mermaid
-flowchart TD
-    pr11["PR #11: L1B Dask + I/O tuning (now)"]
-    l1a_chunk["L1A: camera-time, image-aligned chunks (libera_utils)"]
-    l1a_video["L1A: unique timestamps for VIDEO pairs"]
-    l1b_video["L1B: undo offset, separate VIDEO streams"]
-    pixel_time["Per-pixel integration timing model"]
-    surface_perf["Surface geometry optimization"]
+### Target state
 
-    pr11 --> l1a_chunk
-    pr11 --> l1a_video
-    l1a_chunk --> surface_perf
-    l1a_video --> l1b_video
-    l1b_video --> pixel_time
-    pixel_time --> surface_perf
-```
-
-1. **Now** — Land PR #11; use `tests/integration/test_l1b_profiling.py` to baseline geolocation vs. radiometry costs.
-2. **L1A (libera_utils)** — Image-aligned products and VIDEO timestamp offsets (can proceed
-   in parallel).
-3. **L1B** — VIDEO stream separation and timestamp undo for geolocation.
-4. **L1B** — Per-pixel integration timing model and geolocation integration.
-5. **L1B** — Surface geometry performance work once inputs and call patterns are stable.
+Integrate `pytest-benchmark` to track execution time and memory scaling for standard camera
+chunk sizes across CI runs. This will provide early detection of performance regressions in
+radiometric calibration, JPEG-LS decompression, and SPICE geolocation.
 
 ---
 
-## Out of scope for this document
+## 7. Dask performance testing
 
-- Changes to the radiometric calibration chain (dark, flat-field, VIIRS overlap)
-- FSW or FPGA firmware modifications
-- L1A packet deduplication and ground-system ingest (upstream of libera_utils)
+## Aspects worth testing more thoroughly
+
+- Logging of distributed tasks on AWS. Are we getting enough information out to debug?
+- When using `distributed` mode does Dask emit a "large object detected in task graph" warning because of the 50 images passing in?
+- Confirm netcdf file writing in distributed mode on AWS with h5netcdf vs netcdf4 engine

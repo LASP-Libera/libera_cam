@@ -132,8 +132,6 @@ class CRCValidationError(Exception):
 
 # ============================================================================
 # CRC Calculation
-# TODO LIBSDC-747: Validate the CRC algorithm. Might be proprietary and we
-# won't be able to reproduce it.
 # ============================================================================
 
 
@@ -334,9 +332,9 @@ def extract_dict_from_bytearray(source: bytearray, config: ParserConfig = DEFAUL
     # CRC Validation
     # TODO LIBSDC-747: Validate the CRC algorithm. Might be proprietary and we
     # won't be able to reproduce it.
-    # if config.validate_crc:
-    #     combined["crc_valid"] = verify_crc(combined, compressed_image_bytes, config)
-    # else:
-    #     combined["crc_valid"] = False
+    if config.validate_crc:
+        combined["crc_valid"] = verify_crc(combined, compressed_image_bytes, config)
+    else:
+        combined["crc_valid"] = False
 
     return combined

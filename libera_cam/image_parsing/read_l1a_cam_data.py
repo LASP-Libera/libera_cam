@@ -41,6 +41,7 @@ def reassemble_image_blobs(l1a_data: xr.Dataset, stats: dict = None) -> Generato
             "n_images_discarded_sop": 0,
             "n_images_discarded_gap": 0,
             "n_unexpected_eop": 0,
+            "n_images_failed_parse": 0,
         }
     else:
         # Only initialize missing keys so existing counts can accumulate across calls.
@@ -49,6 +50,7 @@ def reassemble_image_blobs(l1a_data: xr.Dataset, stats: dict = None) -> Generato
         stats.setdefault("n_images_discarded_sop", 0)
         stats.setdefault("n_images_discarded_gap", 0)
         stats.setdefault("n_unexpected_eop", 0)
+        stats.setdefault("n_images_failed_parse", 0)
 
     offsets = l1a_data["ICIE__MEM_DUMP_OFFSET_WFOV"].values
     lengths = l1a_data["ICIE__MEM_DUMP_LENGTH_WFOV"].values
@@ -125,6 +127,31 @@ def reassemble_image_blobs(l1a_data: xr.Dataset, stats: dict = None) -> Generato
             continue
 
 
+def _validate_execution_config(chunk_size: int) -> None:
+    """Validate runtime chunk size and compare against worker memory limits if set."""
+    if chunk_size < 1:
+        raise ValueError(f"LIBERA_CAM_CHUNK_SIZE must be >= 1, got {chunk_size}")
+
+    # Estimate ~3.3 GB per 50-image chunk (~67 MB per image for raw + float32 geolocation arrays)
+    estimated_chunk_bytes = chunk_size * (constants.PIXEL_COUNT_Y * constants.PIXEL_COUNT_X * 4 * 4)
+    raw_memory_limit = os.getenv("DASK_MEMORY_LIMIT")
+    if raw_memory_limit:
+        try:
+            from dask.utils import parse_bytes
+
+            memory_limit_bytes = parse_bytes(raw_memory_limit)
+            if estimated_chunk_bytes > memory_limit_bytes:
+                chunk_gb = estimated_chunk_bytes / (1024**3)
+                limit_gb = memory_limit_bytes / (1024**3)
+                logger.warning(
+                    f"Configured LIBERA_CAM_CHUNK_SIZE={chunk_size} requires ~{chunk_gb:.2f} GB per chunk, "
+                    f"which exceeds DASK_MEMORY_LIMIT={raw_memory_limit} (~{limit_gb:.2f} GB). "
+                    "Workers may experience Out-Of-Memory errors."
+                )
+        except Exception as e:
+            logger.debug("Could not parse DASK_MEMORY_LIMIT (%s): %s", raw_memory_limit, e)
+
+
 def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     """Reconstruct a lazy WFOV camera dataset from stitched L1A packet data.
 
@@ -146,8 +173,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
         are found.
     """
     chunk_size = int(os.getenv("LIBERA_CAM_CHUNK_SIZE", DEFAULT_TIME_CHUNK_SIZE))
-    if chunk_size < 1:
-        raise ValueError(f"LIBERA_CAM_CHUNK_SIZE must be >= 1, got {chunk_size}")
+    _validate_execution_config(chunk_size)
     logger.info(f"Using LIBERA_CAM_CHUNK_SIZE={chunk_size}")
 
     def decompress_batch(blobs_batch):
@@ -159,7 +185,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
             masks.append(mask)
         return np.stack(images, axis=0), np.stack(masks, axis=0)
 
-    delayed_decompress_batch = delayed(decompress_batch, nout=2, pure=True)
+    delayed_decompress_batch = delayed(decompress_batch, nout=2, pure=False)
 
     # 1. Extract raw binary blobs from the packet stream
     logger.info("Stitching binary blobs from L1A packets...")
@@ -171,10 +197,15 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     # Collect blobs and metadata eagerly
     blobs = []
     for blob in reassemble_image_blobs(cam_dataset, stats=stitching_stats):
-        meta = l1a_parser.parse_image_metadata(blob)
-        meta["camera_time"] = multipart_to_dt64(meta, s_field="timestamp_seconds", us_field="timestamp_subseconds")
-        metadata_list.append(meta)
-        blobs.append(blob)
+        try:
+            meta = l1a_parser.parse_image_metadata(blob)
+            meta["camera_time"] = multipart_to_dt64(meta, s_field="timestamp_seconds", us_field="timestamp_subseconds")
+            metadata_list.append(meta)
+            blobs.append(blob)
+        except Exception as e:
+            logger.exception(f"Failed to parse metadata for stitched image blob: {e}")
+            stitching_stats["n_images_failed_parse"] = stitching_stats.get("n_images_failed_parse", 0) + 1
+            continue
 
     if not metadata_list:
         logger.warning("No complete images found in L1A data.")
