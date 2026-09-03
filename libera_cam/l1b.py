@@ -89,7 +89,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     -----
     Manifest ``configuration.use_geo`` controls geolocation behavior. When
     ``use_geo`` is false, SPICE kernel files are skipped during input read and
-    placeholder lat/lon/alt values are written. Omitting the key defaults to
+    the per-pixel geolocation is written as fill values. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
     frame, the ``Azimuth_Motor_Position_SPICE`` variables 0 degrees) and cannot be combined with
@@ -336,8 +336,9 @@ def process_l1a_to_l1b(
     This function coordinates the core L1A to L1B camera processing steps:
     - Parse the input L1A camera data into a working dataset
     - Convert DN to radiance (lazy when backed by Dask arrays)
-    - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
-      or placeholders when ``use_geo`` is false
+    - Add the per-pixel geolocation and surface angles (lazy Dask tasks of
+      ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames), JPSS-only LIBERA_BASE geolocation, or
+      placeholders when ``use_geo`` is false
     - Add the per-frame geometry under one kernel manager: the spacecraft-level fields (sub-points,
       satellite radius, inertial position and velocity, attitude quaternion, Earth-Sun distance)
       and the motor azimuth from the azimuth CK at the first and second integration, 0 degrees
@@ -408,9 +409,7 @@ def process_l1a_to_l1b(
             dynamic_kernel_sources=dynamic_kernel_sources,
             jpss_only=True,
         )
-        cam_dataset = add_jpss_only_geolocation_to_dataset(
-            cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask
-        )
+        cam_dataset = add_jpss_only_geolocation_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
     else:
         geolocation_mode = "production"
@@ -420,7 +419,7 @@ def process_l1a_to_l1b(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
-        cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
+        cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
 
     cam_dataset.attrs["Geolocation_Mode"] = geolocation_mode

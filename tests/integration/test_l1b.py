@@ -93,3 +93,30 @@ def test_per_frame_geometry_is_written(l1b_product_dataset, variable, dims):
 def test_earth_sun_distance_is_written(l1b_product_dataset):
     """The granule Earth-Sun distance is written as a global attribute."""
     assert np.isfinite(float(l1b_product_dataset.attrs["Earth_Sun_Distance_AU"]))
+
+
+def test_per_pixel_geometry_is_computed_for_every_frame(l1b_product_dataset):
+    """Every frame has on-Earth pixels with finite geolocation and surface angles, flagged 0 exactly there.
+
+    xarray decodes the written ``_FillValue`` to NaN on read; the flag variable declares no fill and
+    keeps its uint16 dtype.
+    """
+    flags = l1b_product_dataset["Geolocation_Quality_Flag"]
+    assert flags.dims == ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+    assert flags.dtype == np.uint16
+
+    on_earth = flags.to_numpy() == 0
+    # The square detector inscribes the circular field of view; corner pixels point past the limb.
+    on_earth_fraction = on_earth.mean(axis=(1, 2))
+    assert np.all((on_earth_fraction > 0.70) & (on_earth_fraction < 0.85)), on_earth_fraction
+    for name in (
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Solar_Zenith_Surface",
+        "Viewing_Zenith_Surface",
+        "Relative_Azimuth_Surface",
+        "Viewing_Azimuth_Surface_WRT_North",
+        "Solar_Azimuth_Surface_WRT_North",
+    ):
+        assert np.array_equal(np.isfinite(l1b_product_dataset[name].to_numpy()), on_earth), name
