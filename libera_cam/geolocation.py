@@ -18,33 +18,68 @@ from cloudpathlib import S3Path
 from curryer import spicetime
 from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
+from curryer.spicierpy.ext import spice_error_message
 from libera_utils.libera_spice.kernel_manager import KernelManager
 
-from libera_cam.constants import GROUND_CAL_PIXEL_MAPPING, PIXEL_COUNT_X, PIXEL_COUNT_Y
+from libera_cam.constants import (
+    AZIMUTH_ENCODER_FRAMES,
+    DEFAULT_SPACECRAFT_OBSERVER,
+    GROUND_CAL_PIXEL_MAPPING,
+    PIXEL_COUNT_X,
+    PIXEL_COUNT_Y,
+    SPACECRAFT_OBSERVERS,
+)
 
 logger = logging.getLogger(__name__)
 
 # Product fill values (L1B_CAM_product_definition.yml)
 _GEO_FILL_LAT_LON = np.float32(-999.0)
 _GEO_FILL_ALT = np.float32(-9999.0)
-_GEO_FILL_ANGLE = np.float32(-999.0)
-_GEO_FILL_RADIUS = np.float64(-9999.0)
-_GEO_FILL_DISTANCE = -999.0
+_FILL_VALUE = -999.0  # product default: angles, quaternion components, velocity
+_FILL_DISTANCE = -9999.0  # radius and position
+_FILL_EARTH_SUN_DISTANCE = -999.0
 
 _SPICE_BODY_PRODUCTION = "LIBERA_WFOV_CAM"
 _SPICE_BODY_JPSS_ONLY = "LIBERA_BASE"
-_SPICE_BODY_SPACECRAFT = "JPSS4_SC"
 
-# curryer geometry column -> product variable, for the spacecraft sub-point fields.
-_SUBPOINT_VARIABLES = {
-    "subsatellite_latitude": "Subsatellite_Latitude",
-    "subsatellite_longitude": "Subsatellite_Longitude",
-    "subsatellite_colatitude": "Subsatellite_Colatitude",
-    "subsolar_latitude": "Subsolar_Latitude",
-    "subsolar_longitude": "Subsolar_Longitude",
-    "subsolar_colatitude": "Subsolar_Colatitude",
+# curryer geometry fields for the L1B product, as GeometryField enum members (interchangeable
+# with their string selectors; ``.columns`` gives the output keys). All are spacecraft-level: they
+# resolve through the spacecraft ephemeris and body attitude alone, never the camera frame, so
+# one query serves the production and ``jpss_only`` modes alike. The camera's boresight and
+# per-pixel geometry are a separate concern and are not computed here.
+_SPACECRAFT_FIELDS = (
+    geometry.GeometryField.SUBSATELLITE,
+    geometry.GeometryField.SUBSOLAR,
+    geometry.GeometryField.SC_RADIUS,
+    geometry.GeometryField.EARTH_SUN_DISTANCE,
+    geometry.GeometryField.SC_POSITION_INERTIAL,
+    geometry.GeometryField.SC_VELOCITY_INERTIAL,
+    geometry.GeometryField.SATELLITE_ATTITUDE,
+)
+
+# curryer column -> (product variable, _FillValue, dtype) for the per-frame scalar fields, matching
+# the product definition.
+_SCALAR_VARIABLES: dict[str, tuple[str, float, type]] = {
+    "subsatellite_latitude": ("Subsatellite_Latitude", _FILL_VALUE, np.float32),
+    "subsatellite_longitude": ("Subsatellite_Longitude", _FILL_VALUE, np.float32),
+    "subsatellite_colatitude": ("Subsatellite_Colatitude", _FILL_VALUE, np.float32),
+    "subsolar_latitude": ("Subsolar_Latitude", _FILL_VALUE, np.float32),
+    "subsolar_longitude": ("Subsolar_Longitude", _FILL_VALUE, np.float32),
+    "subsolar_colatitude": ("Subsolar_Colatitude", _FILL_VALUE, np.float32),
+    "spacecraft_radius": ("Radius_of_Satellite_from_Center_of_Earth", _FILL_DISTANCE, np.float64),
+    "attitude_q0": ("Satellite_Attitude_Q0", _FILL_VALUE, np.float32),
+    "attitude_q1": ("Satellite_Attitude_Q1", _FILL_VALUE, np.float32),
+    "attitude_q2": ("Satellite_Attitude_Q2", _FILL_VALUE, np.float32),
+    "attitude_q3": ("Satellite_Attitude_Q3", _FILL_VALUE, np.float32),
 }
-_RADIUS_VARIABLE = "Radius_of_Satellite_from_Center_of_Earth"
+# curryer vector field -> (product variable, _FillValue, dtype); the three columns stack on the
+# ``EUCLIDEAN_DIM`` dimension.
+_VECTOR_VARIABLES: dict[geometry.GeometryField, tuple[str, float, type]] = {
+    geometry.GeometryField.SC_POSITION_INERTIAL: ("Satellite_Position", _FILL_DISTANCE, np.float64),
+    geometry.GeometryField.SC_VELOCITY_INERTIAL: ("Satellite_Velocity", _FILL_VALUE, np.float64),
+}
+_EARTH_SUN_DISTANCE_ATTRIBUTE = "Earth_Sun_Distance_AU"
+_AZIMUTH_VARIABLE = "Azimuth"
 
 
 @dataclass
@@ -83,13 +118,7 @@ def prefetch_kernels(config: GeolocationKernelConfig) -> None:
     excessive load on the NAIF servers.
     """
     logger.info("Pre-fetching SPICE kernels to populate local cache...")
-    km = KernelManager(
-        temp_dir_base=config.temp_dir_base,
-        download_naif_url=config.download_naif_url,
-        use_test_naif_url=config.use_test_naif_url,
-        use_high_precision_earth=config.use_high_precision_earth,
-        cache_timeout_days=config.cache_timeout_days,
-    )
+    km = _kernel_manager_from_config(config)
     try:
         # Load NAIF generic kernels (downloads if missing)
         km.load_naif_kernels()
@@ -113,64 +142,228 @@ def prefetch_kernels(config: GeolocationKernelConfig) -> None:
         km.unload_all()
 
 
-def _apply_fill(values: np.ndarray, fill: np.floating, dtype: type) -> np.ndarray:
+def _kernel_manager_from_config(config: GeolocationKernelConfig) -> KernelManager:
+    """Build the ``KernelManager`` a :class:`GeolocationKernelConfig` describes."""
+    return KernelManager(
+        temp_dir_base=config.temp_dir_base,
+        download_naif_url=config.download_naif_url,
+        use_test_naif_url=config.use_test_naif_url,
+        use_high_precision_earth=config.use_high_precision_earth,
+        cache_timeout_days=config.cache_timeout_days,
+    )
+
+
+def _apply_fill(values: np.ndarray, fill: float, dtype: type) -> np.ndarray:
     """Replace SPICE coverage gaps (NaN) with the product ``_FillValue``."""
     return np.where(np.isfinite(values), values, fill).astype(dtype)
 
 
-def _granule_earth_sun_distance(distances: np.ndarray) -> float:
+def _validate_observer(observer: str, allowed: tuple[str, ...], role: str) -> None:
+    """Reject an observer frame that is not a known Libera frame for this role.
+
+    A typo'd frame already fails inside SPICE, but a *valid* frame used in the wrong role
+    (the WFOV camera as the spacecraft, say) would silently produce correct-looking geometry
+    for the wrong body. This turns that into an error at the call site.
+
+    Parameters
+    ----------
+    observer : str
+        Requested SPICE frame name.
+    allowed : tuple[str, ...]
+        Frame names valid for this role.
+    role : str
+        Human-readable role name, used in the error message.
+
+    Raises
+    ------
+    ValueError
+        If ``observer`` is not in ``allowed``.
+    """
+    if observer not in allowed:
+        raise ValueError(
+            f"Unsupported {role} observer {observer!r}; expected one of {', '.join(allowed)}. "
+            "Geometry for other frames is not supported by the L1B product definition."
+        )
+
+
+def _query_geometry(
+    observer: str,
+    u_gps_times: np.ndarray,
+    fields: tuple[geometry.GeometryField, ...],
+    require_coverage: bool,
+    coverage_fields: tuple[geometry.GeometryField, ...] = (),
+    **data_kwargs,
+) -> pd.DataFrame:
+    """
+    One curryer ``GeometryData`` query, surfacing SPICE failures as readable errors.
+
+    Extra keyword arguments (e.g. ``attitude_frame``) are forwarded to ``GeometryData``.
+
+    Parameters
+    ----------
+    observer : str
+        SPICE body name for the observer.
+    u_gps_times : np.ndarray
+        Query times in uGPS.
+    fields : tuple of GeometryField
+        Fields to compute for this observer.
+    require_coverage : bool
+        If True, raise when the coverage fields are entirely NaN -- the kernels do not cover
+        the granule at all (a misconfiguration).
+    coverage_fields : tuple of GeometryField, optional
+        Fields whose all-NaN state signals no coverage; defaults to every requested field. The
+        spacecraft observer restricts this to an ephemeris-derived field, since the subsolar
+        point and Earth-Sun distance are computed from the Sun ephemeris alone and stay finite
+        even when the spacecraft kernels miss the granule.
+
+    Returns
+    -------
+    pd.DataFrame
+        The requested fields' columns, indexed by uGPS.
+
+    Raises
+    ------
+    RuntimeError
+        If the curryer SPICE query fails outright (e.g. an unparsable time or a missing
+        kernel), or -- when ``require_coverage`` -- if it returns no coverage at all. Both
+        carry a parsed, user-facing description of the cause.
+    """
+    try:
+        result = geometry.GeometryData(observer, **data_kwargs).get_geometry(u_gps_times, fields=list(fields))
+    except sp.utils.exceptions.SpiceyError as err:
+        raise RuntimeError(f"curryer geometry query failed for {observer!r}: {spice_error_message(err)}") from err
+    if require_coverage:
+        coverage_columns = [column for field in (coverage_fields or fields) for column in field.columns]
+        if bool(result[coverage_columns].isna().to_numpy().all()):
+            raise RuntimeError(
+                f"curryer geometry returned no coverage for observer {observer!r} over the granule; "
+                "check that the SPICE kernels cover the requested times."
+            )
+    return result
+
+
+def calculate_spacecraft_geometry(
+    kernel_manager: KernelManager,
+    timestamps: np.ndarray,
+    spacecraft_observer: str = DEFAULT_SPACECRAFT_OBSERVER,
+) -> pd.DataFrame:
+    """
+    Compute the spacecraft-level geometry fields via curryer ``GeometryData``.
+
+    curryer's selective-compute registry queries each SPICE input once, vectorized, with
+    coverage gaps surfaced as NaN. The spacecraft observer yields the fields needing only its
+    ephemeris and body attitude: subsatellite and subsolar points, satellite radius, Earth-Sun
+    distance, inertial (J2000) position and velocity, and the Earth-fixed attitude quaternion.
+    None of them resolve through the camera's instrument frame, so the same call serves the
+    production and ``jpss_only`` modes.
+
+    Parameters
+    ----------
+    kernel_manager : KernelManager
+        Kernel manager with the spacecraft SPK and CK and the generic/static kernels furnished.
+    timestamps : np.ndarray
+        Camera frame times on the L1B output time grid, as ``datetime64[ns]``.
+    spacecraft_observer : str
+        SPICE frame for the spacecraft, one of :data:`SPACECRAFT_OBSERVERS`. Default
+        ``"JPSS4_SC"``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by uGPS; the curryer columns of every field in ``_SPACECRAFT_FIELDS``.
+
+    Raises
+    ------
+    ValueError
+        If ``spacecraft_observer`` is not a known Libera spacecraft frame.
+    RuntimeError
+        If the curryer SPICE query fails outright, or returns no coverage at all. Both carry a
+        parsed, user-facing description of the cause.
+    """
+    _validate_observer(spacecraft_observer, SPACECRAFT_OBSERVERS, "spacecraft")
+    kernel_manager.ensure_known_kernels_are_furnished()
+    u_gps_times = spicetime.adapt(pd.DatetimeIndex(timestamps), "iso")
+    # Spacecraft fields resolve in every mode, so all-NaN means the kernels miss the granule. The
+    # attitude quaternion is Earth-fixed (product convention); the inertial fields keep J2000.
+    return _query_geometry(
+        spacecraft_observer,
+        u_gps_times,
+        _SPACECRAFT_FIELDS,
+        require_coverage=True,
+        coverage_fields=(geometry.GeometryField.SUBSATELLITE,),
+        attitude_frame=spatial.EARTH_FRAME,
+    )
+
+
+def create_placeholder_spacecraft_geometry(n_samples: int) -> pd.DataFrame:
+    """
+    Placeholder spacecraft geometry for ``use_geo`` false mode.
+
+    Mirrors :func:`calculate_spacecraft_geometry`'s columns filled with the product fill values,
+    so the dataset assembly always reads a geometry DataFrame and never branches on ``None``.
+    Distance fields (radius, position) use -9999; everything else the product default -999.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of camera frames on the L1B output time grid.
+
+    Returns
+    -------
+    pd.DataFrame
+        One column per ``_SPACECRAFT_FIELDS`` output column, filled with the fill value.
+    """
+    default_fill = np.full(n_samples, _FILL_VALUE, dtype=np.float32)
+    distance_fill = np.full(n_samples, _FILL_DISTANCE, dtype=np.float64)
+    distance_columns = {
+        geometry.GeometryField.SC_RADIUS.columns[0],
+        *geometry.GeometryField.SC_POSITION_INERTIAL.columns,
+    }
+    data = {
+        column: (distance_fill if column in distance_columns else default_fill)
+        for field in _SPACECRAFT_FIELDS
+        for column in field.columns
+    }
+    return pd.DataFrame(data)
+
+
+def granule_earth_sun_distance(distances: np.ndarray) -> float:
     """
     Reduce the per-frame Earth-Sun distance to the single granule-level attribute.
 
     The distance moves by well under 1e-4 AU across a granule, so any covered frame
     represents the whole granule. The median is taken over the covered frames only, so a
     SPICE gap at a fixed index (e.g. the midpoint) cannot poison the attribute.
-    """
-    if not np.isfinite(distances).any():
-        return _GEO_FILL_DISTANCE
-    return float(np.nanmedian(distances))
-
-
-def calculate_spacecraft_geometry(
-    kernel_manager: KernelManager,
-    camera_times: pd.DatetimeIndex,
-    spacecraft_observer: str = _SPICE_BODY_SPACECRAFT,
-) -> pd.DataFrame:
-    """
-    Compute the spacecraft-level geometry fields via curryer ``GeometryData``.
-
-    These fields describe where the spacecraft and the Sun are, not where the camera
-    points, so they depend only on the spacecraft ephemeris (SPK) and Earth orientation
-    (PCK) -- never on a pointing CK or the camera's instrument frame. That is why a single
-    call serves both the production and ``jpss_only`` geolocation modes, and why the
-    per-pixel camera frame plays no part in it.
-
-    curryer's selective-compute registry queries each SPICE input exactly once, vectorized,
-    and surfaces coverage gaps as NaN.
 
     Parameters
     ----------
-    kernel_manager : KernelManager
-        Kernel manager with the spacecraft SPK and the generic/static kernels furnished.
-    camera_times : pd.DatetimeIndex
-        Camera frame times on the L1B output time grid.
-    spacecraft_observer : str, optional
-        SPICE body name for the spacecraft. Default ``"JPSS4_SC"``.
+    distances : np.ndarray
+        Per-frame Earth-Sun distance in AU, NaN where SPICE had no coverage.
 
     Returns
     -------
-    pd.DataFrame
-        Indexed by uGPS, with the curryer sub-point, satellite-radius, and Earth-Sun
-        distance columns.
+    float
+        Median Earth-Sun distance over the covered frames, in AU.
+
+    Raises
+    ------
+    RuntimeError
+        If no frame has a finite distance. The Sun ephemeris comes from the generic NAIF
+        kernels, so this means they are not furnished rather than a per-frame gap.
     """
-    kernel_manager.ensure_known_kernels_are_furnished()
+    if not np.isfinite(distances).any():
+        raise RuntimeError("Earth-Sun distance has no coverage over the granule; check the generic NAIF kernels.")
+    return float(np.nanmedian(distances))
 
-    u_gps_times = spicetime.adapt(pd.DatetimeIndex(camera_times), "iso")
 
-    return geometry.GeometryData(spacecraft_observer).get_geometry(
-        u_gps_times,
-        fields=["subsatellite", "subsolar", "sc_radius", "earth_sun_distance"],
-    )
+def _assign_spacecraft_geometry(ds: xr.Dataset, geometry_data: pd.DataFrame) -> xr.Dataset:
+    """Map the curryer geometry columns onto the product variables, filling coverage gaps."""
+    for column, (variable, fill, dtype) in _SCALAR_VARIABLES.items():
+        ds[variable] = (("camera_time",), _apply_fill(geometry_data[column].to_numpy(), fill, dtype))
+    for field, (variable, fill, dtype) in _VECTOR_VARIABLES.items():
+        vector = geometry_data[list(field.columns)].to_numpy()
+        ds[variable] = (("camera_time", "EUCLIDEAN_DIM"), _apply_fill(vector, fill, dtype))
+    return ds
 
 
 def add_spacecraft_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
@@ -179,8 +372,9 @@ def add_spacecraft_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernel
 
     Unlike the per-pixel geolocation, these fields are one value per camera frame, so they
     are computed eagerly on the client rather than through Dask ``map_blocks``: the arrays
-    are (N,), and a map_blocks round-trip would cost more than the calculation. Kernels are
-    furnished and unloaded within this call so the SPICE pool is left as it was found.
+    are (N,) or (N, 3), and a map_blocks round-trip would cost more than the calculation.
+    Kernels are furnished and unloaded within this call so the SPICE pool is left as it was
+    found.
 
     Parameters
     ----------
@@ -193,39 +387,34 @@ def add_spacecraft_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernel
     Returns
     -------
     xr.Dataset
-        The dataset with the sub-point and satellite-radius variables added, and the
-        granule-level ``Earth_Sun_Distance_AU`` attribute set.
+        The dataset with the sub-point, satellite radius, inertial position and velocity, and
+        attitude quaternion variables added, and the granule-level ``Earth_Sun_Distance_AU``
+        attribute set.
+
+    Raises
+    ------
+    ValueError
+        If ``ds`` has no ``camera_time`` coordinate or ``config`` names no kernel sources.
+    RuntimeError
+        If the curryer SPICE query fails or the kernels do not cover the granule at all
+        (see :func:`calculate_spacecraft_geometry`).
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
     if not config.dynamic_kernel_sources:
         raise ValueError("SPICE kernel sources are required to compute spacecraft geometry")
 
-    km = KernelManager(
-        temp_dir_base=config.temp_dir_base,
-        download_naif_url=config.download_naif_url,
-        use_test_naif_url=config.use_test_naif_url,
-        use_high_precision_earth=config.use_high_precision_earth,
-        cache_timeout_days=config.cache_timeout_days,
-    )
-
-    with km:
+    with _kernel_manager_from_config(config) as km:
         km.load_libera_dynamic_kernels(
             config.dynamic_kernel_sources,
             needs_naif_kernels=True,
             needs_static_kernels=True,
         )
-        fields = calculate_spacecraft_geometry(km, pd.DatetimeIndex(ds.camera_time.values))
+        geometry_data = calculate_spacecraft_geometry(km, ds.camera_time.values)
 
-    for column, variable in _SUBPOINT_VARIABLES.items():
-        ds[variable] = (("camera_time",), _apply_fill(fields[column].to_numpy(), _GEO_FILL_ANGLE, np.float32))
-
-    ds[_RADIUS_VARIABLE] = (
-        ("camera_time",),
-        _apply_fill(fields["spacecraft_radius"].to_numpy(), _GEO_FILL_RADIUS, np.float64),
-    )
-    ds.attrs["Earth_Sun_Distance_AU"] = _granule_earth_sun_distance(fields["earth_sun_distance"].to_numpy())
-
+    ds = _assign_spacecraft_geometry(ds, geometry_data)
+    (earth_sun_distance,) = geometry.GeometryField.EARTH_SUN_DISTANCE.columns
+    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = granule_earth_sun_distance(geometry_data[earth_sun_distance].to_numpy())
     return ds
 
 
@@ -237,16 +426,155 @@ def add_placeholder_spacecraft_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset
     declares these variables and the ``Earth_Sun_Distance_AU`` attribute, and the writer
     rejects a dataset that omits a declared field, so they must be present even unfilled.
     """
-    n_times = ds.sizes["camera_time"]
-
-    for variable in _SUBPOINT_VARIABLES.values():
-        ds[variable] = (("camera_time",), np.full(n_times, _GEO_FILL_ANGLE, dtype=np.float32))
-
-    ds[_RADIUS_VARIABLE] = (("camera_time",), np.full(n_times, _GEO_FILL_RADIUS, dtype=np.float64))
-    ds.attrs["Earth_Sun_Distance_AU"] = _GEO_FILL_DISTANCE
+    ds = _assign_spacecraft_geometry(ds, create_placeholder_spacecraft_geometry(ds.sizes["camera_time"]))
+    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = _FILL_EARTH_SUN_DISTANCE
 
     logger.info("use_geo is false: using placeholder spacecraft geometry.")
 
+    return ds
+
+
+def calculate_azimuth(
+    kernel_manager: KernelManager,
+    timestamps: np.ndarray,
+    fill_value: float = _FILL_VALUE,
+) -> np.ndarray:
+    """
+    Azimuth motor encoder angle at each camera frame, from the azimuth CK.
+
+    The angle is the third 1-2-3 Euler angle of the ``LIBERA_BASE_COORD -> LIBERA_AZ_COORD``
+    rotation (:data:`AZIMUTH_ENCODER_FRAMES`), wrapped to ``[0, 360)`` -- the convention
+    ``libera_rad`` uses for its ``Azimuth``, validated against the ``libera_utils`` tier-0
+    kernel tests. It is the corrected encoder reading the CK was built from, relative to the
+    instrument base, not a pointing angle in the spacecraft or orbital frame. curryer's
+    ``frame_to_frame_euler`` does the per-sample frame transform and factoring.
+
+    Every per-sample SPICE failure -- a CK coverage gap, but equally a CK or frame kernel that
+    is not furnished -- comes back as NaN under ``allow_nans`` and is written as ``fill_value``;
+    a granule with no covered frame is logged as a warning, not raised. The caller furnishes the
+    kernels (:func:`add_azimuth_to_dataset` loads the static set, which carries the Libera frame
+    kernel, alongside the CK), and the granule-level coverage check is tracked under
+    LIBSDC-788, matching ``libera_rad``.
+
+    Parameters
+    ----------
+    kernel_manager : KernelManager
+        Kernel manager with the azimuth CK and the Libera frame kernel furnished.
+    timestamps : np.ndarray
+        Camera frame times on the L1B output time grid, as ``datetime64[ns]``.
+    fill_value : float
+        Product fill value for frames the CK does not cover.
+
+    Returns
+    -------
+    np.ndarray
+        Azimuth in degrees, shape ``(N,)``, dtype float32, in ``[0, 360)`` or ``fill_value``.
+    """
+    kernel_manager.ensure_known_kernels_are_furnished()
+
+    # TODO[LIBSDC-788]: CK coverage check via KernelManager; an uncovered granule currently fills.
+
+    u_gps_times = spicetime.adapt(pd.DatetimeIndex(timestamps), "iso")
+    base_frame, azimuth_frame = AZIMUTH_ENCODER_FRAMES
+    euler = spatial.frame_to_frame_euler(base_frame, azimuth_frame, u_gps_times, sequence=(1, 2, 3), allow_nans=True)
+
+    azimuth = np.mod(euler["euler3"].to_numpy(), 360.0)
+    if np.isnan(azimuth).all():
+        logger.warning(
+            "Azimuth CK returned no coverage over %d camera frame(s); Azimuth is written as fill.", azimuth.size
+        )
+    return _apply_fill(azimuth, fill_value, np.float32)
+
+
+def create_placeholder_azimuth(n_samples: int, fill_value: float = _FILL_VALUE) -> np.ndarray:
+    """
+    Placeholder motor azimuth for ``use_geo`` false mode.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of camera frames on the L1B output time grid.
+    fill_value : float
+        Product fill value for ``Azimuth``.
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(N,)``, dtype float32, filled with ``fill_value``.
+    """
+    return np.full(n_samples, fill_value, dtype=np.float32)
+
+
+def create_jpss_only_azimuth(n_samples: int) -> np.ndarray:
+    """
+    Reference motor azimuth for ``jpss_only`` mode (no azimuth CK).
+
+    Returns 0 degrees per operational convention when the motor kernel is unavailable, the
+    same zero-azimuth approximation the ``LIBERA_BASE`` per-pixel geolocation makes.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of camera frames on the L1B output time grid.
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(N,)``, dtype float32, all zeros.
+    """
+    return np.zeros(n_samples, dtype=np.float32)
+
+
+def add_azimuth_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
+    """
+    Compute the motor azimuth from the azimuth CK and add it to the dataset as ``Azimuth``.
+
+    One value per camera frame, computed eagerly on the client like the spacecraft geometry.
+    Kernels are furnished and unloaded within this call.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        The input dataset containing a ``camera_time`` coordinate.
+    config : GeolocationKernelConfig
+        Configuration for SPICE kernel management; its sources must include the azimuth CK.
+
+    Returns
+    -------
+    xr.Dataset
+        The dataset with the ``Azimuth`` variable added.
+
+    Raises
+    ------
+    ValueError
+        If ``ds`` has no ``camera_time`` coordinate or ``config`` names no kernel sources.
+    """
+    if "camera_time" not in ds.coords:
+        raise ValueError("Dataset must have 'camera_time' coordinate.")
+    if not config.dynamic_kernel_sources:
+        raise ValueError("SPICE kernel sources are required to compute the motor azimuth")
+
+    with _kernel_manager_from_config(config) as km:
+        km.load_libera_dynamic_kernels(
+            config.dynamic_kernel_sources,
+            needs_naif_kernels=True,
+            needs_static_kernels=True,
+        )
+        azimuth = calculate_azimuth(km, ds.camera_time.values)
+
+    ds[_AZIMUTH_VARIABLE] = (("camera_time",), azimuth)
+    return ds
+
+
+def add_placeholder_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
+    """Add the product fill-value ``Azimuth`` for ``use_geo`` false mode."""
+    ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_placeholder_azimuth(ds.sizes["camera_time"]))
+    return ds
+
+
+def add_jpss_only_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
+    """Add the zero-degree reference ``Azimuth`` for ``jpss_only`` mode."""
+    ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_jpss_only_azimuth(ds.sizes["camera_time"]))
     return ds
 
 
@@ -446,13 +774,7 @@ def calculate_chunk_geolocation(
         Array of shape (T, Y, X, 3) containing [Latitude, Longitude, Altitude] in float32.
     """
     # Instantiate fresh manager for this process
-    km = KernelManager(
-        temp_dir_base=config.temp_dir_base,
-        download_naif_url=config.download_naif_url,
-        use_test_naif_url=config.use_test_naif_url,
-        use_high_precision_earth=config.use_high_precision_earth,
-        cache_timeout_days=config.cache_timeout_days,
-    )
+    km = _kernel_manager_from_config(config)
 
     # MEMORY OPTIMIZATION: Load pointing vectors inside the worker using mmap.
     # This prevents redundant serialization of the 48MB array from the client to every task.
