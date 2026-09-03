@@ -74,6 +74,8 @@ def test_variable_declares_no_fill_value(variable):
     """Missing values are written as NaN, so these variables declare no ``_FillValue``."""
     definition = yaml.safe_load(product_config_path.read_text())
     assert "_FillValue" not in definition["variables"][variable].get("attributes", {})
+
+
 def test_surface_angles_are_declared_per_pixel_with_rad_conventions():
     """The surface-angle set matches libera_rad: degrees, -999 fill, azimuths on [0, 360], zeniths on [0, 180]."""
     definition = yaml.safe_load(product_config_path.read_text())["variables"]

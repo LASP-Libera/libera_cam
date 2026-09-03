@@ -127,6 +127,7 @@ class TestL1bManifestUseGeoConfiguration:
             for variable in _CK_AZIMUTH_VARIABLES:
                 assert np.all(dataset[variable].values == 0), variable
             assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
-            assert np.all(dataset["Solar_Zenith_Surface"].values == 0)
-            assert np.all(dataset["Viewing_Zenith_Surface"].values == 0)
-            assert np.all(dataset["Relative_Azimuth_Surface"].values == 0)
+            # Surface angles have no producer yet and are written as their product fill.
+            assert np.all(dataset["Solar_Zenith_Surface"].values == np.float32(-999))
+            assert np.all(dataset["Viewing_Zenith_Surface"].values == np.float32(-999))
+            assert np.all(dataset["Relative_Azimuth_Surface"].values == np.float32(-999))
