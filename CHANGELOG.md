@@ -11,17 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Populate the spacecraft-level geometry fields from `curryer.compute.geometry.GeometryData`, following the `libera_rad` implementation: `Subsatellite_Latitude`/`_Longitude`/`_Colatitude`, `Subsolar_Latitude`/`_Longitude`/`_Colatitude`, `Radius_of_Satellite_from_Center_of_Earth`, and the granule attribute `Earth_Sun_Distance_AU`, plus the new `Satellite_Position` and `Satellite_Velocity` (J2000, on `EUCLIDEAN_DIM`) and `Satellite_Attitude_Q0..Q3` (ECEF). Fields are requested as `GeometryField` members with a single spacecraft-observer query that serves production and `jpss_only` alike; the observer is validated against the Libera FK (`SPACECRAFT_OBSERVERS`).
 - Add `Azimuth`, the motor encoder angle from the AZROT-CK (third 1-2-3 Euler angle of `LIBERA_BASE_COORD -> LIBERA_AZ_COORD`, degrees in `[0, 360)`) via `curryer.compute.spatial.frame_to_frame_euler`, matching `libera_rad`. `jpss_only` writes 0 degrees; `use_geo: false` writes `-999`. The FSW commanded azimuth stays in the product as `Azimuth_FSW_Metadata`, a pass-through in every mode. Elevation is not reported: the camera is mounted on the azimuth stage and ELSCAN-CK is not a camera L1B input. Per-frame CK gaps write `-999`; a granule the azimuth CK covers at no frame raises `ValueError` instead of writing an all-fill `Azimuth`.
+- Geolocate every pixel of every frame through curryer's `spatial.pixel_geometry` (`geolocate_frame`): `Latitude`, `Longitude`, `Altitude` and the five surface angles (`Solar_Zenith_Surface`, `Viewing_Zenith_Surface`, `Solar_Azimuth_Surface_WRT_North`, `Viewing_Azimuth_Surface_WRT_North`, `Relative_Azimuth_Surface`) are now produced per pixel with the product fills, and the per-pixel `Geolocation_Quality_Flag` (uint16; curryer `SpatialQualityFlags` in bits 0-14, bit 15 = geolocation not run) is added to the product definition. Every pixel that hits the ellipsoid is published; `valid_pixel_mask` no longer gates geolocation. Azimuths that round to 360.0 in float32 are wrapped to 0.
 - Add the per-pixel `Viewing_Azimuth_Surface_WRT_North` and `Solar_Azimuth_Surface_WRT_North` to the product definition, matching the `libera_rad` surface-angle set, so `Relative_Azimuth_Surface` can be derived from them (curryer's CERES convention).
 - Add a SPICE-versus-FSW azimuth diagnostic (`tests/helpers/azimuth_diagnostics.py`, shortest-arc statistics) with an integration test on the DITL data, adapted from the comparison logging in PR #16 (Matt Watwood). Analysis only; the header value is not a production reference.
 
 ### Changed
 
 - Require `lasp-curryer >= 0.5.3` for `GeometryData.get_geometry(require_coverage=)`.
+- Run the per-pixel geometry in Dask tasks of `LIBERA_CAM_GEO_CHUNK_SIZE` frames (default 10), decoupled from the decompression chunk, one `geolocate_frame` call per frame. The kernels are furnished once on the client before the tasks start and a granule no frame of which SPICE covers is rejected; uncovered frames are written as fill and flagged. The worker takes `(T, K)` exposure epochs and a per-pixel epoch index so the two exposures can be geolocated at their own times once known (`LIBSDC-816`); production passes `K = 1`.
+- Pin `lasp-curryer` to the `spatial-pixel-geometry` branch (lasp/curryer#188, version 0.5.2) until it is released.
 
 ### Fixed
 
 - Raise a parsed, user-facing `RuntimeError` when the curryer SPICE query fails, and a `ValueError` when any SPICE input the spacecraft fields read (spacecraft ephemeris, attitude, Sun ephemeris) covers no frame of the granule, through curryer's `require_coverage`, instead of writing a fully filled field. Per-frame coverage gaps map onto each variable's `_FillValue`; `use_geo: false` writes the fill values through `create_placeholder_spacecraft_geometry`.
-- Write the not-yet-computed per-pixel fields (`Terrain_Corrected_*`, the surface zenith and azimuth angles) as their product `_FillValue` instead of zeros; the placeholder list in `packaging.py` shrinks as producers land (`LIBSDC-808`, `LIBSDC-814`).
+- Write the not-yet-computed per-pixel fields (`Terrain_Corrected_*`) as their product `_FillValue` instead of zeros; the placeholder list in `packaging.py` shrinks as producers land (`LIBSDC-814`).
+
+### Removed
+
+- Remove `calculate_all_pixel_lat_lon_altitude`, `calculate_chunk_geolocation`, the static/dynamic `pixel_mask` options and `prefetch_kernels`; packaging no longer casts or relabels the geolocation variables.
 
 ## [0.3.0] - 2026-10-06
 
