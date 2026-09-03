@@ -159,7 +159,7 @@ def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
     # Dask calls this to determine output array type (numpy vs cupy etc)
     # Output shape should be (Time, Y, X, 3)
     # The chunk size in the test is (2, 2, 2)
-    mock_calc_chunk.return_value = np.zeros((2, 2, 2, 3), dtype=np.float64)
+    mock_calc_chunk.return_value = np.zeros((2, 2, 2, 3), dtype=np.float32)
 
     # Call function
     ds_out = add_geolocation_to_dataset(ds, config)
@@ -232,7 +232,7 @@ def test_add_placeholder_geolocation_to_dataset():
 @patch("libera_cam.geolocation.np.load")
 @patch("libera_cam.geolocation.KernelManager")
 def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all):
-    """Worker output is (T, Y, X, 3) even when internal calc uses (T, X, Y)."""
+    """Worker output is (T, Y, X, 3) in float32 even when internal calc uses (T, X, Y)."""
     from libera_cam.geolocation import calculate_chunk_geolocation
 
     mock_km = MagicMock()
@@ -242,7 +242,7 @@ def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, m
     mock_load.return_value = np.zeros((15, 3))
 
     n_times = 2
-    lat = np.arange(n_times * 3 * 5, dtype=np.float64).reshape(n_times, 3, 5)
+    lat = np.arange(n_times * 3 * 5, dtype=np.float32).reshape(n_times, 3, 5)
     lon = lat + 100
     alt = lat + 200
     mock_calc_all.return_value = {"latitude": lat, "longitude": lon, "altitude": alt}
@@ -251,6 +251,7 @@ def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, m
     result = calculate_chunk_geolocation(camera_time, GeolocationKernelConfig())
 
     assert result.shape == (2, 3, 5, 3)
+    assert result.dtype == np.float32
     assert result[0, 2, 1, 0] == lat[0, 2, 1]
 
 

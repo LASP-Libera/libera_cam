@@ -298,9 +298,9 @@ def calculate_all_pixel_lat_lon_altitude(
     dict[str, np.ndarray]
         A dictionary containing the following keys, each mapped to a NumPy array
         with shape `(N_times, PIXEL_COUNT_Y, PIXEL_COUNT_X)`:
-        - "latitude" (np.float64): Latitude values in degrees north.
-        - "longitude" (np.float64): Longitude values in degrees east.
-        - "altitude" (np.float64): Altitude values in meters.
+        - "latitude" (np.float32): Latitude values in degrees north.
+        - "longitude" (np.float32): Longitude values in degrees east.
+        - "altitude" (np.float32): Altitude values in meters.
     """
     kernel_manager.ensure_known_kernels_are_furnished()
 
@@ -324,10 +324,10 @@ def calculate_all_pixel_lat_lon_altitude(
 
     n_pixels = pointing_vectors.shape[0]
 
-    # Initialize full arrays with NaN
-    full_lat = np.full((n_times, n_pixels), np.nan, dtype=np.float64)
-    full_lon = np.full((n_times, n_pixels), np.nan, dtype=np.float64)
-    full_alt = np.full((n_times, n_pixels), np.nan, dtype=np.float64)
+    # Initialize full arrays with NaN in float32 to reduce memory footprint
+    full_lat = np.full((n_times, n_pixels), np.nan, dtype=np.float32)
+    full_lon = np.full((n_times, n_pixels), np.nan, dtype=np.float32)
+    full_alt = np.full((n_times, n_pixels), np.nan, dtype=np.float32)
 
     # Detect Mask Type if not provided
     if is_dynamic_mask is None:
@@ -443,7 +443,7 @@ def calculate_chunk_geolocation(
     Returns
     -------
     np.ndarray
-        Array of shape (T, Y, X, 3) containing [Latitude, Longitude, Altitude].
+        Array of shape (T, Y, X, 3) containing [Latitude, Longitude, Altitude] in float32.
     """
     # Instantiate fresh manager for this process
     km = KernelManager(
@@ -472,7 +472,7 @@ def calculate_chunk_geolocation(
         spice_body = _SPICE_BODY_JPSS_ONLY if config.jpss_only else _SPICE_BODY_PRODUCTION
 
         # Perform calculation
-        # Result is a dict of arrays of shape (T, Y, X)
+        # Result is a dict of arrays of shape (T, Y, X) in float32
         result_dict = calculate_all_pixel_lat_lon_altitude(
             km,
             times,
@@ -482,16 +482,12 @@ def calculate_chunk_geolocation(
             spice_body=spice_body,
         )
 
-        # Stack into (T, Y, X, 3)
-        # Order: Latitude, Longitude, Altitude
-        stacked_result = np.stack(
-            [
-                result_dict["latitude"],
-                result_dict["longitude"],
-                result_dict["altitude"],
-            ],
-            axis=-1,
-        )
+        n_times = len(times)
+        # Preallocate single contiguous (T, Y, X, 3) float32 array directly to avoid np.stack duplicate copy
+        stacked_result = np.empty((n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X, 3), dtype=np.float32)
+        stacked_result[..., 0] = result_dict["latitude"]
+        stacked_result[..., 1] = result_dict["longitude"]
+        stacked_result[..., 2] = result_dict["altitude"]
 
     return stacked_result
 
@@ -601,7 +597,7 @@ def add_geolocation_to_dataset(
         calculate_chunk_geolocation,
         times_da,
         *map_blocks_args,
-        dtype=np.float64,
+        dtype=np.float32,
         chunks=output_chunks,
         new_axis=new_axes_indices,
     )
@@ -610,15 +606,15 @@ def add_geolocation_to_dataset(
     valid_geo = da.isfinite(geo_data[..., 0])
     ds["Latitude"] = (
         ("camera_time", "y", "x"),
-        da.where(valid_geo, geo_data[..., 0], _GEO_FILL_LAT_LON).astype(np.float32),
+        da.where(valid_geo, geo_data[..., 0], _GEO_FILL_LAT_LON),
     )
     ds["Longitude"] = (
         ("camera_time", "y", "x"),
-        da.where(valid_geo, geo_data[..., 1], _GEO_FILL_LAT_LON).astype(np.float32),
+        da.where(valid_geo, geo_data[..., 1], _GEO_FILL_LAT_LON),
     )
     ds["Altitude"] = (
         ("camera_time", "y", "x"),
-        da.where(valid_geo, geo_data[..., 2], _GEO_FILL_ALT).astype(np.float32),
+        da.where(valid_geo, geo_data[..., 2], _GEO_FILL_ALT),
     )
 
     ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}

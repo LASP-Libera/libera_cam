@@ -62,6 +62,22 @@ def test_ditl_l1a_file_path(test_data_path):
 
 
 @pytest.fixture
+def make_extended_l1a(test_ditl_l1a_file_path):
+    """Return a callable to scale or slice the DITL L1A fixture to a new NetCDF path.
+
+    Usage: ``make_extended_l1a(output_path, copies=2)`` writes a scaled file and returns
+    ``output_path``. Negative ``copies`` selects a percentage slice of the time range.
+    """
+    from tests.helpers.l1a_scaling import make_extended_l1a as _make_extended_l1a
+
+    def _build(output_path: Path, copies: int = 2) -> Path:
+        _make_extended_l1a(test_ditl_l1a_file_path, output_path, copies=copies)
+        return output_path
+
+    return _build
+
+
+@pytest.fixture
 def local_data_path():
     """Returns the Path to the calibration_data directory"""
     return Path(sys.modules[__name__.split(".")[0]].__file__).parent.parent / "libera_cam" / "ground_calibration_data"

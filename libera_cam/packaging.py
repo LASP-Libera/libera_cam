@@ -42,6 +42,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "n_images_discarded_gap",
         "n_unexpected_eop",
         "n_images_decoded",
+        "n_images_failed_parse",
     ):
         dataset.attrs.pop(attr_name, None)
 
