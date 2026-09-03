@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "0.2.6"
+version = "0.2.7"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar" },
@@ -40,6 +40,9 @@ classifiers = [
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
     "libera-utils >= 5.8.0,<5.10.3",
+    # Imported directly by geolocation.py. 0.5.0 is the first release with the GeometryField
+    # enum and the SPICE error classifier the spacecraft-level geometry fields rely on.
+    "lasp-curryer>=0.5.0,<1.0",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images
