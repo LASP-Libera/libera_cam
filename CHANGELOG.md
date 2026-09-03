@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Azimuth_Motor_Position_SPICE`, the motor encoder angle from the AZROT-CK (third 1-2-3 Euler angle of `LIBERA_BASE_COORD -> LIBERA_AZ_COORD`, degrees in `[0, 360)`) at `CAMERA_TIME`, via `curryer.compute.spatial.frame_to_frame_euler`, matching `libera_rad`, and the same angle at each integration: `Azimuth_Motor_Position_SPICE_Int_Time_1` at `CAMERA_TIME` and `Azimuth_Motor_Position_SPICE_Int_Time_2` at `CAMERA_TIME` + 350 ms. `jpss_only` writes 0 degrees and `use_geo: false` writes NaN. A granule the azimuth CK covers at no frame raises `ValueError`. Elevation is not reported: the camera is mounted on the azimuth stage and ELSCAN-CK is not a camera L1B input.
 - Frames the kernels do not cover are written as NaN in the per-frame variables, and a warning gives their count for each variable. With `use_geo: false` the per-frame variables and `Earth_Sun_Distance_AU` are NaN.
 - Add the global attribute `Geolocation_Mode`: `production`, `jpss_only` or `use_geo_false`.
+- Add the per-pixel `Viewing_Azimuth_Surface_WRT_North` and `Solar_Azimuth_Surface_WRT_North` to the product definition, matching the `libera_rad` surface-angle set, so `Relative_Azimuth_Surface` can be derived from them (curryer's CERES convention).
+- Add a SPICE-versus-FSW azimuth diagnostic (`tests/helpers/azimuth_diagnostics.py`, shortest-arc statistics) with an integration test on the DITL data, adapted from the comparison logging in PR #16 (Matt Watwood). Analysis only; the header value is not a production reference.
 
 ### Changed
 
@@ -26,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Metadata clean up:** Remove the WFOV_HEADER_PARSE_VALID from libera_cam as that field is never useful in L1A files
+- Write the not-yet-computed per-pixel fields (`Terrain_Corrected_*`, the surface zenith and azimuth angles) as their product `_FillValue` instead of zeros; the placeholder list in `packaging.py` shrinks as producers land (`LIBSDC-808`, `LIBSDC-814`).
 
 ## [0.3.0] - 2026-10-06
 
