@@ -7,8 +7,46 @@ import logging
 import dask.array as da
 import numpy as np
 import xarray as xr
+from libera_utils.io.product_definition import LiberaDataProductDefinition
+
+from libera_cam.config import product_config_path
 
 logger = logging.getLogger(__name__)
+
+# Per-pixel product variables with no producer yet. Each is written as its product ``_FillValue``
+# so the file says "not computed" rather than carrying zeros that look like data. Remove a name
+# here when processing starts producing it; the strict writer then raises if it goes missing.
+# TODO[LIBSDC-808]: surface angles. TODO[LIBSDC-814]: terrain-corrected coordinates.
+_UNIMPLEMENTED_PIXEL_VARIABLES: tuple[str, ...] = (
+    "Terrain_Corrected_Latitude",
+    "Terrain_Corrected_Longitude",
+    "Terrain_Corrected_Altitude",
+    "Solar_Zenith_Surface",
+    "Relative_Azimuth_Surface",
+    "Viewing_Zenith_Surface",
+    "Viewing_Azimuth_Surface_WRT_North",
+    "Solar_Azimuth_Surface_WRT_North",
+)
+
+
+def _placeholder_fill_values(names: tuple[str, ...]) -> dict[str, float]:
+    """Product ``_FillValue`` for each named variable, read from the bundled product definition.
+
+    Raises
+    ------
+    ValueError
+        If a name is not a product variable or declares no ``_FillValue``.
+    """
+    definition = LiberaDataProductDefinition.from_yaml(product_config_path)
+    fills = {}
+    for name in names:
+        if name not in definition.variables:
+            raise ValueError(f"{name} is not a variable in {product_config_path.name}")
+        attributes = definition.variables[name].attributes
+        if "_FillValue" not in attributes:
+            raise ValueError(f"{name} declares no _FillValue to use as its placeholder")
+        fills[name] = attributes["_FillValue"]
+    return fills
 
 
 def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
@@ -35,7 +73,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     ------
     ValueError
         If the dataset lacks the FSW header ``azimuth_angle`` that ``read_l1a_cam_data`` always
-        provides, or lacks ``Radiance``.
+        provides, lacks ``Radiance``, or a placeholder variable is missing from the product
+        definition or declares no ``_FillValue``.
     """
     logger.info("Packaging L1B product for conformance.")
 
@@ -78,27 +117,16 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     # dimensions (EUCLIDEAN_DIM on the spacecraft state vectors) keep their trailing position.
     dataset = dataset.transpose("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y", ...)
 
-    # 3. Create Placeholders for unused fields (Lazy)
-    # Using da.zeros_like to match the chunking of Radiance
-    # Note: Radiance is now (Time, X, Y), so placeholder will match this shape.
+    # 3. Placeholders for the per-pixel fields without a producer (lazy, chunked like Radiance,
+    # which is now (Time, X, Y)). Each carries its product _FillValue.
     if "Radiance" not in dataset:
         raise ValueError("Dataset must contain 'Radiance' variable before packaging.")
 
-    pixel_placeholder = da.zeros_like(dataset["Radiance"].data, dtype=np.float32)
+    radiance = dataset["Radiance"].data
     dims_3d = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
-
-    placeholders = {
-        "Terrain_Corrected_Latitude": (dims_3d, pixel_placeholder),
-        "Terrain_Corrected_Longitude": (dims_3d, pixel_placeholder),
-        "Terrain_Corrected_Altitude": (dims_3d, pixel_placeholder),
-        "Solar_Zenith_Surface": (dims_3d, pixel_placeholder),
-        "Relative_Azimuth_Surface": (dims_3d, pixel_placeholder),
-        "Viewing_Zenith_Surface": (dims_3d, pixel_placeholder),
-        "Camera_Mask": (dims_3d, pixel_placeholder.astype(np.uint8)),
-    }
-
-    for name, (dims, data) in placeholders.items():
-        dataset[name] = (dims, data)
+    for name, fill in _placeholder_fill_values(_UNIMPLEMENTED_PIXEL_VARIABLES).items():
+        dataset[name] = (dims_3d, da.full_like(radiance, fill, dtype=np.float32))
+    dataset["Camera_Mask"] = (dims_3d, da.zeros_like(radiance, dtype=np.uint8))
 
     # 4. Ensure Types (Cast if necessary)
     # Using explicit casting to float32/uint types

@@ -5,8 +5,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import yaml
 
-from libera_cam.packaging import package_l1b_product
+from libera_cam.config import product_config_path
+from libera_cam.packaging import _UNIMPLEMENTED_PIXEL_VARIABLES, _placeholder_fill_values, package_l1b_product
 
 
 def _processing_dataset() -> xr.Dataset:
@@ -46,6 +48,29 @@ def test_package_keeps_ck_azimuth_over_header_azimuth():
     np.testing.assert_array_equal(packaged["Azimuth"].values, np.array([12.5, 13.0], dtype=np.float32))
     assert packaged["Azimuth"].dtype == np.float32
     assert "azimuth_angle" not in packaged
+
+
+def test_placeholders_carry_product_fill_values():
+    """Fields without a producer are written as their ``_FillValue``, never as zeros that look like data."""
+    packaged = package_l1b_product(_processing_dataset())
+    definition = yaml.safe_load(product_config_path.read_text())["variables"]
+
+    for name in _UNIMPLEMENTED_PIXEL_VARIABLES:
+        fill = definition[name]["attributes"]["_FillValue"]
+        placeholder = packaged[name]
+        assert placeholder.dims == ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+        assert placeholder.dtype == np.float32
+        assert placeholder.data.chunks == packaged["Radiance"].data.chunks
+        np.testing.assert_array_equal(placeholder.values, np.float32(fill))
+    assert packaged["Terrain_Corrected_Altitude"].values.flat[0] == np.float32(-9999.0)
+    assert packaged["Camera_Mask"].dtype == np.uint8
+
+
+def test_placeholder_fill_lookup_rejects_unknown_or_unfilled_variables():
+    with pytest.raises(ValueError, match="not a variable"):
+        _placeholder_fill_values(("Not_A_Field",))
+    with pytest.raises(ValueError, match="no _FillValue"):
+        _placeholder_fill_values(("Camera_Mask",))
 
 
 def test_package_requires_header_azimuth():
