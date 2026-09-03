@@ -16,16 +16,11 @@ logger = logging.getLogger(__name__)
 # Per-pixel product variables with no producer yet. Each is written as its product ``_FillValue``
 # so the file says "not computed" rather than carrying zeros that look like data. Remove a name
 # here when processing starts producing it; the strict writer then raises if it goes missing.
-# TODO[LIBSDC-808]: surface angles. TODO[LIBSDC-814]: terrain-corrected coordinates.
+# TODO[LIBSDC-814]: terrain-corrected coordinates.
 _UNIMPLEMENTED_PIXEL_VARIABLES: tuple[str, ...] = (
     "Terrain_Corrected_Latitude",
     "Terrain_Corrected_Longitude",
     "Terrain_Corrected_Altitude",
-    "Solar_Zenith_Surface",
-    "Relative_Azimuth_Surface",
-    "Viewing_Zenith_Surface",
-    "Viewing_Azimuth_Surface_WRT_North",
-    "Solar_Azimuth_Surface_WRT_North",
 )
 
 
@@ -129,7 +124,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     dataset["Camera_Mask"] = (dims_3d, da.zeros_like(radiance, dtype=np.uint8))
 
     # 4. Ensure Types (Cast if necessary)
-    # Using explicit casting to float32/uint types
+    # Using explicit casting to float32/uint types. The geolocation variables arrive typed from
+    # their producer and carry no attributes; the writer applies the product definition's.
     type_map = {
         "Azimuth": np.float32,
         "Radiometer_Operational_Mode": np.uint16,
@@ -137,24 +133,11 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "Pixel_Counts": np.uint16,
         "Integration_Time": np.uint8,
         "Quality_Flag": np.uint32,
-        # Geolocation fields
-        "Latitude": np.float32,
-        "Longitude": np.float32,
-        "Altitude": np.float32,
     }
 
     for var_name, dtype in type_map.items():
         if var_name in dataset:
             if dataset[var_name].dtype != dtype:
                 dataset[var_name] = dataset[var_name].astype(dtype)
-
-    # Normalize geolocation long_name metadata to match the product definition.
-    if "Latitude" in dataset:
-        dataset["Latitude"].attrs["long_name"] = "Geodetic latitude. Coordinate Reference System WGS84"
-    if "Longitude" in dataset:
-        dataset["Longitude"].attrs["long_name"] = "Longitude. Coordinate Reference System WGS84"
-    if "Altitude" in dataset:
-        dataset["Altitude"].attrs["long_name"] = "Height above the WGS84 ellipsoid. EPSG:4979"
-        dataset["Altitude"].attrs["units"] = "meters"
 
     return dataset

@@ -75,6 +75,8 @@ class TestL1bManifestUseGeoConfiguration:
             assert np.all(dataset["Latitude"].values == np.float32(-999))
             assert np.all(dataset["Longitude"].values == np.float32(-999))
             assert np.all(dataset["Altitude"].values == np.float32(-9999))
+            assert np.all(dataset["Solar_Zenith_Surface"].values == np.float32(-999))
+            assert np.all(dataset["Geolocation_Quality_Flag"].values == np.uint16(0x8000))
             assert np.all(dataset["Azimuth"].values == np.float32(-999))
             assert np.any(np.isfinite(dataset["Radiance"].values))
 
@@ -113,7 +115,16 @@ class TestL1bManifestUseGeoConfiguration:
                 )
 
             assert np.all(dataset["Azimuth"].values == 0)
-            # Surface angles have no producer yet and are written as their product fill.
-            assert np.all(dataset["Solar_Zenith_Surface"].values == np.float32(-999))
-            assert np.all(dataset["Viewing_Zenith_Surface"].values == np.float32(-999))
-            assert np.all(dataset["Relative_Azimuth_Surface"].values == np.float32(-999))
+            # The surface angles are produced with lat/lon: finite where the pixel hits the
+            # ellipsoid, fill elsewhere, and the flag word is 0 exactly there.
+            flags = dataset["Geolocation_Quality_Flag"].values
+            assert flags.dtype == np.uint16
+            assert np.array_equal(flags == 0, valid)
+            for name in (
+                "Solar_Zenith_Surface",
+                "Viewing_Zenith_Surface",
+                "Relative_Azimuth_Surface",
+                "Viewing_Azimuth_Surface_WRT_North",
+                "Solar_Azimuth_Surface_WRT_North",
+            ):
+                assert np.array_equal(dataset[name].values != np.float32(-999), valid), name

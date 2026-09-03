@@ -92,7 +92,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     -----
     Manifest ``configuration.use_geo`` controls geolocation behavior. When
     ``use_geo`` is false, SPICE kernel files are skipped during input read and
-    placeholder lat/lon/alt values are written. Omitting the key defaults to
+    the per-pixel geolocation is written as fill values. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
     frame, Azimuth 0°) and cannot be combined with ``use_geo: false``.
@@ -338,8 +338,9 @@ def process_l1a_to_l1b(
     This function coordinates the core L1A to L1B camera processing steps:
     - Parse the input L1A camera data into a working dataset
     - Convert DN to radiance (lazy when backed by Dask arrays)
-    - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
-      or placeholders when ``use_geo`` is false
+    - Add the per-pixel geolocation and surface angles (lazy Dask tasks of
+      ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames), JPSS-only LIBERA_BASE geolocation, or
+      placeholders when ``use_geo`` is false
     - Add the spacecraft-level geometry (sub-points, satellite radius, inertial position and
       velocity, attitude quaternion, Earth-Sun distance), or placeholders when ``use_geo`` is
       false
@@ -403,9 +404,7 @@ def process_l1a_to_l1b(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
-        cam_dataset = add_jpss_only_geolocation_to_dataset(
-            cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask
-        )
+        cam_dataset = add_jpss_only_geolocation_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_jpss_only_azimuth_to_dataset(cam_dataset)
     else:
@@ -415,7 +414,7 @@ def process_l1a_to_l1b(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
-        cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
+        cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_azimuth_to_dataset(cam_dataset, geo_config)
 

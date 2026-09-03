@@ -216,6 +216,19 @@ variables:
       units: degrees
       valid_range: [0, 360]
       _FillValue: -999
+  Geolocation_Quality_Flag:
+    dtype: uint16
+    dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
+    attributes:
+      long_name: Bit flags from the per-pixel geolocation; 0 where the pixel geometry is good
+      value_meaning: >-
+        Bits 0-14 are curryer SpatialQualityFlags from the ellipsoid intersection and the surface
+        angles. Those this product sets: [b8] no SPICE data for the frame epoch (every field written
+        as fill), accompanied by the SPICE error class [b0] no result, [b1] ephemeris missing,
+        [b2] attitude missing, [b3] invalid location or [b4] unclassified SPICE error; [b9] the pixel
+        line of sight misses the ellipsoid (fill); [b13] Sun position unavailable (solar angles
+        fill); [b14] a surface angle was not finite (fill). [b15] geolocation was not run (use_geo
+        false).
   Azimuth:
     dtype: float32
     dimensions: ["CAMERA_TIME"]

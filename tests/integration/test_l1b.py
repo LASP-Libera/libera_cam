@@ -128,6 +128,33 @@ def test_subsatellite_colatitude_complements_latitude(l1b_product_dataset):
     np.testing.assert_allclose(colatitude, 90.0 - latitude, atol=1e-4)
 
 
+def test_per_pixel_geometry_is_computed_for_every_frame(l1b_product_dataset):
+    """Every frame has on-Earth pixels with finite geolocation and surface angles, flagged 0 exactly there.
+
+    xarray decodes the written ``_FillValue`` to NaN on read; the flag variable declares no fill and
+    keeps its uint16 dtype.
+    """
+    flags = l1b_product_dataset["Geolocation_Quality_Flag"]
+    assert flags.dims == ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+    assert flags.dtype == np.uint16
+
+    on_earth = flags.to_numpy() == 0
+    # The square detector inscribes the circular field of view; corner pixels point past the limb.
+    on_earth_fraction = on_earth.mean(axis=(1, 2))
+    assert np.all((on_earth_fraction > 0.70) & (on_earth_fraction < 0.85)), on_earth_fraction
+    for name in (
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Solar_Zenith_Surface",
+        "Viewing_Zenith_Surface",
+        "Relative_Azimuth_Surface",
+        "Viewing_Azimuth_Surface_WRT_North",
+        "Solar_Azimuth_Surface_WRT_North",
+    ):
+        assert np.array_equal(np.isfinite(l1b_product_dataset[name].to_numpy()), on_earth), name
+
+
 def test_azimuth_is_covered_motor_encoder_angle(l1b_product_dataset):
     """Azimuth is one covered float32 per frame from the AZROT-CK, in [0, 360).
 

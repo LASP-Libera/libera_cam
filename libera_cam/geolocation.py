@@ -6,6 +6,7 @@ geolocation calculations for the Libera camera.
 """
 
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,11 +20,14 @@ from cloudpathlib import S3Path
 from curryer import spicetime
 from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
+from curryer.compute.constants import SpatialQualityFlags
 from curryer.spicierpy.ext import spice_error_message
+from dask import delayed
 from libera_utils.libera_spice.kernel_manager import KernelManager
 
 from libera_cam.constants import (
     AZIMUTH_ENCODER_FRAMES,
+    DEFAULT_GEO_CHUNK_SIZE,
     DEFAULT_SPACECRAFT_OBSERVER,
     GROUND_CAL_PIXEL_MAPPING,
     PIXEL_COUNT_X,
@@ -107,41 +111,6 @@ class GeolocationKernelConfig:
     cache_timeout_days: int = 7
     dynamic_kernel_sources: Sequence[str | Path | S3Path] | None = None
     jpss_only: bool = False
-
-
-def prefetch_kernels(config: GeolocationKernelConfig) -> None:
-    """
-    Downloads/Generates kernels on the client to populate the cache safely.
-
-    This function is designed to run serially on the client process before
-    scattering work to Dask workers. This prevents race conditions where
-    multiple workers attempt to download/write the same kernel files simultaneously,
-    which can lead to file corruption (as KernelFileCache lacks locking) and
-    excessive load on the NAIF servers.
-    """
-    logger.info("Pre-fetching SPICE kernels to populate local cache...")
-    km = _kernel_manager_from_config(config)
-    try:
-        # Load NAIF generic kernels (downloads if missing)
-        km.load_naif_kernels()
-        # Load Static kernels (generates if missing)
-        km.load_static_kernels()
-        # Load dynamic kernels (materialize through KernelFileCache) when provided.
-        # This is intentionally done client-side to avoid multi-worker cache races.
-        if config.dynamic_kernel_sources:
-            km.load_libera_dynamic_kernels(
-                config.dynamic_kernel_sources,
-                needs_naif_kernels=True,
-                needs_static_kernels=True,
-            )
-        logger.info("Kernel cache populated successfully.")
-    except Exception as e:
-        logger.warning(f"Kernel pre-fetch failed: {e}. Workers will attempt download independently.")
-    finally:
-        # Crucial: Unload kernels to leave the client process clean.
-        # We don't want to pollute the global SPICE pool if the client
-        # later does other SPICE operations.
-        km.unload_all()
 
 
 def _kernel_manager_from_config(config: GeolocationKernelConfig) -> KernelManager:
@@ -736,441 +705,261 @@ def geolocate_frame(
     return FrameGeometry(quality_flags=flags.astype(np.uint16).reshape(frame_shape), **fields)
 
 
-def calculate_all_pixel_lat_lon_altitude(
-    kernel_manager: KernelManager,
-    image_times: list[xr.DataArray] | pd.DatetimeIndex,
-    pointing_vectors: np.ndarray | None = None,
-    pixel_mask: np.ndarray | None = None,
-    is_dynamic_mask: bool | None = None,
-    spice_body: str = _SPICE_BODY_PRODUCTION,
-) -> dict[str, np.ndarray]:
+_GEOLOCATION_FLAG_VARIABLE = "Geolocation_Quality_Flag"
+# Bit 15 of Geolocation_Quality_Flag: geolocation was not run (use_geo false). Bits 0-14 are curryer's
+# SpatialQualityFlags, which reach 0x4000, and 0 reads as good geometry, so "not computed" needs a bit
+# of its own.
+_GEO_NOT_COMPUTED_FLAG = np.uint16(1 << 15)
+# FrameGeometry field -> (product variable, dtype) for every field the geolocation path writes, in
+# FrameGeometry field order (the worker returns its blocks in this order).
+_FIELD_VARIABLES: dict[str, tuple[str, type]] = {
+    name: (
+        (_GEOLOCATION_FLAG_VARIABLE, np.uint16)
+        if name == "quality_flags"
+        else (_PIXEL_VARIABLES[name][1], _PIXEL_VARIABLES[name][3])
+    )
+    for name in FrameGeometry._fields
+}
+_BORESIGHT = np.array([[0.0, 0.0, 1.0]])
+
+
+def _geometry_chunk_size() -> int:
+    """Frames per per-pixel geometry task, from ``LIBERA_CAM_GEO_CHUNK_SIZE``.
+
+    Raises
+    ------
+    ValueError
+        If the value is below 1.
     """
-    Calculate latitude, longitude, and altitude for all pixels at given image times.
-
-    This function internally handles adapting time formats and reshaping outputs.
-    For optimized performance in distributed environments, consider using `add_geolocation_to_dataset`.
-
-    Parameters
-    ----------
-    kernel_manager: KernelManager
-        An instance of KernelManager with kernels already loaded.
-    image_times: pd.DatetimeIndex or list[xr.DataArray]
-        A set of image times for which to calculate geolocation data.
-        If a list of `xr.DataArray` is provided, each `DataArray` is expected to contain a single
-        `np.datetime64` value, and these will be converted to a `pd.DatetimeIndex`.
-    pointing_vectors: np.ndarray, optional
-        Pre-loaded 2D array of pointing vectors with shape `(N_pixels, 3)`.
-        If None, they are loaded from the package data `wfov_pixel_vectors.npy`
-        and reshaped to `(PIXEL_COUNT_X * PIXEL_COUNT_Y, 3)`.
-    pixel_mask: np.ndarray, optional
-        Boolean mask where True indicates pixels to calculate.
-        Can be:
-        - 2D (Static): `(PIXEL_COUNT_X, PIXEL_COUNT_Y)` or flattened to `(PIXEL_COUNT_X * PIXEL_COUNT_Y,)`.
-        - 3D (Dynamic): `(N_times, PIXEL_COUNT_X, PIXEL_COUNT_Y)` or flattened to
-          `(N_times, PIXEL_COUNT_X * PIXEL_COUNT_Y,)`.
-        Pixels corresponding to `False` in the mask will have their geolocation filled with NaN.
-        If `None`, geolocation is calculated for all pixels.
-    is_dynamic_mask: bool, optional
-        If True, treats `pixel_mask` as a per-timestamp mask.
-        If False, treats `pixel_mask` as a static mask applied to all timestamps.
-        If None (default), attempts to detect based on dimensions.
-    spice_body: str, optional
-        NAIF body name for ellipsoid intersection. Production uses
-        ``LIBERA_WFOV_CAM``; JPSS-only uses ``LIBERA_BASE`` (azimuth CK absent,
-        camera vectors applied at zero azimuth).
-
-    Returns
-    -------
-    dict[str, np.ndarray]
-        A dictionary containing the following keys, each mapped to a NumPy array
-        with shape `(N_times, PIXEL_COUNT_Y, PIXEL_COUNT_X)`:
-        - "latitude" (np.float32): Latitude values in degrees north.
-        - "longitude" (np.float32): Longitude values in degrees east.
-        - "altitude" (np.float32): Altitude values in meters.
-    """
-    kernel_manager.ensure_known_kernels_are_furnished()
-
-    # TODO[LIBSDC-788]: CK coverage check via KernelManager before geolocation.
-
-    # Could use more error handling here to support more options of inputs for time range
-    if isinstance(image_times, list):
-        image_strings = [str(time.values) for time in image_times]
-        image_times = pd.to_datetime(image_strings)
-    elif isinstance(image_times, xr.DataArray):
-        image_times = pd.to_datetime(image_times.values)
-
-    # Ensure times are flat
-    times_np = pd.DatetimeIndex(image_times).values.ravel()
-    n_times = len(times_np)
-
-    if pointing_vectors is None:
-        # Pixel pointing vectors for the Libera WFOV camera
-        pointing_vectors = np.load(GROUND_CAL_PIXEL_MAPPING, mmap_mode="r")
-        pointing_vectors = pointing_vectors.reshape(-1, 3)
-
-    n_pixels = pointing_vectors.shape[0]
-
-    # Initialize full arrays with NaN in float32 to reduce memory footprint
-    full_lat = np.full((n_times, n_pixels), np.nan, dtype=np.float32)
-    full_lon = np.full((n_times, n_pixels), np.nan, dtype=np.float32)
-    full_alt = np.full((n_times, n_pixels), np.nan, dtype=np.float32)
-
-    # Detect Mask Type if not provided
-    if is_dynamic_mask is None:
-        if pixel_mask is not None:
-            if pixel_mask.ndim == 3 or (pixel_mask.ndim == 2 and pixel_mask.shape[0] == n_times):
-                is_dynamic_mask = True
-            else:
-                is_dynamic_mask = False
-        else:
-            is_dynamic_mask = False
-
-    # Normalize pixel_mask shape
-    if pixel_mask is not None:
-        if is_dynamic_mask:
-            pixel_mask = pixel_mask.reshape(n_times, -1)
-        else:
-            pixel_mask = pixel_mask.ravel()
-
-    # --- Path 1: Dynamic Mask (Loop over time) ---
-    if is_dynamic_mask:
-        logger.debug("Using dynamic (per-timestamp) geolocation masking.")
-
-        # SPICE is not thread-safe within a single process.
-        # We process frames serially within this worker task.
-        # Parallelization is achieved at the chunk level by Dask.
-        unified_gps_times = spicetime.adapt(image_times, "iso")
-        unified_gps_times = np.asanyarray(unified_gps_times).ravel()
-
-        for i in range(n_times):
-            mask_t = pixel_mask[i]
-            active_vectors = pointing_vectors[mask_t]
-
-            if active_vectors.size > 0:
-                cam_pix_lla, _, _ = spatial.compute_ellipsoid_intersection(
-                    np.array([unified_gps_times[i]]),
-                    sp.obj.Body(spice_body, frame=True),
-                    custom_pointing_vectors=active_vectors,
-                    give_geodetic_output=True,
-                    give_lat_lon_in_degrees=True,
-                )
-
-                full_lat[i, mask_t] = cam_pix_lla["lat"].values
-                full_lon[i, mask_t] = cam_pix_lla["lon"].values
-                full_alt[i, mask_t] = cam_pix_lla["alt"].values
-
-    # --- Path 2: Static Mask or No Mask (Vectorized) ---
-    else:
-        logger.debug("Using static (vectorized) geolocation masking.")
-        if pixel_mask is not None:
-            active_vectors = pointing_vectors[pixel_mask]
-        else:
-            active_vectors = pointing_vectors
-
-        if active_vectors.size > 0:
-            unified_gps_times = spicetime.adapt(image_times, "iso")
-            unified_gps_times = np.asanyarray(unified_gps_times).ravel()
-
-            cam_pix_lla, _, _ = spatial.compute_ellipsoid_intersection(
-                unified_gps_times,
-                sp.obj.Body(spice_body, frame=True),
-                custom_pointing_vectors=active_vectors,
-                give_geodetic_output=True,
-                give_lat_lon_in_degrees=True,
-            )
-
-            # Reshape results to (n_times, n_active_pixels)
-            computed_lat = cam_pix_lla["lat"].values.reshape(n_times, -1)
-            computed_lon = cam_pix_lla["lon"].values.reshape(n_times, -1)
-            computed_alt = cam_pix_lla["alt"].values.reshape(n_times, -1)
-
-            if pixel_mask is not None:
-                # Scatter back to full array
-                full_lat[:, pixel_mask] = computed_lat
-                full_lon[:, pixel_mask] = computed_lon
-                full_alt[:, pixel_mask] = computed_alt
-            else:
-                full_lat = computed_lat
-                full_lon = computed_lon
-                full_alt = computed_alt
-
-    return_dict = {
-        "latitude": full_lat.reshape(n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X),
-        "longitude": full_lon.reshape(n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X),
-        "altitude": full_alt.reshape(n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X),
-    }
-
-    return return_dict
+    chunk_size = int(os.getenv("LIBERA_CAM_GEO_CHUNK_SIZE", DEFAULT_GEO_CHUNK_SIZE))
+    if chunk_size < 1:
+        raise ValueError(f"LIBERA_CAM_GEO_CHUNK_SIZE must be >= 1, got {chunk_size}")
+    return chunk_size
 
 
-def calculate_chunk_geolocation(
-    camera_time: np.ndarray,
+def _geometry_spice_body(config: GeolocationKernelConfig) -> str:
+    """The body whose frame the pixel vectors are intersected in: the camera, or its base in ``jpss_only`` mode."""
+    return _SPICE_BODY_JPSS_ONLY if config.jpss_only else _SPICE_BODY_PRODUCTION
+
+
+def calculate_chunk_geometry(
+    exposure_times: np.ndarray,
+    exposure_index: np.ndarray | None,
     config: GeolocationKernelConfig,
-    pixel_mask: np.ndarray | None = None,
-    is_dynamic_mask: bool | None = None,
-) -> np.ndarray:
+) -> tuple[np.ndarray, ...]:
     """
-    Worker function to compute geolocation for a chunk of times.
+    Worker task: per-pixel geometry of a chunk of camera frames.
 
-    This function instantiates a local KernelManager, loads kernels, computes
-    geolocation, and then rigorously cleans up (unloads kernels).
+    Furnishes the kernels in a fresh ``KernelManager``, converts the epochs to GPS microseconds
+    and calls :func:`geolocate_frame` once per frame into preallocated ``(T, Y, X)`` arrays.
+    Frames are serial within a task: CSPICE is not thread-safe, and curryer's float64
+    intermediates for one full frame already run to about 1.5 GB, so a whole-chunk call would
+    multiply that by ``T``. Parallelism is across tasks.
 
     Parameters
     ----------
-    camera_time : np.ndarray
-        Array of camera times (datetime64[ns]) for this chunk.
+    exposure_times : np.ndarray
+        ``(T, K)`` exposure epochs as ``datetime64[ns]``, ``K`` per frame. Production passes
+        ``K = 1``, the frame's ``camera_time``; the per-exposure epochs arrive with LIBSDC-816.
+    exposure_index : np.ndarray or None
+        ``(T, Y, X)`` integer index into each frame's ``K`` epochs, or None when ``K == 1``.
     config : GeolocationKernelConfig
-        Configuration for initializing the KernelManager.
-    pixel_mask : np.ndarray, optional
-        Boolean mask to skip calculation for invalid pixels.
-    is_dynamic_mask : bool, optional
-        Whether the mask is dynamic or static.
+        Kernel sources to furnish; ``jpss_only`` selects the ``LIBERA_BASE`` body.
 
     Returns
     -------
-    np.ndarray
-        Array of shape (T, Y, X, 3) containing [Latitude, Longitude, Altitude] in float32.
+    tuple of np.ndarray
+        One ``(T, Y, X)`` array per :class:`FrameGeometry` field, in field order: the float32
+        fields with product fills, then the uint16 ``quality_flags``.
+
+    Raises
+    ------
+    ValueError
+        If ``exposure_times`` is not 2-D, or ``exposure_index`` is given with a shape other than
+        ``(T, Y, X)``. The per-frame epoch, index and vector checks are :func:`geolocate_frame`'s.
     """
-    # Instantiate fresh manager for this process
-    km = _kernel_manager_from_config(config)
+    times = np.asarray(exposure_times)
+    if times.ndim != 2:
+        raise ValueError(f"exposure_times must be (T, K) epochs, got shape {times.shape}")
+    n_frames, n_epochs = times.shape
+    frame_shape = (PIXEL_COUNT_Y, PIXEL_COUNT_X)
+    if exposure_index is not None and exposure_index.shape != (n_frames, *frame_shape):
+        raise ValueError(f"exposure_index must be shaped {(n_frames, *frame_shape)}, got {exposure_index.shape}")
 
-    # MEMORY OPTIMIZATION: Load pointing vectors inside the worker using mmap.
-    # This prevents redundant serialization of the 48MB array from the client to every task.
-    pointing_vectors = np.load(GROUND_CAL_PIXEL_MAPPING, mmap_mode="r")
-    pointing_vectors = pointing_vectors.reshape(-1, 3)
+    # Read through mmap on the worker rather than shipped from the client with every task.
+    pointing_vectors = np.load(GROUND_CAL_PIXEL_MAPPING, mmap_mode="r").reshape(-1, 3)
+    outputs = tuple(np.empty((n_frames, *frame_shape), dtype=dtype) for _, dtype in _FIELD_VARIABLES.values())
+    spice_body = _geometry_spice_body(config)
+    with _kernel_manager_from_config(config) as km:
+        km.load_libera_dynamic_kernels(
+            config.dynamic_kernel_sources,
+            needs_naif_kernels=True,
+            needs_static_kernels=True,
+        )
+        ugps = np.asarray(spicetime.adapt(pd.DatetimeIndex(times.ravel()), "iso")).reshape(n_frames, n_epochs)
+        for i in range(n_frames):
+            frame = geolocate_frame(
+                ugps[i],
+                None if exposure_index is None else exposure_index[i],
+                spice_body,
+                pointing_vectors,
+                frame_shape=frame_shape,
+            )
+            for output, values in zip(outputs, frame, strict=True):
+                output[i] = values
+    return outputs
 
-    # Use context manager for automatic cleanup of static kernels and unloading
-    with km:
-        # Load dynamic kernels if specified
-        if config.dynamic_kernel_sources:
-            km.load_libera_dynamic_kernels(config.dynamic_kernel_sources)
 
-        # Convert numpy datetime64 array to DatetimeIndex for the calculation function
-        flat_camera_time = np.asarray(camera_time).ravel()
-        times = pd.DatetimeIndex(flat_camera_time)
+def _require_frame_coverage(config: GeolocationKernelConfig, timestamps: np.ndarray, spice_body: str) -> None:
+    """
+    Furnish the kernels once on the client and reject a granule of which no frame is covered.
 
-        spice_body = _SPICE_BODY_JPSS_ONLY if config.jpss_only else _SPICE_BODY_PRODUCTION
+    Loading here materializes every kernel into the libera_utils cache serially before the
+    workers start; ``KernelFileCache`` has no lock, so concurrent tasks fetching the same file
+    could corrupt it. Coverage is then probed along the body's +Z axis (the camera boresight in
+    production) at every frame: an epoch SPICE cannot resolve flags every pixel
+    ``CALC_ELLIPS_INSUFF_DATA`` whatever its vector, so one pixel per frame tells. Uncovered
+    frames inside a covered granule are the workers' business (fill and flag); a granule with no
+    covered frame means the kernels miss it altogether.
 
-        # Perform calculation
-        # Result is a dict of arrays of shape (T, Y, X) in float32
-        result_dict = calculate_all_pixel_lat_lon_altitude(
-            km,
-            times,
-            pointing_vectors,
-            pixel_mask=pixel_mask,
-            is_dynamic_mask=is_dynamic_mask,
-            spice_body=spice_body,
+    Raises
+    ------
+    RuntimeError
+        If no frame is covered.
+    """
+    with _kernel_manager_from_config(config) as km:
+        km.load_libera_dynamic_kernels(
+            config.dynamic_kernel_sources,
+            needs_naif_kernels=True,
+            needs_static_kernels=True,
+        )
+        ugps = np.asarray(spicetime.adapt(pd.DatetimeIndex(timestamps), "iso"))
+        probe = spatial.pixel_geometry(ugps, spice_body, _BORESIGHT, allow_nans=True)
+
+    uncovered = (probe.quality_flags[:, 0] & int(SpatialQualityFlags.CALC_ELLIPS_INSUFF_DATA)) != 0
+    if uncovered.all():
+        raise RuntimeError(
+            f"SPICE kernels cover none of the {uncovered.size} camera frame(s) for {spice_body!r}; "
+            "check that the manifest kernels span the granule."
+        )
+    if uncovered.any():
+        logger.warning(
+            "%d of %d camera frame(s) have no SPICE coverage for %r; they are written as fill with the "
+            "CALC_ELLIPS_INSUFF_DATA flag.",
+            int(uncovered.sum()),
+            uncovered.size,
+            spice_body,
         )
 
-        n_times = len(times)
-        # Preallocate single contiguous (T, Y, X, 3) float32 array directly to avoid np.stack duplicate copy
-        stacked_result = np.empty((n_times, PIXEL_COUNT_Y, PIXEL_COUNT_X, 3), dtype=np.float32)
-        stacked_result[..., 0] = result_dict["latitude"]
-        stacked_result[..., 1] = result_dict["longitude"]
-        stacked_result[..., 2] = result_dict["altitude"]
 
-    return stacked_result
-
-
-def add_geolocation_to_dataset(
-    ds: xr.Dataset,
-    config: GeolocationKernelConfig,
-    pixel_mask: np.ndarray | da.Array | xr.DataArray | None = None,
-    is_dynamic_mask: bool | None = None,
-) -> xr.Dataset:
+def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
     """
-    Lazily compute geolocation data and add it to the dataset.
+    Lazily compute the per-pixel geometry of every frame and add it to the dataset.
 
-    Uses Dask map_blocks to parallelize computation over the 'camera_time' dimension.
+    Every pixel of every frame is geolocated at its own epoch through :func:`geolocate_frame`;
+    nothing is masked, subsampled or interpolated. The work is split into tasks of
+    ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames along ``camera_time``, independent of the
+    decompression chunking; each task returns one ``(T, Y, X)`` block per field and the blocks
+    are concatenated into lazy arrays under the product variable names. The kernels are
+    furnished once on the client first, which populates the kernel cache ahead of the workers
+    and rejects a granule the kernels do not cover at all.
 
     Parameters
     ----------
     ds : xr.Dataset
-        The input dataset containing 'camera_time' coordinate.
+        Dataset with a ``camera_time`` coordinate (``datetime64[ns]``) and ``(camera_time, y, x)``
+        image dimensions.
     config : GeolocationKernelConfig
-        Configuration for SPICE kernel management.
-    pixel_mask : Union[np.ndarray, da.Array, xr.DataArray, None], optional
-        Boolean mask where False indicates pixels to skip (fill with NaN).
-        Can be:
-        - 2D (Static): (2048, 2048) np.ndarray or da.Array
-        - 3D (Dynamic): (Time, 2048, 2048) da.Array or xr.DataArray matching ds.camera_time
-        If None, computes all pixels.
-    is_dynamic_mask : bool, optional
-        Force treatment of pixel_mask as dynamic (Time, Y, X) or static (Y, X).
-        If None, automatically detects based on dimensions.
+        Kernel sources (required) and ``jpss_only`` (``LIBERA_BASE`` body: the camera vectors
+        at zero azimuth, no azimuth CK).
 
     Returns
     -------
     xr.Dataset
-        The dataset with added 'latitude', 'longitude', 'altitude' variables.
+        The dataset with the eight float32 per-pixel fields (``Latitude``, ``Longitude``,
+        ``Altitude`` and the five surface angles) and the uint16 ``Geolocation_Quality_Flag``
+        added as lazy ``(camera_time, y, x)`` arrays.
+
+    Raises
+    ------
+    ValueError
+        If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources, or
+        ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1.
+    RuntimeError
+        If the kernels cover none of the frames.
+
+    Notes
+    -----
+    Each frame is geolocated at one epoch, its ``camera_time``. The worker already takes
+    ``(T, K)`` epochs and a per-pixel ``(T, Y, X)`` index, so the two exposures of a frame get
+    their own epochs once their timing is known. TODO[LIBSDC-816]
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
+    if not config.dynamic_kernel_sources:
+        raise ValueError("SPICE kernel sources are required for per-pixel geolocation")
+    chunk_size = _geometry_chunk_size()
 
-    # 1. Safe Pre-fetch (Client Side)
-    # Ensures kernel cache is populated serially to avoid race conditions on workers
-    prefetch_kernels(config)
+    timestamps = ds.camera_time.values
+    _require_frame_coverage(config, timestamps, _geometry_spice_body(config))
 
-    # 2. Determine Time Chunks
-    # We want to align with image_data chunks if possible for efficiency
-    if "image_data" in ds and isinstance(ds.image_data.data, da.Array):
-        # image_data chunks: (time_chunks, y_chunks, x_chunks)
-        time_chunks_tuple = ds.image_data.chunks[0]
-    else:
-        # Fallback: Chunk size of 1 frame (safe default for SPICE)
-        n_times = ds.sizes["camera_time"]
-        time_chunks_tuple = (1,) * n_times
+    n_frames = timestamps.size
+    exposure_times = timestamps[:, None]
+    frame_shape = (PIXEL_COUNT_Y, PIXEL_COUNT_X)
+    chunk_geometry = delayed(calculate_chunk_geometry, nout=len(_FIELD_VARIABLES), pure=False)
+    blocks: dict[str, list[da.Array]] = {name: [] for name in _FIELD_VARIABLES}
+    for start in range(0, n_frames, chunk_size):
+        stop = min(start + chunk_size, n_frames)
+        outputs = chunk_geometry(exposure_times[start:stop], None, config)
+        for (name, (_, dtype)), output in zip(_FIELD_VARIABLES.items(), outputs, strict=True):
+            blocks[name].append(da.from_delayed(output, shape=(stop - start, *frame_shape), dtype=dtype))
+    for name, (variable, _) in _FIELD_VARIABLES.items():
+        ds[variable] = (("camera_time", "y", "x"), da.concatenate(blocks[name], axis=0))
 
-    # 3. Wrap Time in Dask Array
-    # This drives the map_blocks iteration
-    times_da = da.from_array(ds.camera_time.values, chunks=(time_chunks_tuple,))
-
-    # 4. Handle Pixel Mask (Static vs Dynamic)
-    # Note: We no longer load pointing_vectors here. They are loaded in the workers.
-    map_blocks_args = [config]
-
-    # Determine new axes for map_blocks
-    # Default: Input is 1D (Time), Output is 4D (Time, Y, X, 3) -> Add axes 1, 2, 3
-    new_axes_indices = [1, 2, 3]
-
-    if pixel_mask is not None:
-        if isinstance(pixel_mask, xr.DataArray):
-            pixel_mask_da = pixel_mask.data
-        elif isinstance(pixel_mask, da.Array):
-            pixel_mask_da = pixel_mask
-        else:
-            # Wrap numpy array in dask array, but don't chunk time dimension (it's static)
-            pixel_mask_da = da.from_array(pixel_mask, chunks=pixel_mask.shape)
-
-        # Detect mask type if not specified
-        if is_dynamic_mask is None:
-            is_dynamic_mask = pixel_mask_da.ndim == 3
-
-        # Handle Alignment
-        if is_dynamic_mask:
-            # Ensure time chunks match exactly
-            pixel_mask_da = pixel_mask_da.rechunk({0: time_chunks_tuple})
-            map_blocks_args.append(pixel_mask_da)
-
-            # If input is 1D (Time), Output is 4D (Time, Y, X, 3) -> Add axes 1, 2, 3
-            # Dask aligns 1D and 3D arrays by right-broadcasting.
-            # We want Time (Dim 0) to align with Time (Dim 0).
-            # So we must reshape times_da to 3D: (Time, 1, 1).
-            times_da = times_da[:, None, None]
-            new_axes_indices = [3]  # Only adding the component axis
-        else:
-            # Static mask, pass as constant (arg) or compute and pass
-            map_blocks_args.append(pixel_mask_da.compute())
-    else:
-        map_blocks_args.append(None)
-
-    map_blocks_args.append(is_dynamic_mask)
-
-    # 5. Map Blocks over Time
-    # Input chunk: (Time_Chunk,) or (Time_Chunk, 1, 1)
-    # Output chunk: (Time_Chunk, Y, X, 3)
-
-    # Explicitly format chunks as tuple of tuples for all dimensions
-    output_chunks = (time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,), (3,))
-
-    geo_data = da.map_blocks(
-        calculate_chunk_geolocation,
-        times_da,
-        *map_blocks_args,
-        dtype=np.float32,
-        chunks=output_chunks,
-        new_axis=new_axes_indices,
-    )
-
-    # 7. Assign variables to Dataset (apply product fill values for off-Earth / uncomputed pixels)
-    valid_geo = da.isfinite(geo_data[..., 0])
-    ds["Latitude"] = (
-        ("camera_time", "y", "x"),
-        da.where(valid_geo, geo_data[..., 0], _GEO_FILL_LAT_LON),
-    )
-    ds["Longitude"] = (
-        ("camera_time", "y", "x"),
-        da.where(valid_geo, geo_data[..., 1], _GEO_FILL_LAT_LON),
-    )
-    ds["Altitude"] = (
-        ("camera_time", "y", "x"),
-        da.where(valid_geo, geo_data[..., 2], _GEO_FILL_ALT),
-    )
-
-    ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
-    ds["Longitude"].attrs = {"units": "degrees_east", "long_name": "Pixel Longitude"}
-    ds["Altitude"].attrs = {"units": "meters", "long_name": "Pixel Altitude"}
-
+    logger.info("Per-pixel geometry scheduled for %d frame(s) in tasks of %d.", n_frames, chunk_size)
     return ds
 
 
-def add_jpss_only_geolocation_to_dataset(
-    ds: xr.Dataset,
-    config: GeolocationKernelConfig,
-    pixel_mask: np.ndarray | da.Array | xr.DataArray | None = None,
-    is_dynamic_mask: bool | None = None,
-) -> xr.Dataset:
-    """
-    Lazily compute JPSS-only per-pixel geolocation and add it to the dataset.
-
-    Uses the same per-pixel vector pipeline as production, but intersects against
-    ``LIBERA_BASE`` (zero-azimuth approximation) with JPSS-only dynamic kernels.
-    """
-    return add_geolocation_to_dataset(
-        ds,
-        replace(config, jpss_only=True),
-        pixel_mask=pixel_mask,
-        is_dynamic_mask=is_dynamic_mask,
-    )
+def add_jpss_only_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
+    """Per-pixel geometry against ``LIBERA_BASE`` (camera vectors at zero azimuth) from the JPSS kernels alone."""
+    return add_geolocation_to_dataset(ds, replace(config, jpss_only=True))
 
 
 def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     """
-    Add product fill-value placeholder geolocation variables to the dataset.
+    Add the per-pixel geolocation variables as fill values, for ``use_geo`` false mode.
 
-    Used in ground-data mode when SPICE kernels are unavailable (e.g. during
-    ground testing where spacecraft attitude kernels do not exist). Adds
-    Latitude, Longitude, and Altitude variables filled with product
-    ``_FillValue`` (-999 / -9999) to indicate that geolocation was not computed.
+    Ground-data processing has no SPICE kernels, but the writer rejects a dataset missing a
+    declared variable, so every field of the geolocation path is written as its fill: the float
+    fields as their product ``_FillValue`` and ``Geolocation_Quality_Flag`` with bit 15 set
+    (geolocation not run), since 0 would read as good geometry. The arrays are lazy and share
+    ``image_data``'s time chunks.
 
     Parameters
     ----------
     ds : xr.Dataset
-        The input dataset containing 'camera_time', 'y', and 'x' dimensions.
+        The input dataset containing ``camera_time``, ``y`` and ``x`` dimensions.
 
     Returns
     -------
     xr.Dataset
-        The dataset with fill-value Latitude, Longitude, and Altitude variables
-        matching the chunking of the existing image data.
+        The dataset with the eight float32 fields and the uint16 flag variable added.
+
+    Raises
+    ------
+    ValueError
+        If ``ds`` has no Dask-backed ``image_data`` to take the time chunks from.
     """
-    if "image_data" in ds and isinstance(ds["image_data"].data, da.Array):
-        time_chunks_tuple = ds["image_data"].chunks[0]
-    else:
-        n_times = ds.sizes["camera_time"]
-        time_chunks_tuple = (1,) * n_times
+    if "image_data" not in ds or not isinstance(ds["image_data"].data, da.Array):
+        raise ValueError("Placeholder geolocation takes its time chunks from a Dask-backed 'image_data' variable.")
+    shape = (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X)
+    chunks = (ds["image_data"].chunks[0], (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,))
+    fills = {name: fill for name, (_, _, fill, _) in _PIXEL_VARIABLES.items()} | {
+        "quality_flags": _GEO_NOT_COMPUTED_FLAG
+    }
+    for name, (variable, dtype) in _FIELD_VARIABLES.items():
+        ds[variable] = (("camera_time", "y", "x"), da.full(shape, fills[name], dtype=dtype, chunks=chunks))
 
-    placeholder_lat_lon = da.full(
-        (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X),
-        fill_value=_GEO_FILL_LAT_LON,
-        dtype=np.float32,
-        chunks=(time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,)),
-    )
-    placeholder_alt = da.full(
-        (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X),
-        fill_value=_GEO_FILL_ALT,
-        dtype=np.float32,
-        chunks=(time_chunks_tuple, (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,)),
-    )
-
-    ds["Latitude"] = (("camera_time", "y", "x"), placeholder_lat_lon)
-    ds["Longitude"] = (("camera_time", "y", "x"), placeholder_lat_lon)
-    ds["Altitude"] = (("camera_time", "y", "x"), placeholder_alt)
-
-    ds["Latitude"].attrs = {"units": "degrees_north", "long_name": "Pixel Latitude"}
-    ds["Longitude"].attrs = {"units": "degrees_east", "long_name": "Pixel Longitude"}
-    ds["Altitude"].attrs = {"units": "meters", "long_name": "Pixel Altitude"}
-
-    logger.info("use_geo is false: using placeholder geolocation (Latitude, Longitude, Altitude).")
+    logger.info("use_geo is false: per-pixel geolocation written as fill values.")
 
     return ds
