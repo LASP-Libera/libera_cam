@@ -2,8 +2,12 @@
 
 ## 0.2.8
 
+- Geolocate every pixel of every frame through curryer's `spatial.pixel_geometry` (`geolocate_frame`): `Latitude`, `Longitude`, `Altitude` and the five surface angles (`Solar_Zenith_Surface`, `Viewing_Zenith_Surface`, `Solar_Azimuth_Surface_WRT_North`, `Viewing_Azimuth_Surface_WRT_North`, `Relative_Azimuth_Surface`) are now produced per pixel with the product fills, and the per-pixel `Geolocation_Quality_Flag` (uint16; curryer `SpatialQualityFlags` in bits 0-14, bit 15 = geolocation not run) is added to the product definition. Every pixel that hits the ellipsoid is published; `valid_pixel_mask` no longer gates geolocation. Azimuths that round to 360.0 in float32 are wrapped to 0.
+- Run the per-pixel geometry in Dask tasks of `LIBERA_CAM_GEO_CHUNK_SIZE` frames (default 10), decoupled from the decompression chunk, one `geolocate_frame` call per frame. The kernels are furnished once on the client before the tasks start and a granule no frame of which SPICE covers is rejected; uncovered frames are written as fill and flagged. The worker takes `(T, K)` exposure epochs and a per-pixel epoch index so the two exposures can be geolocated at their own times once known (`LIBSDC-816`); production passes `K = 1`.
+- Remove `calculate_all_pixel_lat_lon_altitude`, `calculate_chunk_geolocation`, the static/dynamic `pixel_mask` options and `prefetch_kernels`; packaging no longer casts or relabels the geolocation variables.
+- Pin `lasp-curryer` to the `spatial-pixel-geometry` branch (lasp/curryer#188, version 0.5.2) until it is released.
 - Add the per-pixel `Viewing_Azimuth_Surface_WRT_North` and `Solar_Azimuth_Surface_WRT_North` to the product definition, matching the `libera_rad` surface-angle set, so `Relative_Azimuth_Surface` can be derived from them (curryer's CERES convention).
-- Write the not-yet-computed per-pixel fields (`Terrain_Corrected_*`, the surface zenith and azimuth angles) as their product `_FillValue` instead of zeros; the placeholder list in `packaging.py` shrinks as producers land (`LIBSDC-808`, `LIBSDC-814`).
+- Write the not-yet-computed per-pixel fields (`Terrain_Corrected_*`) as their product `_FillValue` instead of zeros; the placeholder list in `packaging.py` shrinks as producers land (`LIBSDC-814`).
 - Add a SPICE-versus-FSW azimuth diagnostic (`tests/helpers/azimuth_diagnostics.py`, shortest-arc statistics) with an integration test on the DITL data, adapted from the comparison logging in PR #16 (Matt Watwood). Analysis only; the header value is not a production reference.
 
 ## 0.2.7
