@@ -40,9 +40,10 @@ classifiers = [
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
     "libera-utils >= 5.8.0,<5.10.3",
-    # Imported directly by geolocation.py. 0.5.0 is the first release with the GeometryField
-    # enum and the SPICE error classifier the spacecraft-level geometry fields rely on.
-    "lasp-curryer>=0.5.0,<1.0",
+    # Imported directly by geolocation.py. Pinned to the curryer branch carrying
+    # `spatial.pixel_geometry` (lasp/curryer#188) while it is under review; restore the release
+    # pin (>=0.5.2,<1.0) before merge. TODO[LIBSDC-808]
+    "lasp-curryer @ git+https://github.com/lasp/curryer.git@spatial-pixel-geometry",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images
