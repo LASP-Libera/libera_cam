@@ -74,6 +74,24 @@ def test_variable_declares_no_fill_value(variable):
     """Missing values are written as NaN, so these variables declare no ``_FillValue``."""
     definition = yaml.safe_load(product_config_path.read_text())
     assert "_FillValue" not in definition["variables"][variable].get("attributes", {})
+def test_surface_angles_are_declared_per_pixel_with_rad_conventions():
+    """The surface-angle set matches libera_rad: degrees, -999 fill, azimuths on [0, 360], zeniths on [0, 180]."""
+    definition = yaml.safe_load(product_config_path.read_text())["variables"]
+    per_pixel = ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
+    expected_ranges = {
+        "Solar_Zenith_Surface": [0, 180],
+        "Viewing_Zenith_Surface": [0, 180],
+        "Relative_Azimuth_Surface": [0, 360],
+        "Viewing_Azimuth_Surface_WRT_North": [0, 360],
+        "Solar_Azimuth_Surface_WRT_North": [0, 360],
+    }
+    for name, valid_range in expected_ranges.items():
+        variable = definition[name]
+        assert variable["dimensions"] == per_pixel
+        assert variable["dtype"] == "float32"
+        assert variable["attributes"]["units"] == "degrees"
+        assert variable["attributes"]["valid_range"] == valid_range
+        assert variable["attributes"]["_FillValue"] == -999
 
 
 def test_package_version_matches_pyproject():
