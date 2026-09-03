@@ -64,6 +64,15 @@ def test_surface_angles_are_declared_per_pixel_with_rad_conventions():
         assert variable["attributes"]["_FillValue"] == -999
 
 
+def test_geolocation_quality_flag_is_a_per_pixel_uint16_bitmask():
+    """curryer's flags fill bits 0-14 and bit 15 marks not-run; no _FillValue, so readers keep the integer dtype."""
+    variable = yaml.safe_load(product_config_path.read_text())["variables"]["Geolocation_Quality_Flag"]
+    assert variable["dimensions"] == ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
+    assert variable["dtype"] == "uint16"
+    assert "_FillValue" not in variable["attributes"]
+    assert "[b15]" in variable["attributes"]["value_meaning"]
+
+
 def test_package_version_matches_pyproject():
     """The installed package version must match pyproject.toml."""
     pyproject_path = Path(__file__).parents[2] / "pyproject.toml"
