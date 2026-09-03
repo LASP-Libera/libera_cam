@@ -9,6 +9,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import NamedTuple
 
 import dask.array as da
 import numpy as np
@@ -41,6 +42,7 @@ _FILL_EARTH_SUN_DISTANCE = -999.0
 
 _SPICE_BODY_PRODUCTION = "LIBERA_WFOV_CAM"
 _SPICE_BODY_JPSS_ONLY = "LIBERA_BASE"
+_CAMERA_BODIES = (_SPICE_BODY_PRODUCTION, _SPICE_BODY_JPSS_ONLY)
 
 # curryer geometry fields for the L1B product, as GeometryField enum members (interchangeable
 # with their string selectors; ``.columns`` gives the output keys). All are spacecraft-level: they
@@ -576,6 +578,162 @@ def add_jpss_only_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     """Add the zero-degree reference ``Azimuth`` for ``jpss_only`` mode."""
     ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_jpss_only_azimuth(ds.sizes["camera_time"]))
     return ds
+
+
+class FrameGeometry(NamedTuple):
+    """Per-pixel geometry of one camera frame, ``(Y, X)`` arrays with the product fills applied.
+
+    Angles are degrees under curryer's conventions (azimuths clockwise from geodetic North in
+    [0, 360), zeniths from the local geodetic normal in [0, 180], relative azimuth with the Sun at
+    180). Pixels that miss the ellipsoid, or whose epoch SPICE could not resolve, carry the product
+    ``_FillValue`` and a non-zero ``quality_flags`` word (curryer ``SpatialQualityFlags``).
+    """
+
+    latitude: np.ndarray
+    longitude: np.ndarray
+    altitude: np.ndarray
+    solar_zenith: np.ndarray
+    solar_azimuth: np.ndarray
+    viewing_zenith: np.ndarray
+    viewing_azimuth: np.ndarray
+    relative_azimuth: np.ndarray
+    quality_flags: np.ndarray
+
+
+# FrameGeometry field -> (curryer PixelGeometry attribute, product variable, _FillValue, dtype).
+_PIXEL_VARIABLES: dict[str, tuple[str, str, float, type]] = {
+    "latitude": ("lat", "Latitude", _GEO_FILL_LAT_LON, np.float32),
+    "longitude": ("lon", "Longitude", _GEO_FILL_LAT_LON, np.float32),
+    "altitude": ("alt", "Altitude", _GEO_FILL_ALT, np.float32),
+    "solar_zenith": ("solar_zenith", "Solar_Zenith_Surface", _FILL_VALUE, np.float32),
+    "solar_azimuth": ("solar_azimuth", "Solar_Azimuth_Surface_WRT_North", _FILL_VALUE, np.float32),
+    "viewing_zenith": ("viewing_zenith", "Viewing_Zenith_Surface", _FILL_VALUE, np.float32),
+    "viewing_azimuth": ("viewing_azimuth", "Viewing_Azimuth_Surface_WRT_North", _FILL_VALUE, np.float32),
+    "relative_azimuth": ("relative_azimuth", "Relative_Azimuth_Surface", _FILL_VALUE, np.float32),
+}
+_KM_TO_M = 1000.0
+# Fields on [0, 360) that can land on exactly 360.0: a float64 value just under a full turn rounds
+# up when cast to float32, and curryer's own wrap of a tiny negative angle can return 360.0 itself.
+_AZIMUTH_FIELDS = ("solar_azimuth", "viewing_azimuth", "relative_azimuth")
+_FULL_TURN = np.float32(360.0)
+
+
+def geolocate_frame(
+    exposure_ugps: np.ndarray,
+    exposure_index: np.ndarray | None,
+    spice_body: str,
+    pointing_vectors: np.ndarray,
+    frame_shape: tuple[int, int] = (PIXEL_COUNT_Y, PIXEL_COUNT_X),
+) -> FrameGeometry:
+    """Per-pixel geometry of one camera frame via curryer ``pixel_geometry``, with product fills.
+
+    The per-frame unit of the geolocation path: pure, one frame in, one frame out, no kernel
+    management and no Dask. Every pixel that hits the ellipsoid gets geodetic latitude and
+    longitude and the solar and viewing zenith and azimuth at that point; nothing is
+    interpolated. ``altitude`` is the ellipsoid reference and is 0 m at every hit (there is no
+    terrain here; that is ``Terrain_Corrected_Altitude``, LIBSDC-814). A frame is geolocated at
+    one or more exposure epochs: curryer runs once over all ``K`` epochs and each pixel takes
+    the epoch ``exposure_index`` names, which is how the two HDR exposures of a frame will be
+    handled once their timing is known (LIBSDC-816). Production passes a single epoch until
+    then.
+
+    Parameters
+    ----------
+    exposure_ugps : np.ndarray
+        Exposure epochs of the frame in GPS microseconds, shape ``(K,)`` with ``K >= 1``.
+    exposure_index : np.ndarray or None
+        Integer index into ``exposure_ugps`` for every pixel, shaped ``frame_shape``. Must be
+        None when ``K == 1`` and given when ``K > 1``.
+    spice_body : str
+        NAIF body whose frame the pointing vectors are expressed in: ``LIBERA_WFOV_CAM`` in
+        production, ``LIBERA_BASE`` in ``jpss_only`` mode (the camera vectors applied at zero
+        azimuth). No other body is accepted. Its kernels must be loaded.
+    pointing_vectors : np.ndarray
+        Look vectors in that frame, shape ``(Y * X, 3)``, in row-major order of ``frame_shape``:
+        the processing layout ``(y, x)`` of ``image_data`` that packaging transposes to the
+        product's ``(CAMERA_PIXEL_COUNT_X, CAMERA_PIXEL_COUNT_Y)``. The bundled
+        ``wfov_pixel_vectors.npy`` is stored ``(2048, 2048, 3)`` and read in this order; that
+        its first axis is the image row is an assumption of the ground-calibration file, not
+        something this function can check.
+    frame_shape : tuple[int, int], optional
+        ``(Y, X)`` of the frame. Default is the WFOV detector.
+
+    Returns
+    -------
+    FrameGeometry
+        Float32 fields with the product fill where a pixel misses the ellipsoid or its epoch
+        is uncovered; altitude in meters; azimuths wrapped so the float32 rounding of a value
+        just under 360 lands on 0, not 360; ``quality_flags`` as uint16, 0 where good.
+
+    Raises
+    ------
+    ValueError
+        If ``spice_body`` is not one of the two camera bodies, ``exposure_ugps`` is not a
+        non-empty 1-D array, ``exposure_index`` is absent for several epochs, present for one,
+        not integer, wrongly shaped or out of range, or ``pointing_vectors`` is not
+        ``(Y * X, 3)``.
+    RuntimeError
+        If a curryer quality flag does not fit the uint16 word this function narrows the flags
+        to.
+
+    Notes
+    -----
+    Memory: for the full detector at one epoch curryer returns about 440 MB and works in about
+    1.05 GB of transients (250 bytes per pixel), so a call peaks near 1.5 GB and scales with
+    ``K``; the returned ``FrameGeometry`` is 143 MB per frame. Size worker chunks from these.
+    """
+    _validate_observer(spice_body, _CAMERA_BODIES, "camera")
+    epochs = np.asarray(exposure_ugps)
+    if epochs.ndim != 1 or epochs.size == 0:
+        raise ValueError(f"exposure_ugps must be a non-empty 1-D array of epochs, got shape {epochs.shape}")
+    n_pixels = int(frame_shape[0]) * int(frame_shape[1])
+    vectors = np.asarray(pointing_vectors)
+    if vectors.shape != (n_pixels, 3):
+        raise ValueError(
+            f"pointing_vectors must be shape ({n_pixels}, 3) for frame_shape {frame_shape}, got {vectors.shape}"
+        )
+
+    if epochs.size == 1:
+        if exposure_index is not None:
+            raise ValueError("exposure_index must be None when a single exposure epoch is given")
+        flat_index = None
+    else:
+        if exposure_index is None:
+            raise ValueError(f"exposure_index is required to select among {epochs.size} exposure epochs")
+        index = np.asarray(exposure_index)
+        if index.shape != tuple(frame_shape) or not np.issubdtype(index.dtype, np.integer):
+            raise ValueError(
+                f"exposure_index must be an integer array shaped {tuple(frame_shape)}, got {index.dtype} {index.shape}"
+            )
+        if index.min() < 0 or index.max() >= epochs.size:
+            raise ValueError(
+                f"exposure_index values must lie in [0, {epochs.size}), got [{index.min()}, {index.max()}]"
+            )
+        flat_index = index.ravel()
+
+    # Fill-and-flag on a SPICE gap is this function's contract (a granule with no covered frame
+    # is rejected upstream), so the choice is made here rather than left to curryer's default.
+    result = spatial.pixel_geometry(epochs, spice_body, vectors, allow_nans=True)
+    pixel_ids = None if flat_index is None else np.arange(n_pixels)
+
+    def per_pixel(values: np.ndarray) -> np.ndarray:
+        """Select each pixel's epoch from a (K, Y * X) curryer array."""
+        return values[0] if flat_index is None else values[flat_index, pixel_ids]
+
+    fields = {}
+    for name, (curryer_name, _, fill, dtype) in _PIXEL_VARIABLES.items():
+        values = per_pixel(getattr(result, curryer_name))
+        if name == "altitude":
+            values = values * _KM_TO_M  # 0 at every hit today; kept for a non-zero upstream ``alt``
+        values = _apply_fill(values, fill, dtype)
+        if name in _AZIMUTH_FIELDS:
+            values[values == _FULL_TURN] = 0.0
+        fields[name] = values.reshape(frame_shape)
+
+    flags = per_pixel(result.quality_flags)
+    if flags.max() > np.iinfo(np.uint16).max:
+        raise RuntimeError(f"curryer quality flag {flags.max():#x} does not fit the uint16 word FrameGeometry uses")
+    return FrameGeometry(quality_flags=flags.astype(np.uint16).reshape(frame_shape), **fields)
 
 
 def calculate_all_pixel_lat_lon_altitude(
