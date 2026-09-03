@@ -1,5 +1,11 @@
 # Version Changes
 
+## 0.2.8
+
+- Add the per-pixel `Viewing_Azimuth_Surface_WRT_North` and `Solar_Azimuth_Surface_WRT_North` to the product definition, matching the `libera_rad` surface-angle set, so `Relative_Azimuth_Surface` can be derived from them (curryer's CERES convention).
+- Write the not-yet-computed per-pixel fields (`Terrain_Corrected_*`, the surface zenith and azimuth angles) as their product `_FillValue` instead of zeros; the placeholder list in `packaging.py` shrinks as producers land (`LIBSDC-808`, `LIBSDC-814`).
+- Add a SPICE-versus-FSW azimuth diagnostic (`tests/helpers/azimuth_diagnostics.py`, shortest-arc statistics) with an integration test on the DITL data, adapted from the comparison logging in PR #16 (Matt Watwood). Analysis only; the header value is not a production reference.
+
 ## 0.2.7
 
 - Populate the spacecraft-level geometry fields from `curryer.compute.geometry.GeometryData`, following the `libera_rad` implementation: `Subsatellite_Latitude`/`_Longitude`/`_Colatitude`, `Subsolar_Latitude`/`_Longitude`/`_Colatitude`, `Radius_of_Satellite_from_Center_of_Earth`, and the granule attribute `Earth_Sun_Distance_AU`, plus the new `Satellite_Position` and `Satellite_Velocity` (J2000, on `EUCLIDEAN_DIM`) and `Satellite_Attitude_Q0..Q3` (ECEF). Fields are requested as `GeometryField` members with a single spacecraft-observer query that serves production and `jpss_only` alike; the observer is validated against the Libera FK (`SPACECRAFT_OBSERVERS`).
