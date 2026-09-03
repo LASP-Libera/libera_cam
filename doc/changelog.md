@@ -1,5 +1,12 @@
 # Version Changes
 
+## 0.3.1
+
+- Populate the spacecraft-level geometry fields from `curryer.compute.geometry.GeometryData`, following the `libera_rad` implementation: `Subsatellite_Latitude`/`_Longitude`/`_Colatitude`, `Subsolar_Latitude`/`_Longitude`/`_Colatitude`, `Radius_of_Satellite_from_Center_of_Earth`, and the granule attribute `Earth_Sun_Distance_AU`, plus the new `Satellite_Position` and `Satellite_Velocity` (J2000, on `EUCLIDEAN_DIM`) and `Satellite_Attitude_Q0..Q3` (ECEF). Fields are requested as `GeometryField` members with a single spacecraft-observer query that serves production and `jpss_only` alike; the observer is validated against the Libera FK (`SPACECRAFT_OBSERVERS`).
+- Raise a parsed, user-facing `RuntimeError` when the curryer SPICE query fails or the spacecraft kernels return no coverage for the granule, instead of writing a fully filled granule. Per-frame coverage gaps map onto each variable's `_FillValue`; `use_geo: false` writes the fill values through `create_placeholder_spacecraft_geometry`.
+- Add `Azimuth`, the motor encoder angle from the AZROT-CK (third 1-2-3 Euler angle of `LIBERA_BASE_COORD -> LIBERA_AZ_COORD`, degrees in `[0, 360)`) via `curryer.compute.spatial.frame_to_frame_euler`, matching `libera_rad`. `jpss_only` writes 0 degrees; `use_geo: false` writes `-999`. The FSW commanded azimuth stays in the product as `Azimuth_FSW_Metadata`, a pass-through in every mode. Elevation is not reported: the camera is mounted on the azimuth stage and ELSCAN-CK is not a camera L1B input.
+- Require `lasp-curryer >= 0.5.0` for the `GeometryField` enum and the SPICE error classifier.
+
 ## 0.3.0
 
 - **L1A consumption:** Require image-centric WFOV L1A from libera-utils ≥ 5.10.5
