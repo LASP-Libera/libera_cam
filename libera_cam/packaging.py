@@ -30,6 +30,12 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     -------
     xr.Dataset
         The packaged dataset ready for NetCDF writing.
+
+    Raises
+    ------
+    ValueError
+        If the dataset lacks the FSW header ``azimuth_angle`` that ``read_l1a_cam_data`` always
+        provides, or lacks ``Radiance``.
     """
     logger.info("Packaging L1B product for conformance.")
 
@@ -52,6 +58,12 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     ):
         dataset.attrs.pop(attr_name, None)
 
+    # ``Azimuth`` is the motor encoder angle from the SPICE CK, set during processing. The FSW
+    # image-header ``azimuth_angle`` is a different quantity and passes through as
+    # ``Azimuth_FSW_Metadata``.
+    if "azimuth_angle" not in dataset:
+        raise ValueError("Dataset must contain the FSW header 'azimuth_angle' variable from read_l1a_cam_data.")
+
     # 1. Rename variables/dims to match Product Definition.
     rename_map = {
         "azimuth_angle": "Azimuth_FSW_Metadata",
@@ -72,7 +84,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     dataset = dataset.rename({src: dst for src, dst in rename_map.items() if src in dataset})
 
     # 2. Reorder dimensions to match product definition: (Time, X, Y)
-    dataset = dataset.transpose("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+    # Remaining dimensions (EUCLIDEAN_DIM on the spacecraft state vectors) keep their trailing position.
+    dataset = dataset.transpose("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y", ...)
 
     # 3. Create Placeholders for unused fields (Lazy)
     if "Radiance" not in dataset:
