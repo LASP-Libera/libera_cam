@@ -28,6 +28,8 @@ variables:
       units: degrees_north
       valid_range: [-90, 90]
       _FillValue: -999 #off Earth
+    encoding:
+      shuffle: true
   Terrain_Corrected_Latitude:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -36,6 +38,8 @@ variables:
       units: degrees_north
       valid_range: [-90, 90]
       _FillValue: -999 #off Earth
+    encoding:
+      shuffle: true
   Longitude:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -44,6 +48,8 @@ variables:
       units: degrees_east
       valid_range: [-180, 180]
       _FillValue: -999 #off Earth
+    encoding:
+      shuffle: true
   Terrain_Corrected_Longitude:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -52,6 +58,8 @@ variables:
       units: degrees_east
       valid_range: [-180, 180]
       _FillValue: -999 #off Earth
+    encoding:
+      shuffle: true
   Altitude:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -60,6 +68,8 @@ variables:
       units: meters
       valid_range: [-1000, 30000]
       _FillValue: -9999
+    encoding:
+      shuffle: true
   Terrain_Corrected_Altitude:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -68,6 +78,8 @@ variables:
       units: meters
       valid_range: [-1000, 30000]
       _FillValue: -9999
+    encoding:
+      shuffle: true
   Subsatellite_Latitude:
     dtype: float32
     dimensions: ["CAMERA_TIME"]
@@ -182,6 +194,8 @@ variables:
       units: degrees
       valid_range: [0, 180]
       _FillValue: -999
+    encoding:
+      shuffle: true
   Relative_Azimuth_Surface:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -192,6 +206,8 @@ variables:
       units: degrees
       valid_range: [0, 360]
       _FillValue: -999
+    encoding:
+      shuffle: true
   Viewing_Zenith_Surface:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -200,6 +216,8 @@ variables:
       units: degrees
       valid_range: [0, 180]
       _FillValue: -999
+    encoding:
+      shuffle: true
   Viewing_Azimuth_Surface_WRT_North:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -208,6 +226,8 @@ variables:
       units: degrees
       valid_range: [0, 360]
       _FillValue: -999
+    encoding:
+      shuffle: true
   Solar_Azimuth_Surface_WRT_North:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -216,6 +236,8 @@ variables:
       units: degrees
       valid_range: [0, 360]
       _FillValue: -999
+    encoding:
+      shuffle: true
   Geolocation_Quality_Flag:
     dtype: uint16
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -229,6 +251,8 @@ variables:
         line of sight misses the ellipsoid (fill); [b13] Sun position unavailable (solar angles
         fill); [b14] a surface angle was not finite (fill). [b15] geolocation was not run (use_geo
         false).
+    encoding:
+      shuffle: true
   Azimuth:
     dtype: float32
     dimensions: ["CAMERA_TIME"]
@@ -273,6 +297,8 @@ variables:
       long_name: Original Pixel counts from camera before any corrections
       units: dn
       valid_range: [0, 10000]
+    encoding:
+      shuffle: true
   Radiance:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -283,6 +309,8 @@ variables:
       units: W/(m^2*sr*nm)
       valid_range: [0, 1000]
       _FillValue: -999
+    encoding:
+      shuffle: false
   Camera_Mask:
     #If we need to save storage space, this can become a per-image trace to the mask that was applied,
     #rather than the pixel-level bitmask itself (FSW captures this as "Bitmask Mask ID")
