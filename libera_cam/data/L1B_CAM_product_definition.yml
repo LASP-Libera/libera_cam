@@ -105,10 +105,7 @@ variables:
       units: degrees
       comment: >-
         FSW-reported commanded instrument azimuth, passed through from L1A
-        WFOV_FSW_HEADER_AZIMUTH_ANGLE. A signed angle about zero, not a 0-360
-        compass bearing. Distinct from the geometric viewing and solar azimuth
-        angles, and from the ICIE__AXIS_AZ_FILT encoder reading, which is radians.
-      valid_range: [-180, 180]
+        WFOV_FSW_HEADER_AZIMUTH_ANGLE.
       _FillValue: -999
 
   ##############
