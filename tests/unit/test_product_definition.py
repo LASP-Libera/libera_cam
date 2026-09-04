@@ -4,6 +4,7 @@ import tomllib
 from pathlib import Path
 
 import yaml
+from libera_utils.io.product_definition import LiberaDataProductDefinition
 
 from libera_cam.config import product_config_path
 from libera_cam.version import version as libera_cam_version
@@ -71,6 +72,36 @@ def test_geolocation_quality_flag_is_a_per_pixel_uint16_bitmask():
     assert variable["dtype"] == "uint16"
     assert "_FillValue" not in variable["attributes"]
     assert "[b15]" in variable["attributes"]["value_meaning"]
+
+
+def test_per_pixel_geolocation_variables_declare_shuffle():
+    """Byte shuffling ahead of the mandatory gzip 4 shrinks the geolocation set without changing a value.
+
+    Asserted through the loaded definition rather than the YAML text: libera_utils merges the
+    declaration as ``{**encoding, **DEFAULT_ENCODING}``, so this is the encoding that reaches the file.
+    """
+    definition = LiberaDataProductDefinition.from_yaml(product_config_path)
+    shuffled = [
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Terrain_Corrected_Latitude",
+        "Terrain_Corrected_Longitude",
+        "Terrain_Corrected_Altitude",
+        "Solar_Zenith_Surface",
+        "Viewing_Zenith_Surface",
+        "Solar_Azimuth_Surface_WRT_North",
+        "Viewing_Azimuth_Surface_WRT_North",
+        "Relative_Azimuth_Surface",
+        "Geolocation_Quality_Flag",
+    ]
+    for name in shuffled:
+        assert definition.variables[name].encoding["shuffle"] is True, name
+
+    # Pinned explicitly on the large non-geolocation fields: netCDF4-python shuffles whenever zlib
+    # is on and h5py does not, so leaving these undeclared makes the product engine-dependent.
+    assert definition.variables["Radiance"].encoding["shuffle"] is False
+    assert definition.variables["Pixel_Counts"].encoding["shuffle"] is True
 
 
 def test_package_version_matches_pyproject():
