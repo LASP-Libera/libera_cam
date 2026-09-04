@@ -145,6 +145,15 @@ Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_produ
 funnels all computed Dask blocks back through the client process. Client process memory and I/O
 become a bottleneck on large multi-gigabyte datasets.
 
+Measured on scaled DITL fixtures (see `overview.md`, "Granule length is capped by client
+memory"), client peak RSS grows with granule length on both write paths because computed blocks
+are not released as they are written: about 0.6 GB + 42 MB per frame on the production pairing
+(`netcdf4` engine, `distributed` scheduler) and 2.8 GB + 106 MB per frame on the default
+`h5netcdf` + `synchronous` path. The production pairing therefore allows roughly 750 frames in a
+32 GB container, about an hour of data at 5 s cadence, and a 12 h granule would need roughly
+360 GB in the client. Nothing detects the cap: a run past it is killed by the container rather
+than stopped by the pipeline, so a guard that fails loudly on frame count belongs with this work.
+
 ### Target state
 
 Investigate and prototype direct worker-to-disk or worker-to-S3 NetCDF chunk writes (e.g., using
