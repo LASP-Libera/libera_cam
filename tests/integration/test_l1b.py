@@ -3,6 +3,7 @@
 from argparse import Namespace
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 import xarray as xr
@@ -93,6 +94,16 @@ def test_per_frame_geometry_is_written(l1b_product_dataset, variable, dims):
 def test_earth_sun_distance_is_written(l1b_product_dataset):
     """The granule Earth-Sun distance is written as a global attribute."""
     assert np.isfinite(float(l1b_product_dataset.attrs["Earth_Sun_Distance_AU"]))
+
+
+def test_geolocation_variables_are_byte_shuffled_on_disk(l1b_product_file_path):
+    """The shuffle filter declared in the product definition must reach the written file."""
+    with h5py.File(l1b_product_file_path, "r") as product:
+        for name in ("Latitude", "Longitude", "Viewing_Zenith_Surface", "Geolocation_Quality_Flag"):
+            assert product[name].shuffle is True, name
+        # Pinned off, against the netcdf4 engine's default of on whenever zlib is on.
+        assert product["Radiance"].shuffle is False
+        assert product["Pixel_Counts"].shuffle is True
 
 
 def test_per_pixel_geometry_is_computed_for_every_frame(l1b_product_dataset):
