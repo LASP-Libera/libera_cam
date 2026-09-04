@@ -54,7 +54,10 @@ class IntegrationTime(IntEnum):
     LONG = 20
 
 
-# Default chunk size for the time dimension in Dask arrays.
-# This balances memory usage (smaller chunks) against SPICE setup overhead (larger chunks).
-# 50 images: ~800 MB raw data + ~2.5 GB float32 geolocation arrays ~= 3.3 GB total per chunk.
+# Default number of images per JPEG-LS decompression task (``LIBERA_CAM_CHUNK_SIZE``). 50 images
+# hold ~800 MB of int32 image data plus the uint8 integration masks.
 DEFAULT_TIME_CHUNK_SIZE = 50
+# Default number of frames per per-pixel geometry task (``LIBERA_CAM_GEO_CHUNK_SIZE``), independent
+# of the decompression chunk. One frame's geometry is 143 MB (eight float32 fields and uint16 flags)
+# and curryer works in ~1.5 GB of transients per frame, so a task peaks near 1.5 GB + 143 MB * size.
+DEFAULT_GEO_CHUNK_SIZE = 10

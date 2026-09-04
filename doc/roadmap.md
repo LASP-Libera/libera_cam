@@ -141,9 +141,23 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ### Problem today
 
-Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_product`, which
-funnels all computed Dask blocks back through the client process. Client process memory and I/O
-become a bottleneck on large multi-gigabyte datasets.
+Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_product`, which does
+not release computed Dask blocks as it writes them. Memory and I/O become a bottleneck on large
+multi-gigabyte datasets.
+
+Measured on real granules (see `overview.md`, "Memory is bounded; write throughput is not"),
+peak RSS across the whole process tree does **not** grow with granule length: a 1003-frame
+granule peaks at 7.38 GB against 9.14 GB for 160 frames. Blocks are held for the length of a
+write, not the length of the granule. The memory cap earlier revisions of this item assumed does
+not exist, so this item is no longer a prerequisite for full-length granules.
+
+What does degrade is write throughput: 2.96 s/frame at 160 frames against 5.14 s/frame at 1003.
+The leading explanation is HDF5 chunk misalignment — `h5py.guess_chunk` is shape-dependent, so
+the chunk depth changes with granule length (2, 5, then 16 frames) while Dask writes
+`LIBERA_CAM_GEO_CHUNK_SIZE`-frame blocks, and at production sizes the two stop dividing evenly.
+Confirming that needs the ability to pin `chunksizes` from the product definition, which is
+blocked upstream; that fix should come before any worker-write redesign, since it may remove
+most of the motivation for one.
 
 ### Target state
 
@@ -169,4 +183,16 @@ radiometric calibration, JPEG-LS decompression, and SPICE geolocation.
 
 - Logging of distributed tasks on AWS. Are we getting enough information out to debug?
 - When using `distributed` mode does Dask emit a "large object detected in task graph" warning because of the 50 images passing in?
-- Confirm netcdf file writing in distributed mode on AWS with h5netcdf vs netcdf4 engine
+- Confirm netcdf file writing in distributed mode on AWS with h5netcdf vs netcdf4 engine. Both
+  engines now write under `distributed` and to S3, and locally `h5netcdf` is faster and smaller
+  (176 s and 40.5 MB/frame against 217 s and 47.3 MB/frame at 60 frames); confirm that holds on
+  AWS hardware.
+- Investigate the `netcdf4` + `distributed` race: one run in three failed with
+  `KeyError('Viewing_Zenith_Surface')` inside `netCDF4_.get_array`, a worker having reopened the
+  output file before the client's variable definitions were visible to it. Not reproduced with
+  `h5netcdf`, and not reproduced on a 14-variable toy dataset (10/10 clean on both engines), so
+  it needs the full product to provoke. Worth a ticket in its own right: an intermittent failure
+  in the write path is worse than a deterministic one.
+- Multi-node `distributed` needs shared filesystem access to the output: `xarray` wraps the
+  output path in a `CachingFileManager` and each worker reopens the file itself. The single-node
+  `LocalCluster` built by `l1b.py` satisfies this automatically.

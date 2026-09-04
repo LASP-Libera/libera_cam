@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import dask.array as da
@@ -8,18 +9,27 @@ import xarray as xr
 import yaml
 from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
+from curryer.compute.constants import SpatialQualityFlags as SQF
 
 from libera_cam import geolocation
 from libera_cam.config import product_config_path
 from libera_cam.geolocation import (
+    _FIELD_VARIABLES,
+    _GEO_NOT_COMPUTED_FLAG,
+    _PIXEL_VARIABLES,
+    FrameGeometry,
     GeolocationKernelConfig,
+    _require_frame_coverage,
     add_azimuth_to_dataset,
+    add_geolocation_to_dataset,
     add_jpss_only_azimuth_to_dataset,
+    add_jpss_only_geolocation_to_dataset,
     add_placeholder_azimuth_to_dataset,
+    add_placeholder_geolocation_to_dataset,
     add_placeholder_spacecraft_geometry_to_dataset,
     add_spacecraft_geometry_to_dataset,
-    calculate_all_pixel_lat_lon_altitude,
     calculate_azimuth,
+    calculate_chunk_geometry,
     calculate_spacecraft_geometry,
     create_placeholder_spacecraft_geometry,
     granule_earth_sun_distance,
@@ -32,268 +42,286 @@ def mock_kernel_manager():
     return km
 
 
-@pytest.fixture
-def mock_pointing_vectors():
-    # 4 pixels
-    return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 1.0]])
+# --- Per-pixel geometry: worker task and lazy orchestration (geolocate_frame is mocked) ---
+
+FRAME_SHAPE = (3, 5)
+GEO_VARIABLES = [variable for variable, _ in _FIELD_VARIABLES.values()]
 
 
-@pytest.fixture
-def mock_times():
-    return pd.to_datetime(["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02"])
+def _frame(value: float, flag: int) -> FrameGeometry:
+    fields = {name: np.full(FRAME_SHAPE, value, dtype=np.float32) for name in _PIXEL_VARIABLES}
+    return FrameGeometry(quality_flags=np.full(FRAME_SHAPE, flag, dtype=np.uint16), **fields)
 
 
-@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
-@patch("libera_cam.geolocation.PIXEL_COUNT_X", 2)
-@patch("libera_cam.geolocation.spatial.compute_ellipsoid_intersection")
-@patch("libera_cam.geolocation.spicetime.adapt")
-@patch("libera_cam.geolocation.sp.obj.Body")
-def test_geolocation_logic_static_path(
-    mock_body, mock_adapt, mock_compute, mock_kernel_manager, mock_pointing_vectors, mock_times
-):
-    """Verify that static mask uses the vectorized path (one call to compute)."""
-
-    # Mock time adaptation
-    mock_adapt.return_value = np.array([100.0, 101.0, 102.0])  # Dummy GPS times
-
-    # Mock Body
-    mock_body.return_value = MagicMock()
-
-    # Mock return of compute_ellipsoid_intersection
-    # Returns tuple (results_df, other1, other2)
-    # results_df has lat, lon, alt columns.
-    # Input has 3 times * 2 active pixels = 6 results
-    n_results = 3 * 2
-    mock_results = pd.DataFrame({"lat": np.zeros(n_results), "lon": np.zeros(n_results), "alt": np.zeros(n_results)})
-    mock_compute.return_value = (mock_results, None, None)
-
-    # Static mask: [True, False, True, False] -> Indices 0, 2
-    static_mask = np.array([True, False, True, False])
-
-    calculate_all_pixel_lat_lon_altitude(
-        mock_kernel_manager, mock_times, pointing_vectors=mock_pointing_vectors, pixel_mask=static_mask
-    )
-
-    # Assert called ONCE
-    assert mock_compute.call_count == 1
-
-    # Check arguments
-    # Times should be length 3
-    # Vectors should be length 2 (active ones)
-    args, kwargs = mock_compute.call_args
-    assert len(args[0]) == 3  # Times
-    assert len(kwargs["custom_pointing_vectors"]) == 2
-
-
-@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
-@patch("libera_cam.geolocation.PIXEL_COUNT_X", 2)
-@patch("libera_cam.geolocation.spatial.compute_ellipsoid_intersection")
-@patch("libera_cam.geolocation.spicetime.adapt")
-@patch("libera_cam.geolocation.sp.obj.Body")
-def test_geolocation_logic_dynamic_path(
-    mock_body, mock_adapt, mock_compute, mock_kernel_manager, mock_pointing_vectors, mock_times
-):
-    """Verify that dynamic mask uses the looped path (N calls to compute)."""
-
-    # Mock time adaptation
-    mock_adapt.return_value = np.array([100.0, 101.0, 102.0])  # Dummy GPS times
-
-    # Mock Body
-    mock_body.return_value = MagicMock()
-
-    # Dynamic Mask (3 times x 4 pixels)
-    # T0: [T, F, F, F] -> 1 pixel
-    # T1: [F, T, F, F] -> 1 pixel
-    # T2: [F, F, T, T] -> 2 pixels
-    dynamic_mask = np.zeros((3, 4), dtype=bool)
-    dynamic_mask[0, 0] = True
-    dynamic_mask[1, 1] = True
-    dynamic_mask[2, 2] = True
-    dynamic_mask[2, 3] = True
-
-    # Setup mocks for each call
-    # Call 1: 1 result
-    res1 = pd.DataFrame({"lat": [0], "lon": [0], "alt": [0]})
-    # Call 2: 1 result
-    res2 = pd.DataFrame({"lat": [0], "lon": [0], "alt": [0]})
-    # Call 3: 2 results
-    res3 = pd.DataFrame({"lat": [0, 0], "lon": [0, 0], "alt": [0, 0]})
-
-    mock_compute.side_effect = [(res1, None, None), (res2, None, None), (res3, None, None)]
-
-    calculate_all_pixel_lat_lon_altitude(
-        mock_kernel_manager, mock_times, pointing_vectors=mock_pointing_vectors, pixel_mask=dynamic_mask
-    )
-
-    # Assert called 3 times (once per timestamp)
-    assert mock_compute.call_count == 3
-
-    # Verify calls
-    # Call 1 (T0): 1 active vector
-    args0, kwargs0 = mock_compute.call_args_list[0]
-    assert len(args0[0]) == 1  # 1 time
-    assert len(kwargs0["custom_pointing_vectors"]) == 1
-
-    # Call 3 (T2): 2 active vectors
-    args2, kwargs2 = mock_compute.call_args_list[2]
-    assert len(args2[0]) == 1  # 1 time
-    assert len(kwargs2["custom_pointing_vectors"]) == 2
-
-
-@patch("libera_cam.geolocation.calculate_chunk_geolocation")
-@patch("libera_cam.geolocation.prefetch_kernels")
-@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
-@patch("libera_cam.geolocation.PIXEL_COUNT_X", 2)
-def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
-    """Verify that add_geolocation_to_dataset returns a lazy dataset with correct graph."""
-    import dask.array as da
-
-    from libera_cam.geolocation import (
-        GeolocationKernelConfig,
-        add_geolocation_to_dataset,
-    )
-
-    # Setup lazy dataset
-    # Time: 4 steps, chunked by 2
-    # Image: (4, 2, 2)
-    times = pd.to_datetime(["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02", "2025-01-01T00:00:03"])
-    image_data = da.zeros((4, 2, 2), chunks=(2, 2, 2))
-
-    ds = xr.Dataset(
+def _frame_dataset(n_times: int, time_chunk: int) -> xr.Dataset:
+    times = pd.date_range("2025-01-01", periods=n_times, freq="5s")
+    image_data = da.zeros((n_times, *FRAME_SHAPE), chunks=(time_chunk, *FRAME_SHAPE))
+    return xr.Dataset(
         {"image_data": (("camera_time", "y", "x"), image_data)},
-        coords={"camera_time": times, "y": [0, 1], "x": [0, 1]},
+        coords={"camera_time": times, "y": range(FRAME_SHAPE[0]), "x": range(FRAME_SHAPE[1])},
     )
 
-    config = GeolocationKernelConfig()
 
-    # Configure mock to return a valid array for metadata inference/computation
-    # Dask calls this to determine output array type (numpy vs cupy etc)
-    # Output shape should be (Time, Y, X, 3)
-    # The chunk size in the test is (2, 2, 2)
-    mock_calc_chunk.return_value = np.zeros((2, 2, 2, 3), dtype=np.float32)
-
-    # Call function
-    ds_out = add_geolocation_to_dataset(ds, config)
-
-    # 1. Verify Laziness: Mock should NOT be called yet (except possibly for meta inference)
-    # Dask map_blocks might call the function once with dummy data to infer meta if not provided
-    # but we provided dtype, so it might skip. However, if it calls it, it returns the mock value.
-
-    assert mock_prefetch.call_count == 1
-    # assert mock_calc_chunk.call_count == 0  <-- Dask might call it for metadata inference, so we can't strictly assert
-    # 0 calls unless we pass meta explicitly in the code.
-
-    # 2. Verify Output Variables
-    assert "Latitude" in ds_out
-    assert "Longitude" in ds_out
-    assert "Altitude" in ds_out
-
-    assert isinstance(ds_out["Latitude"].data, da.Array)
-    assert ds_out["Latitude"].dtype == np.float32
-
-    # 3. Verify Graph Structure
-    # Compute one chunk
-
-    # Trigger compute of the first chunk of Latitude
-    # ds_out["Latitude"] is (Time, Y, X) -> (4, 2, 2)
-    # Computed chunk will be (2, 2, 2)
-    result_chunk = ds_out["Latitude"][:2, :, :].compute()
-
-    # Now calculate_chunk_geolocation should have been called at least once (inference + compute)
-    assert mock_calc_chunk.call_count >= 1
-    assert result_chunk.shape == (2, 2, 2)
+def _datetimes(n: int) -> np.ndarray:
+    return pd.date_range("2025-01-01", periods=n, freq="5s").values
 
 
-@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 3)
-@patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
-def test_add_placeholder_geolocation_to_dataset():
-    """Placeholder function adds product fill-value Latitude/Longitude/Altitude."""
+@pytest.fixture
+def small_detector():
+    with (
+        patch("libera_cam.geolocation.PIXEL_COUNT_Y", FRAME_SHAPE[0]),
+        patch("libera_cam.geolocation.PIXEL_COUNT_X", FRAME_SHAPE[1]),
+    ):
+        yield
 
-    from libera_cam.geolocation import add_placeholder_geolocation_to_dataset
 
-    n_times = 6
-    times = pd.date_range("2025-01-01", periods=n_times, freq="s")
-    image_data = da.zeros((n_times, 3, 5), chunks=(3, 3, 5))
+@pytest.fixture
+def worker_mocks(small_detector):
+    """The worker's collaborators: kernel manager, pixel-vector file, time conversion, geolocate_frame."""
+    with (
+        patch("libera_cam.geolocation.KernelManager") as km_cls,
+        patch("libera_cam.geolocation.np.load", return_value=np.zeros((*FRAME_SHAPE, 3), dtype=np.float32)),
+        patch("libera_cam.geolocation.spicetime.adapt") as adapt,
+        patch("libera_cam.geolocation.geolocate_frame") as geolocate,
+    ):
+        km = km_cls.return_value
+        km.__enter__.return_value = km
+        yield SimpleNamespace(km_cls=km_cls, km=km, adapt=adapt, geolocate=geolocate)
 
-    ds = xr.Dataset(
-        {"image_data": (("camera_time", "y", "x"), image_data)},
-        coords={"camera_time": times, "y": range(3), "x": range(5)},
+
+def test_field_variables_follow_frame_geometry_and_the_product_definition():
+    """Blocks are returned in FrameGeometry order; each lands on a per-pixel product variable of its dtype."""
+    product_variables = yaml.safe_load(product_config_path.read_text())["variables"]
+    assert tuple(_FIELD_VARIABLES) == FrameGeometry._fields
+    for name, (variable, dtype) in _FIELD_VARIABLES.items():
+        definition = product_variables[variable]
+        assert definition["dimensions"] == ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"], name
+        assert np.dtype(definition["dtype"]) == np.dtype(dtype), name
+    # "Not run" is a bit of its own above curryer's (the YAML side is pinned in test_product_definition).
+    assert _GEO_NOT_COMPUTED_FLAG == 0x8000
+    assert max(int(f) for f in SQF) < _GEO_NOT_COMPUTED_FLAG
+
+
+def test_calculate_chunk_geometry_loops_frames_into_typed_blocks(worker_mocks):
+    """One geolocate_frame call per frame at its own epoch, results stacked per field with the field's dtype."""
+    worker_mocks.adapt.return_value = np.array([1000, 2000])
+    worker_mocks.geolocate.side_effect = [_frame(1.0, 0), _frame(2.0, int(SQF.CALC_ELLIPS_NO_INTERSECT))]
+    config = GeolocationKernelConfig(dynamic_kernel_sources=["orbit.bsp"])
+
+    outputs = calculate_chunk_geometry(_datetimes(2)[:, None], None, config)
+
+    worker_mocks.km.load_libera_dynamic_kernels.assert_called_once_with(
+        ["orbit.bsp"], needs_naif_kernels=True, needs_static_kernels=True
     )
+    worker_mocks.km.__exit__.assert_called_once()
+    assert len(outputs) == len(FrameGeometry._fields)
+    for (name, (_, dtype)), output in zip(_FIELD_VARIABLES.items(), outputs, strict=True):
+        assert output.shape == (2, *FRAME_SHAPE), name
+        assert output.dtype == dtype, name
+    np.testing.assert_array_equal(outputs[0][0], 1.0)
+    np.testing.assert_array_equal(outputs[0][1], 2.0)
+    np.testing.assert_array_equal(outputs[-1][0], 0)
+    np.testing.assert_array_equal(outputs[-1][1], SQF.CALC_ELLIPS_NO_INTERSECT)
+
+    first, second = worker_mocks.geolocate.call_args_list
+    np.testing.assert_array_equal(first.args[0], [1000])
+    np.testing.assert_array_equal(second.args[0], [2000])
+    assert first.args[1] is None
+    assert first.args[2] == "LIBERA_WFOV_CAM"
+    assert first.args[3].shape == (15, 3)
+    assert first.kwargs == {"frame_shape": FRAME_SHAPE}
+
+
+def test_calculate_chunk_geometry_passes_each_frames_epochs_and_index(worker_mocks):
+    """K = 2: every frame gets its own pair of epochs and its own per-pixel index."""
+    worker_mocks.adapt.return_value = np.array([10, 11, 20, 21])
+    worker_mocks.geolocate.side_effect = [_frame(0.0, 0), _frame(0.0, 0)]
+    index = np.zeros((2, *FRAME_SHAPE), dtype=np.uint8)
+    index[1, 0, 0] = 1
+    exposure_times = np.stack([_datetimes(2), _datetimes(2) + np.timedelta64(25, "ms")], axis=1)
+
+    calculate_chunk_geometry(exposure_times, index, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+
+    first, second = worker_mocks.geolocate.call_args_list
+    np.testing.assert_array_equal(first.args[0], [10, 11])
+    np.testing.assert_array_equal(second.args[0], [20, 21])
+    np.testing.assert_array_equal(first.args[1], index[0])
+    np.testing.assert_array_equal(second.args[1], index[1])
+
+
+def test_calculate_chunk_geometry_jpss_only_uses_libera_base(worker_mocks):
+    worker_mocks.adapt.return_value = np.array([1000])
+    worker_mocks.geolocate.return_value = _frame(0.0, 0)
+
+    calculate_chunk_geometry(
+        _datetimes(1)[:, None], None, GeolocationKernelConfig(dynamic_kernel_sources=["k"], jpss_only=True)
+    )
+
+    assert worker_mocks.geolocate.call_args.args[2] == "LIBERA_BASE"
+
+
+@pytest.mark.parametrize(
+    ("exposure_times", "exposure_index", "match"),
+    [
+        (_datetimes(2), None, r"\(T, K\)"),
+        (_datetimes(2)[:, None], np.zeros((2, 5, 3), dtype=np.uint8), "exposure_index must be shaped"),
+        (_datetimes(2)[:, None], np.zeros((1, 3, 5), dtype=np.uint8), "exposure_index must be shaped"),
+    ],
+)
+def test_calculate_chunk_geometry_rejects_bad_shapes(worker_mocks, exposure_times, exposure_index, match):
+    with pytest.raises(ValueError, match=match):
+        calculate_chunk_geometry(exposure_times, exposure_index, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+    worker_mocks.km_cls.assert_not_called()
+
+
+@pytest.fixture
+def coverage_mocks():
+    with (
+        patch("libera_cam.geolocation.KernelManager") as km_cls,
+        patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2, 3])) as adapt,
+        patch("libera_cam.geolocation.spatial.pixel_geometry") as pixel_geometry,
+    ):
+        km = km_cls.return_value
+        km.__enter__.return_value = km
+        yield SimpleNamespace(km=km, adapt=adapt, pixel_geometry=pixel_geometry)
+
+
+def _probe(flags: list[int]) -> MagicMock:
+    return MagicMock(quality_flags=np.array(flags, dtype=np.int64)[:, None])
+
+
+def test_require_frame_coverage_probes_the_boresight_once_per_frame(coverage_mocks):
+    coverage_mocks.pixel_geometry.return_value = _probe([0, 0, 0])
+    config = GeolocationKernelConfig(dynamic_kernel_sources=["orbit.bsp"])
+
+    _require_frame_coverage(config, _datetimes(3), "LIBERA_WFOV_CAM")
+
+    coverage_mocks.km.load_libera_dynamic_kernels.assert_called_once_with(
+        ["orbit.bsp"], needs_naif_kernels=True, needs_static_kernels=True
+    )
+    coverage_mocks.km.__exit__.assert_called_once()
+    call = coverage_mocks.pixel_geometry.call_args
+    np.testing.assert_array_equal(call.args[0], [1, 2, 3])
+    assert call.args[1] == "LIBERA_WFOV_CAM"
+    np.testing.assert_array_equal(call.args[2], [[0.0, 0.0, 1.0]])
+    assert call.kwargs == {"allow_nans": True}
+
+
+def test_require_frame_coverage_raises_when_no_frame_is_covered(coverage_mocks):
+    gap = int(SQF.SPICE_ERR_MISSING_ATTITUDE | SQF.CALC_ELLIPS_INSUFF_DATA)
+    coverage_mocks.pixel_geometry.return_value = _probe([gap, gap, gap])
+
+    with pytest.raises(RuntimeError, match="cover none of the 3 camera frame"):
+        _require_frame_coverage(GeolocationKernelConfig(dynamic_kernel_sources=["k"]), _datetimes(3), "LIBERA_WFOV_CAM")
+
+
+def test_require_frame_coverage_tolerates_and_logs_individual_gaps(coverage_mocks, caplog):
+    """A missed pixel is not a coverage gap; an uncovered epoch is, and one covered frame keeps the granule."""
+    gap = int(SQF.SPICE_ERR_MISSING_ATTITUDE | SQF.CALC_ELLIPS_INSUFF_DATA)
+    coverage_mocks.pixel_geometry.return_value = _probe([gap, 0, int(SQF.CALC_ELLIPS_NO_INTERSECT)])
+
+    with caplog.at_level("WARNING", logger="libera_cam.geolocation"):
+        _require_frame_coverage(GeolocationKernelConfig(dynamic_kernel_sources=["k"]), _datetimes(3), "LIBERA_WFOV_CAM")
+
+    assert any("1 of 3 camera frame(s) have no SPICE coverage" in record.message for record in caplog.records)
+
+
+@pytest.fixture
+def orchestration_mocks(small_detector):
+    with (
+        patch("libera_cam.geolocation._require_frame_coverage") as coverage,
+        patch("libera_cam.geolocation.calculate_chunk_geometry") as chunk,
+    ):
+
+        def fake_chunk(exposure_times, exposure_index, config):
+            assert exposure_times.shape[1] == 1
+            assert exposure_index is None
+            n = exposure_times.shape[0]
+            return tuple(
+                np.full((n, *FRAME_SHAPE), i, dtype=dtype) for i, (_, dtype) in enumerate(_FIELD_VARIABLES.values())
+            )
+
+        chunk.side_effect = fake_chunk
+        yield SimpleNamespace(coverage=coverage, chunk=chunk)
+
+
+def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orchestration_mocks, monkeypatch):
+    """Tasks of LIBERA_CAM_GEO_CHUNK_SIZE frames, independent of image_data's chunks; nothing runs until compute."""
+    monkeypatch.setenv("LIBERA_CAM_GEO_CHUNK_SIZE", "2")
+    ds = _frame_dataset(n_times=5, time_chunk=5)
+    config = GeolocationKernelConfig(dynamic_kernel_sources=["orbit.bsp"])
+
+    result = add_geolocation_to_dataset(ds, config)
+
+    coverage_call = orchestration_mocks.coverage.call_args
+    assert coverage_call.args[0] is config
+    np.testing.assert_array_equal(coverage_call.args[1], ds.camera_time.values)
+    assert coverage_call.args[2] == "LIBERA_WFOV_CAM"
+    assert orchestration_mocks.chunk.call_count == 0
+    for variable, dtype in _FIELD_VARIABLES.values():
+        assert isinstance(result[variable].data, da.Array), variable
+        assert result[variable].dims == ("camera_time", "y", "x")
+        assert result[variable].dtype == dtype, variable
+        assert result[variable].data.chunks == ((2, 2, 1), (3,), (5,)), variable
+
+    computed = result[GEO_VARIABLES].compute(scheduler="synchronous")
+
+    assert orchestration_mocks.chunk.call_count == 3
+    for i, (variable, _) in enumerate(_FIELD_VARIABLES.values()):
+        np.testing.assert_array_equal(computed[variable].values, i, err_msg=variable)
+    passed_config = orchestration_mocks.chunk.call_args.args[2]
+    assert passed_config is config
+
+
+def test_add_jpss_only_geolocation_switches_the_body(orchestration_mocks):
+    ds = _frame_dataset(n_times=2, time_chunk=2)
+
+    result = add_jpss_only_geolocation_to_dataset(ds, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+    result["Latitude"].compute(scheduler="synchronous")
+
+    assert orchestration_mocks.coverage.call_args.args[2] == "LIBERA_BASE"
+    assert orchestration_mocks.chunk.call_args.args[2].jpss_only is True
+
+
+def test_add_geolocation_requires_kernel_sources_and_camera_time(orchestration_mocks):
+    with pytest.raises(ValueError, match="SPICE kernel sources are required"):
+        add_geolocation_to_dataset(_frame_dataset(2, 2), GeolocationKernelConfig())
+    with pytest.raises(ValueError, match="camera_time"):
+        add_geolocation_to_dataset(xr.Dataset(), GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+    orchestration_mocks.coverage.assert_not_called()
+
+
+@pytest.mark.parametrize("value", ["0", "-3"])
+def test_add_geolocation_rejects_geo_chunk_size_below_one(orchestration_mocks, monkeypatch, value):
+    monkeypatch.setenv("LIBERA_CAM_GEO_CHUNK_SIZE", value)
+    with pytest.raises(ValueError, match="LIBERA_CAM_GEO_CHUNK_SIZE must be >= 1"):
+        add_geolocation_to_dataset(_frame_dataset(2, 2), GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+    orchestration_mocks.coverage.assert_not_called()
+
+
+def test_add_placeholder_geolocation_to_dataset(small_detector):
+    """use_geo false: every geolocation variable as its fill, flags marked not-run, chunked like image_data."""
+    ds = _frame_dataset(n_times=6, time_chunk=3)
 
     result = add_placeholder_geolocation_to_dataset(ds)
 
-    for var in ("Latitude", "Longitude", "Altitude"):
-        assert var in result, f"{var} missing from result dataset"
-        assert isinstance(result[var].data, da.Array), f"{var} should be a dask array"
-        assert result[var].dtype == np.float32, f"{var} dtype should be float32"
-        assert result[var].shape == (n_times, 3, 5), f"{var} should align with (y, x) dims"
-        assert result[var].data.chunks[0] == image_data.chunks[0], f"{var} time chunks should match image_data"
-
-    lat = result["Latitude"].compute().values
-    lon = result["Longitude"].compute().values
-    alt = result["Altitude"].compute().values
-    assert np.all(lat == np.float32(-999))
-    assert np.all(lon == np.float32(-999))
-    assert np.all(alt == np.float32(-9999))
+    for variable, dtype in _FIELD_VARIABLES.values():
+        assert isinstance(result[variable].data, da.Array), variable
+        assert result[variable].dtype == dtype, variable
+        assert result[variable].shape == (6, *FRAME_SHAPE), variable
+        assert result[variable].data.chunks[0] == ds["image_data"].data.chunks[0], variable
+    for _, variable, fill, _ in _PIXEL_VARIABLES.values():
+        np.testing.assert_array_equal(result[variable].values, fill, err_msg=variable)
+    np.testing.assert_array_equal(result["Geolocation_Quality_Flag"].values, 0x8000)
 
 
-@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 3)
-@patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
-@patch("libera_cam.geolocation.calculate_all_pixel_lat_lon_altitude")
-@patch("libera_cam.geolocation.np.load")
-@patch("libera_cam.geolocation.KernelManager")
-def test_calculate_chunk_geolocation_output_axis_order(mock_km_cls, mock_load, mock_calc_all):
-    """Worker output is (T, Y, X, 3) in float32 even when internal calc uses (T, X, Y)."""
-    from libera_cam.geolocation import calculate_chunk_geolocation
-
-    mock_km = MagicMock()
-    mock_km.__enter__ = MagicMock(return_value=mock_km)
-    mock_km.__exit__ = MagicMock(return_value=False)
-    mock_km_cls.return_value = mock_km
-    mock_load.return_value = np.zeros((15, 3))
-
-    n_times = 2
-    lat = np.arange(n_times * 3 * 5, dtype=np.float32).reshape(n_times, 3, 5)
-    lon = lat + 100
-    alt = lat + 200
-    mock_calc_all.return_value = {"latitude": lat, "longitude": lon, "altitude": alt}
-
-    camera_time = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"], dtype="datetime64[ns]")
-    result = calculate_chunk_geolocation(camera_time, GeolocationKernelConfig())
-
-    assert result.shape == (2, 3, 5, 3)
-    assert result.dtype == np.float32
-    assert result[0, 2, 1, 0] == lat[0, 2, 1]
-
-
-@patch("libera_cam.geolocation.PIXEL_COUNT_Y", 2)
-@patch("libera_cam.geolocation.PIXEL_COUNT_X", 2)
-@patch("libera_cam.geolocation.spatial.compute_ellipsoid_intersection")
-@patch("libera_cam.geolocation.spicetime.adapt")
-@patch("libera_cam.geolocation.sp.obj.Body")
-def test_jpss_only_uses_libera_base_spice_body(
-    mock_body, mock_adapt, mock_compute, mock_kernel_manager, mock_pointing_vectors, mock_times
-):
-    """jpss_only geolocation intersects against LIBERA_BASE instead of LIBERA_WFOV_CAM."""
-    mock_adapt.return_value = np.array([100.0, 101.0, 102.0])
-    mock_body.return_value = MagicMock()
-
-    n_results = 3 * 2
-    mock_results = pd.DataFrame({"lat": np.zeros(n_results), "lon": np.zeros(n_results), "alt": np.zeros(n_results)})
-    mock_compute.return_value = (mock_results, None, None)
-
-    static_mask = np.array([True, False, True, False])
-
-    calculate_all_pixel_lat_lon_altitude(
-        mock_kernel_manager,
-        mock_times,
-        pointing_vectors=mock_pointing_vectors,
-        pixel_mask=static_mask,
-        spice_body="LIBERA_BASE",
-    )
-
-    assert mock_compute.call_count == 1
-    mock_body.assert_called_with("LIBERA_BASE", frame=True)
+def test_add_placeholder_geolocation_requires_dask_image_data(small_detector):
+    eager = _frame_dataset(n_times=2, time_chunk=2)
+    eager["image_data"] = (("camera_time", "y", "x"), np.zeros((2, *FRAME_SHAPE)))
+    with pytest.raises(ValueError, match="Dask-backed 'image_data'"):
+        add_placeholder_geolocation_to_dataset(eager)
+    with pytest.raises(ValueError, match="Dask-backed 'image_data'"):
+        add_placeholder_geolocation_to_dataset(eager.drop_vars("image_data"))
 
 
 # --- Spacecraft-level geometry and motor azimuth (per camera frame, no camera frame involved) ---
