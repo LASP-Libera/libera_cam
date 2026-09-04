@@ -57,9 +57,9 @@ When sizing AWS Batch containers and configuring Dask execution, keep the follow
 
    $$\text{task peak RSS} \approx 2.2\,\text{GB} + 0.15\,\text{GB} \times N_{\text{frames in the task}}$$
 
-   Per-frame cost falls from 2.08 s at one frame to 1.00 s asymptotically, so the ~1.1 s of per-task kernel furnishing is 6% overhead at the default chunk of 10 and 17% at 5. A decompression task at `LIBERA_CAM_CHUNK_SIZE=50` holds ~800 MB of `image_data` and masks. This bounds one task, not one run: whole-run peak memory is set by the write path instead, and is the subject of "Granule length is capped by memory" below.
+   Per-frame cost falls from 2.08 s at one frame to 1.00 s asymptotically, so the ~1.1 s of per-task kernel furnishing is 6% overhead at the default chunk of 10 and 17% at 5. A decompression task at `LIBERA_CAM_CHUNK_SIZE=50` holds ~800 MB of `image_data` and masks. This bounds one task, not one run: whole-run peak memory is set by the write path instead, and is the subject of "Memory is bounded; write throughput is not" below.
 
-4. **Blocks Are Not Released As They Are Written**: Computed blocks accumulate for the length of the write on every pairing. Under `synchronous` they accumulate in the client; under `distributed` the store tasks run on the workers, which is why sizing a container needs the whole process tree rather than the client alone. This sets the granule length a container can handle; see "Granule length is capped by memory" below.
+4. **Container Sizing Uses the Whole Process Tree**: Computed blocks accumulate for the length of a write, not the length of the granule, so peak memory plateaus rather than growing with frame count. Under `synchronous` that plateau sits in the client; under `distributed` the store tasks run on the workers, so a client-only measurement misses most of it. Size against the whole tree; see "Memory is bounded; write throughput is not" below.
 
 ### Data volume and throughput
 
@@ -113,47 +113,62 @@ would buy a further 4%), and `chunksizes` is rejected by the h5netcdf engine bec
 parses it to a list where h5py requires a tuple. Chunk shape is therefore left to the engine,
 which costs about 3% against 512x512 chunks.
 
-### Granule length is capped by memory
+### Memory is bounded; write throughput is not
 
-Computed blocks are not released as they are written, so whole-run peak memory grows with
-granule length on every pairing. Sizing a container needs the memory of the **whole process
-tree**, not the client: under `distributed` the workers are separate processes, and the client
-figure omits them entirely. Measured on scaled DITL fixtures at the default chunk of 10, peak
-RSS sampled across the client and all descendants:
+Sizing a container needs the memory of the **whole process tree**, not the client: under
+`distributed` the workers are separate processes, and the client figure omits them entirely.
+Peak RSS sampled across the client and all descendants, scaled DITL fixtures and two real
+granules, at the default chunk of 10:
 
-| Frames | Pairing                    | Client only | Whole tree |
-| ------ | -------------------------- | ----------- | ---------- |
-| 30     | `h5netcdf` + `synchronous` | 8.50 GB     | 8.50 GB    |
-| 60     | `h5netcdf` + `synchronous` | 9.65 GB     | 9.65 GB    |
-| 30     | `h5netcdf` + `distributed` | 1.86 GB     | 10.66 GB   |
-| 60     | `h5netcdf` + `distributed` | 2.60 GB     | 8.21 GB    |
-| 60     | `netcdf4` + `distributed`  | 3.07 GB     | 8.07 GB    |
+| Frames      | Pairing                    | Client only | Whole tree |
+| ----------- | -------------------------- | ----------- | ---------- |
+| 30          | `h5netcdf` + `synchronous` | 8.50 GB     | 8.50 GB    |
+| 60          | `h5netcdf` + `synchronous` | 9.65 GB     | 9.65 GB    |
+| 30          | `h5netcdf` + `distributed` | 1.86 GB     | 10.66 GB   |
+| 60          | `h5netcdf` + `distributed` | 2.60 GB     | 8.21 GB    |
+| 60          | `netcdf4` + `distributed`  | 3.07 GB     | 8.07 GB    |
+| 160 (real)  | `h5netcdf` + `distributed` | 6.99 GB     | 9.14 GB    |
+| 1003 (real) | `h5netcdf` + `distributed` | 7.22 GB     | 7.38 GB    |
 
-The client column is what earlier releases of this document reported, and it understates
-`distributed` by 4-6x: at 30 frames the run peaks at 10.66 GB while the client holds 1.86 GB.
-The `distributed` pairings are only modestly better than `synchronous` on the figure that sizes
-a container, not the 2.5x the client-only numbers suggested.
+**Memory does not grow with granule length.** A 1003-frame granule peaks _lower_ than a
+60-frame one. The per-frame memory models in earlier releases of this document were an artefact
+of measuring `ru_maxrss` on `RUSAGE_SELF`, which does not count `distributed`'s workers, and of
+reading run-to-run variation in the terminal flush as a trend. The RSS trace shows why: memory
+ramps to a plateau in the first minute and stays there — 5.6 GB across the 160-frame run, 4.5 GB
+across the 1003-frame run — with a short spike at the end. Blocks are held for the length of a
+write, not for the length of the granule. The "roughly 750 frames in 32 GB" cap that earlier
+releases derived is withdrawn: no such cap was observed.
 
-**No memory-versus-length model is offered here.** Whole-tree peak is not monotonic in granule
-length in these measurements — `distributed` peaked higher at 30 frames than at 60 — so the
-earlier least-squares fits, and the "roughly 750 frames in 32 GB" cap derived from them, are
-withdrawn rather than refitted. What is established is that memory does grow with granule
-length, that all three pairings need 8-11 GB at 30-60 frames, and that a 12 h granule is not
-writable on any of them today.
-
-`DASK_MEMORY_LIMIT` must be raised above its `8GB` default to run `distributed` at all at these
+`DASK_MEMORY_LIMIT` must still be raised above its `8GB` default to run `distributed` at these
 sizes: at the default, both `h5netcdf` + `distributed` and `netcdf4` + `distributed` died with
-`distributed.scheduler.KilledWorker` on the store tasks at 60 frames. The measurements above
-used `DASK_MEMORY_LIMIT=24GB`.
-
-Neither path responds to `LIBERA_CAM_GEO_CHUNK_SIZE` in its whole-run term (60 frames peak at
-9.0 GB with a chunk of 10 and 8.6 GB with a chunk of 2 under the default path). Stage
-checkpoints put all of the growth inside `to_netcdf`: at 60 frames the dataset is still lazy at
+`distributed.scheduler.KilledWorker` on the store tasks at 60 frames. Every measurement above
+used `DASK_MEMORY_LIMIT=24GB`. Peak is insensitive to `LIBERA_CAM_GEO_CHUNK_SIZE` (60 frames
+peak at 9.0 GB with a chunk of 10 and 8.6 GB with a chunk of 2 under the default path), and
+stage checkpoints put the growth inside `to_netcdf`: at 60 frames the dataset is still lazy at
 0.44 GB after both `enforce_dataset_conformance` and `check_dataset_conformance`.
 
-Nothing enforces the cap today: a run past it is killed by the container or by the Dask
-scheduler rather than stopped by the pipeline. Releasing blocks as they are written (roadmap
-item 5) is the prerequisite for full-length granules.
+What _does_ degrade with granule length is throughput:
+
+| Granule           | Frames | Wall     | s/frame  | MB/frame |
+| ----------------- | ------ | -------- | -------- | -------- |
+| 15 Minute July 12 | 160    | 7.9 min  | **2.96** | 43.0     |
+| 3 Hour July 11    | 1003   | 85.9 min | **5.14** | 31.4     |
+
+That is 1.74x slower per frame over a 6x longer granule, so a 12 h granule extrapolates to well
+over the 7 h that the 160-frame rate implies. The leading explanation is HDF5 chunk
+misalignment. `h5py.guess_chunk` is shape-dependent, so the chunk changes with granule length —
+`(2, 128, 128)` at 60 frames, `(5, 64, 128)` at 160, `(16, 64, 64)` at 1006 — while Dask writes
+geolocation in `LIBERA_CAM_GEO_CHUNK_SIZE`-frame blocks. Ten frames divides evenly into a depth
+of 2 and of 5 but not of 16, so at production sizes every write lands on partial HDF5 chunks and
+the library decompresses, modifies, recompresses and rewrites them. A `sample` of the worker
+during the 1003-frame run has `H5Z__filter_shuffle` as the dominant leaf, and the file stops
+growing during those phases because rewriting an existing chunk in place adds no bytes. The
+spatial tile also shrinks to 64x64, giving 838,656 chunks across the 13 3-D variables.
+
+This has not been confirmed by re-running with a pinned chunk shape, because `chunksizes` cannot
+currently be set from the product definition (see the encoding note above). That upstream fix is
+worth considerably more than the 3% direct compression gain quoted there: it converts an
+unpredictable, granule-length-dependent write cost into a fixed one.
 
 ### Examples
 

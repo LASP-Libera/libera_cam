@@ -145,18 +145,19 @@ Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_produ
 not release computed Dask blocks as it writes them. Memory and I/O become a bottleneck on large
 multi-gigabyte datasets.
 
-Measured on scaled DITL fixtures (see `overview.md`, "Granule length is capped by memory"), peak
-RSS across the whole process tree grows with granule length on every pairing, reaching 8-11 GB
-at 30-60 frames whether the scheduler is `synchronous` or `distributed`. `distributed` does not
-avoid this; it relocates it, since the store tasks run on the workers. `DASK_MEMORY_LIMIT` must
-be raised above its `8GB` default to write 60 frames under `distributed` at all, and a 12 h
-granule is not writable on any pairing today. Nothing detects the cap: a run past it is killed
-by the container or the Dask scheduler rather than stopped by the pipeline, so a guard that
-fails loudly on frame count belongs with this work.
+Measured on real granules (see `overview.md`, "Memory is bounded; write throughput is not"),
+peak RSS across the whole process tree does **not** grow with granule length: a 1003-frame
+granule peaks at 7.38 GB against 9.14 GB for 160 frames. Blocks are held for the length of a
+write, not the length of the granule. The memory cap earlier revisions of this item assumed does
+not exist, so this item is no longer a prerequisite for full-length granules.
 
-A per-frame memory model is deliberately not quoted here. Whole-tree peak was not monotonic in
-granule length in the measurements taken so far, so establishing a trustworthy model — enough
-points, a quiet machine, and both schedulers — is itself part of this item.
+What does degrade is write throughput: 2.96 s/frame at 160 frames against 5.14 s/frame at 1003.
+The leading explanation is HDF5 chunk misalignment — `h5py.guess_chunk` is shape-dependent, so
+the chunk depth changes with granule length (2, 5, then 16 frames) while Dask writes
+`LIBERA_CAM_GEO_CHUNK_SIZE`-frame blocks, and at production sizes the two stop dividing evenly.
+Confirming that needs the ability to pin `chunksizes` from the product definition, which is
+blocked upstream; that fix should come before any worker-write redesign, since it may remove
+most of the motivation for one.
 
 ### Target state
 
