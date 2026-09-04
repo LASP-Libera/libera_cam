@@ -47,6 +47,7 @@ L1A header fields reach the L1B product as:
 
 | L1B variable                    | L1A source                                   | Notes                           |
 | ------------------------------- | -------------------------------------------- | ------------------------------- |
+| `Azimuth`                       | `WFOV_FSW_HEADER_AZIMUTH_ANGLE`              | Degrees, signed about zero      |
 | `Radiometer_Observation_ID`     | `WFOV_FSW_HEADER_RAD_OBS_ID`                 |                                 |
 | `Camera_Observation_ID`         | `WFOV_FSW_HEADER_CAM_OBS_ID`                 |                                 |
 | `Image_Mode`                    | `WFOV_FSW_HEADER_IMG_MODE`                   | 0=DUAL, 1=VIDEO, 2=IMGA, 3=IMGB |

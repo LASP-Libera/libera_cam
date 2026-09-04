@@ -8,6 +8,8 @@
   `WFOV_HEADER_PARSE_VALID` is false.
 - **Exposure metadata:** Convert FPGA actual exposure registers and `WFOV_IMAGE_HEADER_DELTA` to
   milliseconds; write `Actual_Exposure_Time_1/2` and `Exposure_Delta` on L1B.
+- **Azimuth valid range:** Correct `Azimuth` `valid_range` to `[-180, 180]`; the FSW field is a
+  signed angle in degrees, not a 0-360 bearing.
 - **L1B product definition:** Rename misnamed operational-mode fields to
   `Radiometer_Observation_ID` / `Camera_Observation_ID`; add `Image_Mode` and
   `Camera_Packet_Index`.

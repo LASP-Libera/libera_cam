@@ -80,23 +80,23 @@ Timestamps are set after the camera command is sent (`setIMG_META_3/4` from `pro
 
 All multi-byte integers are **big-endian** unless noted. Total size is 9 × 32-bit meta words.
 
-| Offset | Field                  | Size | Type    | Notes                                                          |
-| -----: | ---------------------- | ---: | ------- | -------------------------------------------------------------- |
-|      0 | `fsw_length`           |    1 | uint8   | **Number of 32-bit meta words (9)**, not total byte count      |
-|      1 | flags (packed)         |    1 | uint8   | See [Byte 1 flags](#byte-1-packed-flags)                       |
-|      2 | `pixel_mask_id`        |    1 | uint8   | From `WFOV_CAM_START` `pixelMaskID`                            |
-|      3 | `simulator`            |    1 | uint8   | Reserved/pad in flight; ops sim may set to 1                   |
-|    4–5 | `cadence`              |    2 | uint16  | Imaging cadence (ms)                                           |
-|      6 | `image_total`          |    1 | uint8   | Total images in sequence                                       |
-|      7 | `image_count`          |    1 | uint8   | Current image index in sequence                                |
-|   8–11 | `flash_write_pointer`  |    4 | uint32  | NAND write page pointer at trigger                             |
-|  12–15 | `timestamp_seconds`    |    4 | uint32  | Acquisition time (seconds)                                     |
-|  16–19 | `timestamp_subseconds` |    4 | uint32  | Acquisition time (microseconds)                                |
-|  20–21 | `rad_obs_id`           |    2 | uint16  | Radiometer observation ID                                      |
-|  22–23 | `cam_obs_id`           |    2 | uint16  | WFOV observation ID                                            |
-|  24–27 | `commanded_exp_time_1` |    4 | uint32  | Commanded exposure 1 (see [Exposure timing](#exposure-timing)) |
-|  28–31 | `commanded_exp_time_2` |    4 | uint32  | Commanded exposure 2 (see [Exposure timing](#exposure-timing)) |
-|  32–35 | `azimuth_angle`        |    4 | float32 | Azimuth angle (radians)                                        |
+| Offset | Field                  | Size | Type    | Notes                                                            |
+| -----: | ---------------------- | ---: | ------- | ---------------------------------------------------------------- |
+|      0 | `fsw_length`           |    1 | uint8   | **Number of 32-bit meta words (9)**, not total byte count        |
+|      1 | flags (packed)         |    1 | uint8   | See [Byte 1 flags](#byte-1-packed-flags)                         |
+|      2 | `pixel_mask_id`        |    1 | uint8   | From `WFOV_CAM_START` `pixelMaskID`                              |
+|      3 | `simulator`            |    1 | uint8   | Reserved/pad in flight; ops sim may set to 1                     |
+|    4–5 | `cadence`              |    2 | uint16  | Imaging cadence (ms)                                             |
+|      6 | `image_total`          |    1 | uint8   | Total images in sequence                                         |
+|      7 | `image_count`          |    1 | uint8   | Current image index in sequence                                  |
+|   8–11 | `flash_write_pointer`  |    4 | uint32  | NAND write page pointer at trigger                               |
+|  12–15 | `timestamp_seconds`    |    4 | uint32  | Acquisition time (seconds)                                       |
+|  16–19 | `timestamp_subseconds` |    4 | uint32  | Acquisition time (microseconds)                                  |
+|  20–21 | `rad_obs_id`           |    2 | uint16  | Radiometer observation ID                                        |
+|  22–23 | `cam_obs_id`           |    2 | uint16  | WFOV observation ID                                              |
+|  24–27 | `commanded_exp_time_1` |    4 | uint32  | Commanded exposure 1 (see [Exposure timing](#exposure-timing))   |
+|  28–31 | `commanded_exp_time_2` |    4 | uint32  | Commanded exposure 2 (see [Exposure timing](#exposure-timing))   |
+|  32–35 | `azimuth_angle`        |    4 | float32 | Azimuth angle, **degrees** (see [Azimuth units](#azimuth-units)) |
 
 Decode implementation:
 
@@ -113,6 +113,33 @@ metadata["pixel_mask_id"] = struct.unpack("B", file.read(1))[0]
 ```
 
 In `libera_utils` L1A products, these fields appear as `WFOV_FSW_HEADER_*` variables on the `CAMERA_TIME` dimension.
+
+---
+
+## Azimuth units
+
+`azimuth_angle` (bytes 32–35) is in **degrees**. FSW converts from radians before packing it:
+
+```cpp
+// modules/wfov/src/WFOVPixelManager.cpp - saveAzAngle()
+float angle = ptos.outCmdAngle * RADIANS_TO_DEGREES;   // 57.2958f
+// ... queued, then read back as predictedAzAngle:
+auto *tmp = (uint32 *)&predictedAzAngle;
+HAL_WFOV::setIMG_META_8(*tmp);                         // 9th meta word = bytes 32-35
+```
+
+`rotateStripeMask` adds this angle to `stripeRot`, which `WFOVTable.h` documents as `[deg]`.
+
+It is a **signed** angle about zero, not a 0–360 compass bearing; observation azimuth scans span
+roughly ±110°. Do not wrap it into 0–360.
+
+Related azimuth quantities and their units:
+
+| Field                             | Units   | What it is                                |
+| --------------------------------- | ------- | ----------------------------------------- |
+| `WFOV_FSW_HEADER_AZIMUTH_ANGLE`   | degrees | FSW commanded azimuth in the WFOV header  |
+| `ICIE__AXIS_AZ_FILT` (APID 1048)  | radians | Azimuth axis filtered encoder reading     |
+| `ptos.outCmdAngle` (FSW internal) | radians | Pre-conversion source of the header field |
 
 ---
 

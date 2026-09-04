@@ -69,7 +69,15 @@ available for pair identification are listed in [overview.md](overview.md#l1a-in
 
 ---
 
-## 3. Surface geometry geolocation performance & sparse geometry
+## 3. SPICE-derived Azimuth
+
+`Azimuth` passes through the FSW-reported commanded azimuth from the L1A header. It is to be
+replaced by an azimuth derived from SPICE pointing, alongside the geometric viewing and solar
+azimuth angles.
+
+---
+
+## 4. Surface geometry geolocation performance & sparse geometry
 
 ### Problem today
 
@@ -89,7 +97,7 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ---
 
-## 4. Direct worker NetCDF chunk output
+## 5. Direct worker NetCDF chunk output
 
 ### Problem today
 
@@ -105,7 +113,7 @@ write their completed chunks independently without returning payload data to the
 
 ---
 
-## 5. Automated performance regression benchmarking
+## 6. Automated performance regression benchmarking
 
 ### Target state
 
@@ -115,7 +123,7 @@ radiometric calibration, JPEG-LS decompression, and SPICE geolocation.
 
 ---
 
-## 6. Dask performance testing
+## 7. Dask performance testing
 
 ## Aspects worth testing more thoroughly
 
