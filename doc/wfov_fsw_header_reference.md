@@ -91,7 +91,7 @@ All multi-byte integers are **big-endian** unless noted. Total size is 9 × 32-b
 |  22–23 | `cam_obs_id`           |    2 | uint16  | WFOV observation ID                                       |
 |  24–27 | `commanded_exp_time_1` |    4 | uint32  | Commanded exposure time 1                                 |
 |  28–31 | `commanded_exp_time_2` |    4 | uint32  | Commanded exposure time 2                                 |
-|  32–35 | `azimuth_angle`        |    4 | float32 | Azimuth angle (radians)                                   |
+|  32–35 | `azimuth_angle`        |    4 | float32 | Azimuth angle (degrees, signed)                           |
 
 Decode implementation:
 

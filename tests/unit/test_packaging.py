@@ -23,7 +23,7 @@ def _processing_dataset() -> xr.Dataset:
             "rad_obs_id": (("camera_time",), np.zeros(n_times, dtype=np.uint16)),
             "cam_obs_id": (("camera_time",), np.zeros(n_times, dtype=np.uint16)),
             "good_image_flag": (("camera_time",), np.zeros(n_times, dtype=np.uint32)),
-            # FSW image-header azimuth (radians); not a product variable.
+            # FSW image-header azimuth (degrees); not a product variable.
             "azimuth_angle": (("camera_time",), np.array([0.1, 0.2], dtype=np.float32)),
             # Motor azimuth from the SPICE CK (degrees), set during processing.
             "Azimuth": (("camera_time",), np.array([12.5, 13.0], dtype=np.float32)),

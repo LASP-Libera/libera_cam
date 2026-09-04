@@ -87,7 +87,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     ):
         dataset.attrs.pop(attr_name, None)
 
-    # The FSW image-header ``azimuth_angle`` (radians) is not a product variable: ``Azimuth`` is the
+    # The FSW image-header ``azimuth_angle`` (degrees) is not a product variable: ``Azimuth`` is the
     # motor encoder angle from the SPICE CK, set during processing.
     if "azimuth_angle" not in dataset:
         raise ValueError("Dataset must contain the FSW header 'azimuth_angle' variable from read_l1a_cam_data.")
