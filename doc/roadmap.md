@@ -141,18 +141,22 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ### Problem today
 
-Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_product`, which
-funnels all computed Dask blocks back through the client process. Client process memory and I/O
-become a bottleneck on large multi-gigabyte datasets.
+Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_product`, which does
+not release computed Dask blocks as it writes them. Memory and I/O become a bottleneck on large
+multi-gigabyte datasets.
 
-Measured on scaled DITL fixtures (see `overview.md`, "Granule length is capped by client
-memory"), client peak RSS grows with granule length on both write paths because computed blocks
-are not released as they are written: about 0.6 GB + 42 MB per frame on the production pairing
-(`netcdf4` engine, `distributed` scheduler) and 2.8 GB + 106 MB per frame on the default
-`h5netcdf` + `synchronous` path. The production pairing therefore allows roughly 750 frames in a
-32 GB container, about an hour of data at 5 s cadence, and a 12 h granule would need roughly
-360 GB in the client. Nothing detects the cap: a run past it is killed by the container rather
-than stopped by the pipeline, so a guard that fails loudly on frame count belongs with this work.
+Measured on scaled DITL fixtures (see `overview.md`, "Granule length is capped by memory"), peak
+RSS across the whole process tree grows with granule length on every pairing, reaching 8-11 GB
+at 30-60 frames whether the scheduler is `synchronous` or `distributed`. `distributed` does not
+avoid this; it relocates it, since the store tasks run on the workers. `DASK_MEMORY_LIMIT` must
+be raised above its `8GB` default to write 60 frames under `distributed` at all, and a 12 h
+granule is not writable on any pairing today. Nothing detects the cap: a run past it is killed
+by the container or the Dask scheduler rather than stopped by the pipeline, so a guard that
+fails loudly on frame count belongs with this work.
+
+A per-frame memory model is deliberately not quoted here. Whole-tree peak was not monotonic in
+granule length in the measurements taken so far, so establishing a trustworthy model — enough
+points, a quiet machine, and both schedulers — is itself part of this item.
 
 ### Target state
 
@@ -178,4 +182,16 @@ radiometric calibration, JPEG-LS decompression, and SPICE geolocation.
 
 - Logging of distributed tasks on AWS. Are we getting enough information out to debug?
 - When using `distributed` mode does Dask emit a "large object detected in task graph" warning because of the 50 images passing in?
-- Confirm netcdf file writing in distributed mode on AWS with h5netcdf vs netcdf4 engine
+- Confirm netcdf file writing in distributed mode on AWS with h5netcdf vs netcdf4 engine. Both
+  engines now write under `distributed` and to S3, and locally `h5netcdf` is faster and smaller
+  (176 s and 40.5 MB/frame against 217 s and 47.3 MB/frame at 60 frames); confirm that holds on
+  AWS hardware.
+- Investigate the `netcdf4` + `distributed` race: one run in three failed with
+  `KeyError('Viewing_Zenith_Surface')` inside `netCDF4_.get_array`, a worker having reopened the
+  output file before the client's variable definitions were visible to it. Not reproduced with
+  `h5netcdf`, and not reproduced on a 14-variable toy dataset (10/10 clean on both engines), so
+  it needs the full product to provoke. Worth a ticket in its own right: an intermittent failure
+  in the write path is worse than a deterministic one.
+- Multi-node `distributed` needs shared filesystem access to the output: `xarray` wraps the
+  output path in a `CachingFileManager` and each worker reopens the file itself. The single-node
+  `LocalCluster` built by `l1b.py` satisfies this automatically.
