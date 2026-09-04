@@ -10,12 +10,12 @@ def test_angular_difference_is_shortest_signed_arc():
     np.testing.assert_allclose(angular_difference_deg(a, b), [20.0, -20.0, 180.0, 180.0])
 
 
-def test_stats_convert_radians_and_exclude_fill():
+def test_stats_wrap_signed_degrees_and_exclude_fill():
+    """The FSW angle is degrees, signed; -10 must wrap onto 350 rather than be converted."""
     spice_deg = np.array([10.0, 90.0, -999.0, 45.0])
-    fsw_rad = np.radians(np.array([350.0, 80.0, 30.0, -999.0]))
-    fsw_rad[3] = -999.0
+    fsw_deg = np.array([-10.0, 80.0, 30.0, -999.0])
 
-    stats = spice_vs_fsw_azimuth_stats(spice_deg, fsw_rad)
+    stats = spice_vs_fsw_azimuth_stats(spice_deg, fsw_deg)
 
     assert stats["n"] == 2
     assert stats["min"] == pytest.approx(10.0)
