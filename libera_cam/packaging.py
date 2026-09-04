@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 # Per-pixel product variables with no producer yet. Each is written as its product ``_FillValue``
 # so the file says "not computed" rather than carrying zeros that look like data. Remove a name
-# here when processing starts producing it; the strict writer then raises if it goes missing.
+# here when processing starts producing it: the strict writer then raises if it goes missing, and
+# packaging raises if it arrives while still listed here, so neither direction fails silently.
 # TODO[LIBSDC-814]: terrain-corrected coordinates.
 _UNIMPLEMENTED_PIXEL_VARIABLES: tuple[str, ...] = (
     "Terrain_Corrected_Latitude",
@@ -119,6 +120,11 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
 
     radiance = dataset["Radiance"].data
     dims_3d = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+    if produced := [name for name in _UNIMPLEMENTED_PIXEL_VARIABLES if name in dataset]:
+        raise ValueError(
+            f"{produced} carry data but are listed in _UNIMPLEMENTED_PIXEL_VARIABLES, which would "
+            "overwrite them with fill values. Remove them from that list now that they have a producer."
+        )
     for name, fill in _placeholder_fill_values(_UNIMPLEMENTED_PIXEL_VARIABLES).items():
         dataset[name] = (dims_3d, da.full_like(radiance, fill, dtype=np.float32))
     dataset["Camera_Mask"] = (dims_3d, da.zeros_like(radiance, dtype=np.uint8))

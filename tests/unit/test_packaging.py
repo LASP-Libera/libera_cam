@@ -66,6 +66,18 @@ def test_placeholders_carry_product_fill_values():
     assert packaged["Camera_Mask"].dtype == np.uint8
 
 
+def test_packaging_rejects_a_placeholder_variable_that_already_has_data():
+    """A producer landing without its name leaving the list must fail, not silently overwrite real data."""
+    dataset = _processing_dataset()
+    dataset["Terrain_Corrected_Latitude"] = (
+        ("camera_time", "y", "x"),
+        da.full_like(dataset["Radiance"].data, 42.0, dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError, match="_UNIMPLEMENTED_PIXEL_VARIABLES"):
+        package_l1b_product(dataset)
+
+
 def test_produced_geolocation_variables_pass_through_untouched():
     """Only the terrain fields lack a producer; computed per-pixel geometry is transposed, never overwritten."""
     assert set(_UNIMPLEMENTED_PIXEL_VARIABLES) == {
