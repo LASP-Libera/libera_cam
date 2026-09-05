@@ -29,51 +29,59 @@ Open questions:
 
 ### Problem today
 
-When the FPGA runs in **VIDEO** mode (`img_mode == 1`), a single camera trigger produces
-**two NAND images** with identical FSW timestamps: a full-frame write (bitmask bypass) and a
-masked/stripe write. Both share the same `timestamp_seconds` and `timestamp_subseconds`, so
+When the FPGA runs in **VIDEO** mode (`img_mode == 1`), a single camera exposure produces
+**two downlinked NAND images** with identical FSW timestamps: a full-frame write (bitmask bypass)
+and a masked/stripe write. Both share the same `timestamp_seconds` and `timestamp_subseconds`, so
 `CAMERA_TIME` is **not unique**.
 
-Duplicate time coordinates break many NetCDF viewers and complicate any logic that assumes
-one row per acquisition instant. See
-[Images per timestamp](wfov_fsw_header_reference.md#images-per-timestamp) and
+Duplicate time coordinates break standard NetCDF indexing and complicate downstream analysis.
+See [Images per timestamp](wfov_fsw_header_reference.md#images-per-timestamp) and
 [Separating duplicate-timestamp pairs](wfov_fsw_header_reference.md#separating-duplicate-timestamp-pairs).
 
-### Proposed L1A fix
+### Target architecture
 
-Introduce a small synthetic sub-microsecond offset (on the order of **1 µs**) within each
-duplicate-timestamp pair so that stored coordinates are unique and monotonic in packet
-order. The offset is a **storage convenience**, not a physical acquisition-time correction.
+Rather than altering timestamps (which introduces synthetic errors), candidate approaches include:
 
-Document the offset scheme in the L1A product definition and propagate a flag or auxiliary
-coordinate so downstream code can recover the true trigger time.
+1. **Auxiliary Time Coordinate**: Configure the dataset along an integer frame index dimension
+   and store acquisition time as a non-unique auxiliary coordinate variable.
+2. **Stream Separation**: Split VIDEO pairs into distinct logical variables or datasets:
+   - **ScienceStill**: Masked member of each VIDEO pair plus nominal non-VIDEO frames.
+   - **VideoFull**: Full-frame member only.
+3. **Metadata Constant Offsets**: If nominal timing differences exist between modes, document
+   them in product metadata attributes rather than modifying coordinates.
 
 ### L1B responsibilities
 
-| Step                   | Requirement                                                                                                                        |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Geolocation input time | **Undo** the synthetic offset before SPICE lookups so pointing uses the true trigger time                                          |
-| Product separation     | Split VIDEO pairs into distinct logical streams (e.g. science still vs. video full-frame); exact output schema **not yet decided** |
-| Validation             | Use packet order, `img_mode`, and content heuristics (`valid_pixel_mask`, `integration_mask`) to confirm pair assignment           |
-
-Candidate stream names from the FSW reference doc: **ScienceStill** (masked member of each
-VIDEO pair plus non-VIDEO frames) and **VideoFull** (full-frame member only). The L1B fields
-available for pair identification are listed in [overview.md](overview.md#l1a-inputs).
-
-### Open questions
-
-- Whether L1B emits separate products, separate variables within one product, or filters one
-  stream at write time
-- How to represent the "true" vs. "storage" timestamp in L1B output metadata
-- Whether all VIDEO frames in a sequence need splitting or only `img_mode == 1` pairs
+| Step                   | Requirement                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Geolocation input time | Use true acquisition epoch for SPICE lookups                                                                             |
+| Product separation     | Split VIDEO pairs into distinct logical streams (e.g. science still vs. video full-frame)                                |
+| Validation             | Use packet order, `img_mode`, and content heuristics (`valid_pixel_mask`, `integration_mask`) to confirm pair assignment |
 
 ---
 
-## 3. SPICE-derived Azimuth
+## 3. Per-pixel integration time and geolocation time
 
-`Azimuth` passes through the FSW-reported commanded azimuth from the L1A header. It is to be
-replaced by an azimuth derived from SPICE pointing, alongside the geometric viewing and solar
-azimuth angles.
+### Problem today
+
+Each downlinked pixel is encoded as **13 bits** in the JPEG-LS payload:
+
+- **Bits 0–11**: DN value (12-bit science data)
+- **Bit 12**: integration-time flag (short vs. long exposure)
+
+The camera acquires **two exposures at different integration times** within a single readout
+cycle. Pixels from short and long integrations correspond to **different effective acquisition
+times**, even though they share one `CAMERA_TIME` frame coordinate.
+
+L1B extracts `integration_mask` in `l1a_parser.py` for radiometric calibration, but geolocation
+currently evaluates SPICE at the frame-level `CAMERA_TIME` for all active un-masked pixels.
+
+### Target state
+
+1. Model the short/long integration timing relative to the frame timestamp (exposure start,
+   readout order, and FPGA timing offsets)
+2. Assign per-pixel or per-integration-group time offsets for SPICE interpolation
+3. Apply the correct time when computing lat/lon/alt and surface geometry angles for each pixel
 
 ---
 

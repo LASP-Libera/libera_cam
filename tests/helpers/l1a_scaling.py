@@ -3,25 +3,8 @@
 from pathlib import Path
 
 import numpy as np
-import numpy.typing as npt
-import pandas as pd
 import xarray as xr
 from libera_utils.l1a.wfov_image_metadata import CAMERA_TIME_COORD
-from libera_utils.time import CCSDS_EPOCH
-
-CCSDS_EPOCH_NS = np.datetime64(CCSDS_EPOCH)
-
-
-def _dt64_to_day_ms_us(
-    time_data: npt.NDArray[np.datetime64],
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.int64]]:
-    """Derive CCSDS day/ms/us fields from datetime64 (inverse of ``multipart_to_dt64``)."""
-    delta_ns = (time_data - CCSDS_EPOCH_NS).astype(np.int64)
-    one_day_ns = np.timedelta64(1, "D").astype("timedelta64[ns]").astype(np.int64)
-    day_data, within_day_ns = np.divmod(delta_ns, one_day_ns)
-    ms_data, within_ms_ns = np.divmod(within_day_ns, 1_000_000)
-    us_data = (within_ms_ns // 1000).astype(np.int64)
-    return day_data, ms_data, us_data
 
 
 def make_extended_l1a(input_path: Path, output_path: Path, copies: int = 2) -> None:
@@ -84,11 +67,3 @@ def make_extended_l1a(input_path: Path, output_path: Path, copies: int = 2) -> N
 
     ds_tiled = xr.Dataset(data_vars=data_vars, coords=coords, attrs=dict(ds.attrs))
     ds_tiled.to_netcdf(output_path)
-
-
-def multipart_fields_from_dt64(
-    time_data: npt.NDArray[np.datetime64],
-) -> pd.DataFrame:
-    """Build a DataFrame of CCSDS multipart fields suitable for ``multipart_to_dt64``."""
-    day_data, ms_data, us_data = _dt64_to_day_ms_us(time_data)
-    return pd.DataFrame({"day": day_data, "ms": ms_data, "us": us_data})

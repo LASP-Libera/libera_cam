@@ -116,13 +116,11 @@ variables:
     dimensions: ["CAMERA_TIME"]
     attributes:
       long_name: FSW radiometer observation ID
-      _FillValue: 0
   Camera_Observation_ID:
     dtype: uint16
     dimensions: ["CAMERA_TIME"]
     attributes:
       long_name: FSW camera observation ID
-      _FillValue: 0
   Image_Mode:
     dtype: uint8
     dimensions: ["CAMERA_TIME"]

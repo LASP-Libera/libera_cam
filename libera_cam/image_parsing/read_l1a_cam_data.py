@@ -179,7 +179,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
             masks.append(mask)
         return np.stack(images, axis=0), np.stack(masks, axis=0)
 
-    delayed_decompress_batch = delayed(decompress_batch, nout=2, pure=True)
+    delayed_decompress_batch = delayed(decompress_batch, nout=2, pure=False)
 
     logger.info("Extracting JPEG-LS payloads from L1A WFOV_COMPRESSED_IMAGE...")
     payloads = _extract_jpeg_ls_payloads(cam_dataset)
