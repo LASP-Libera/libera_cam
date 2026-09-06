@@ -118,20 +118,14 @@ In `libera_utils` L1A products, these fields appear as `WFOV_FSW_HEADER_*` varia
 
 ## Azimuth units
 
-`azimuth_angle` (bytes 32–35) is in **degrees**.
-
-`rotateStripeMask` adds this angle to `stripeRot`, which `WFOVTable.h` documents as `[deg]`.
-
-It is a **signed** angle about zero, not a 0–360 compass bearing; observation azimuth scans span
-roughly ±110°. Do not wrap it into 0–360.
+`azimuth_angle` (bytes 32–35) is the uncorrected motor position in **degrees**.
 
 Related azimuth quantities and their units:
 
-| Field                             | Units   | What it is                                |
-| --------------------------------- | ------- | ----------------------------------------- |
-| `WFOV_FSW_HEADER_AZIMUTH_ANGLE`   | degrees | FSW commanded azimuth in the WFOV header  |
-| `ICIE__AXIS_AZ_FILT` (APID 1048)  | radians | Azimuth axis filtered encoder reading     |
-| `ptos.outCmdAngle` (FSW internal) | radians | Pre-conversion source of the header field |
+| Field                            | Units   | What it is                               |
+| -------------------------------- | ------- | ---------------------------------------- |
+| `WFOV_FSW_HEADER_AZIMUTH_ANGLE`  | degrees | FSW commanded azimuth in the WFOV header |
+| `ICIE__AXIS_AZ_FILT` (APID 1048) | radians | Azimuth axis filtered encoder reading    |
 
 ---
 
@@ -451,22 +445,4 @@ Mapping each mask class to the correct SPICE time for geolocation is unresolved.
 | L1B exposure count → ms conversions | `libera_cam/image_parsing/exposure.py`                                     |
 | Clock period constant               | `libera_cam.constants.WFOV_DEFAULT_CLK_PER_VALUE`                          |
 | L1A stitch + image plane            | `libera_utils/libera_utils/l1a/wfov_image_metadata.py`                     |
-| Hydra / FITS decoder                | `libctdb/libfsw/projects/icie/Python/process_wfov_sci.py`                  |
-| FSW header writer                   | `libfsw/modules/wfov/src/WFOVManager.cpp` (`acquire`)                      |
-| FSW struct definition               | `libfsw/modules/wfov/src/WFOVPkt.h` (`wfovImgMetaData_t`)                  |
-| FPGA select constants               | `libfsw/projects/icie/src/include/hal/wfov.h`                              |
-| Pixel mask command values           | `libctdb/libfsw/projects/icie/Python/constants.py`                         |
 | L1A product variables               | `libera_utils/libera_utils/data/product_definitions/icie_wfov_sci_l1a.yml` |
-
----
-
-## Out of scope
-
-This document describes metadata layout, exposure-timing conversions, and operational
-guidance. It does **not** cover:
-
-- Automatic VIDEO stream splitting in the L1A or L1B pipeline
-- New L1A product variables (e.g. `WFOV_IMAGE_STREAM`)
-- Per-pixel / dual-mask geolocation time assignment
-- Full multi-packet image stitching — performed in libera_utils
-  (`enhance_wfov_l1a_dataset`); libera_cam reads `WFOV_COMPRESSED_IMAGE` directly
