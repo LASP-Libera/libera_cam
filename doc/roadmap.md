@@ -12,59 +12,27 @@ dependencies, open design questions, and forward-looking engineering priorities.
 
 ---
 
-## 1. Camera-time L1A with image-aligned chunking
+## 1. Image-aligned NetCDF chunking
 
-### Problem today
+The on-disk NetCDF chunk policy for L1A — images per chunk vs. target byte size — is undecided,
+so Dask block sizes cannot be matched to disk chunks. `_extract_jpeg_ls_payloads` reads every
+blob into memory up front; lazy per-chunk blob reads depend on that policy.
 
-L1A WFOV science products arrive as a **CCSDS mem-dump packet stream** indexed by
-`PACKET_ICIE_TIME`, not by image acquisition time. Each complete NAND image blob may span
-many packets. At L1B, `read_l1a_cam_data.py` must:
+Open questions:
 
-1. Scan the packet stream (`reassemble_image_blobs`)
-2. Stitch SOP/EOP sequences into image blobs
-3. Decompress JPEG-LS payloads
-4. Build a `camera_time`-indexed dataset
-
-Packet-boundary chunking does **not** align with image boundaries. A Dask chunk can start or
-end mid-image, which prevents clean parallel decomposition and forces stitching work inside
-the L1B algorithm.
-
-See [L1A time coordinates](wfov_fsw_header_reference.md#l1a-time-coordinates) for the
-distinction between `PACKET_ICIE_TIME` and `CAMERA_TIME`.
-
-### Target state
-
-Move packet stitching and blob reassembly into the **libera_utils L1A pipeline** (tracked in
-the associated `libera_utils` L1A camera ingest update). Future L1A products will be:
-
-- Indexed on **`camera_time`** (or an equivalent per-image coordinate)
-- Written in **chunks that contain only complete images**
-
-### Expected L1B impact
-
-With image-aligned L1A chunks, L1B can:
-
-- Skip packet stitching entirely
-- Map Dask blocks directly to image groups
-- Parallelize radiometric correction and geolocation with fewer graph nodes and less
-  scheduler overhead
-
-### Open questions
-
-- Chunk size policy (images per chunk vs. target byte size)
-- Whether decoded 12-bit arrays or compressed payloads are stored at L1A
-- Ensuring L1A chunk boundaries contain only complete images
+- Whether the policy targets a fixed image count or a target byte size per chunk
+- Guaranteeing L1A chunk boundaries contain only complete images
 
 ---
 
-## 2. VIDEO mode and duplicate `camera_time` values
+## 2. VIDEO mode and duplicate `CAMERA_TIME` values
 
 ### Problem today
 
 When the FPGA runs in **VIDEO** mode (`img_mode == 1`), a single camera exposure produces
 **two downlinked NAND images** with identical FSW timestamps: a full-frame write (bitmask bypass)
 and a masked/stripe write. Both share the same `timestamp_seconds` and `timestamp_subseconds`, so
-`camera_time` is **not unique**.
+`CAMERA_TIME` is **not unique**.
 
 Duplicate time coordinates break standard NetCDF indexing and complicate downstream analysis.
 See [Images per timestamp](wfov_fsw_header_reference.md#images-per-timestamp) and
@@ -103,10 +71,10 @@ Each downlinked pixel is encoded as **13 bits** in the JPEG-LS payload:
 
 The camera acquires **two exposures at different integration times** within a single readout
 cycle. Pixels from short and long integrations correspond to **different effective acquisition
-times**, even though they share one `camera_time` frame coordinate.
+times**, even though they share one `CAMERA_TIME` frame coordinate.
 
 L1B extracts `integration_mask` in `l1a_parser.py` for radiometric calibration, but geolocation
-currently evaluates SPICE at the frame-level `camera_time` for all active un-masked pixels.
+currently evaluates SPICE at the frame-level `CAMERA_TIME` for all active un-masked pixels.
 
 ### Target state
 
