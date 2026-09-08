@@ -21,6 +21,7 @@ from curryer import spicetime
 from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
 from curryer.compute.constants import SpatialQualityFlags
+from curryer.compute.geometry_fields import PixelField
 from curryer.spicierpy.ext import spice_error_message
 from dask import delayed
 from libera_utils.libera_spice.kernel_manager import KernelManager
@@ -569,16 +570,29 @@ class FrameGeometry(NamedTuple):
     quality_flags: np.ndarray
 
 
-# FrameGeometry field -> (curryer PixelGeometry attribute, product variable, _FillValue, dtype).
-_PIXEL_VARIABLES: dict[str, tuple[str, str, float, type]] = {
-    "latitude": ("lat", "Latitude", _GEO_FILL_LAT_LON, np.float32),
-    "longitude": ("lon", "Longitude", _GEO_FILL_LAT_LON, np.float32),
-    "altitude": ("alt", "Altitude", _GEO_FILL_ALT, np.float32),
-    "solar_zenith": ("solar_zenith", "Solar_Zenith_Surface", _FILL_VALUE, np.float32),
-    "solar_azimuth": ("solar_azimuth", "Solar_Azimuth_Surface_WRT_North", _FILL_VALUE, np.float32),
-    "viewing_zenith": ("viewing_zenith", "Viewing_Zenith_Surface", _FILL_VALUE, np.float32),
-    "viewing_azimuth": ("viewing_azimuth", "Viewing_Azimuth_Surface_WRT_North", _FILL_VALUE, np.float32),
-    "relative_azimuth": ("relative_azimuth", "Relative_Azimuth_Surface", _FILL_VALUE, np.float32),
+# The per-pixel geometry this product needs, named as curryer ``PixelField`` members the way
+# libera_rad names its ``GeometryField`` members. curryer computes only the work these require.
+_PIXEL_FIELDS: tuple[PixelField, ...] = (
+    PixelField.SURFACE_GEODETIC,
+    PixelField.SOLAR_ZENITH,
+    PixelField.SOLAR_AZIMUTH,
+    PixelField.VIEWING_ZENITH,
+    PixelField.VIEWING_AZIMUTH,
+    PixelField.RELATIVE_AZIMUTH,
+    PixelField.QUALITY_FLAGS,
+)
+
+# curryer output column -> (product variable, _FillValue, dtype). The keys are curryer's column
+# names, which are also the ``FrameGeometry`` field names, so no rename table is needed.
+_PIXEL_VARIABLES: dict[str, tuple[str, float, type]] = {
+    "latitude": ("Latitude", _GEO_FILL_LAT_LON, np.float32),
+    "longitude": ("Longitude", _GEO_FILL_LAT_LON, np.float32),
+    "altitude": ("Altitude", _GEO_FILL_ALT, np.float32),
+    "solar_zenith": ("Solar_Zenith_Surface", _FILL_VALUE, np.float32),
+    "solar_azimuth": ("Solar_Azimuth_Surface_WRT_North", _FILL_VALUE, np.float32),
+    "viewing_zenith": ("Viewing_Zenith_Surface", _FILL_VALUE, np.float32),
+    "viewing_azimuth": ("Viewing_Azimuth_Surface_WRT_North", _FILL_VALUE, np.float32),
+    "relative_azimuth": ("Relative_Azimuth_Surface", _FILL_VALUE, np.float32),
 }
 _KM_TO_M = 1000.0
 # Fields on [0, 360) that can land on exactly 360.0: a float64 value just under a full turn rounds
@@ -682,7 +696,7 @@ def geolocate_frame(
 
     # Fill-and-flag on a SPICE gap is this function's contract (a granule with no covered frame
     # is rejected upstream), so the choice is made here rather than left to curryer's default.
-    result = spatial.pixel_geometry(epochs, spice_body, vectors, allow_nans=True)
+    result = spatial.pixel_geometry(epochs, spice_body, vectors, fields=list(_PIXEL_FIELDS), allow_nans=True)
     pixel_ids = None if flat_index is None else np.arange(n_pixels)
 
     def per_pixel(values: np.ndarray) -> np.ndarray:
@@ -690,8 +704,8 @@ def geolocate_frame(
         return values[0] if flat_index is None else values[flat_index, pixel_ids]
 
     fields = {}
-    for name, (curryer_name, _, fill, dtype) in _PIXEL_VARIABLES.items():
-        values = per_pixel(getattr(result, curryer_name))
+    for name, (_, fill, dtype) in _PIXEL_VARIABLES.items():
+        values = per_pixel(result[name])
         if name == "altitude":
             values = values * _KM_TO_M  # 0 at every hit today; kept for a non-zero upstream ``alt``
         values = _apply_fill(values, fill, dtype)
@@ -699,7 +713,7 @@ def geolocate_frame(
             values[values == _FULL_TURN] = 0.0
         fields[name] = values.reshape(frame_shape)
 
-    flags = per_pixel(result.quality_flags)
+    flags = per_pixel(result["quality_flags"])
     if flags.max() > np.iinfo(np.uint16).max:
         raise RuntimeError(f"curryer quality flag {flags.max():#x} does not fit the uint16 word FrameGeometry uses")
     return FrameGeometry(quality_flags=flags.astype(np.uint16).reshape(frame_shape), **fields)
@@ -716,7 +730,7 @@ _FIELD_VARIABLES: dict[str, tuple[str, type]] = {
     name: (
         (_GEOLOCATION_FLAG_VARIABLE, np.uint16)
         if name == "quality_flags"
-        else (_PIXEL_VARIABLES[name][1], _PIXEL_VARIABLES[name][3])
+        else (_PIXEL_VARIABLES[name][0], _PIXEL_VARIABLES[name][2])
     )
     for name in FrameGeometry._fields
 }
@@ -834,9 +848,9 @@ def _require_frame_coverage(config: GeolocationKernelConfig, timestamps: np.ndar
             needs_static_kernels=True,
         )
         ugps = np.asarray(spicetime.adapt(pd.DatetimeIndex(timestamps), "iso"))
-        probe = spatial.pixel_geometry(ugps, spice_body, _BORESIGHT, allow_nans=True)
+        probe = spatial.pixel_geometry(ugps, spice_body, _BORESIGHT, fields=[PixelField.QUALITY_FLAGS], allow_nans=True)
 
-    uncovered = (probe.quality_flags[:, 0] & int(SpatialQualityFlags.CALC_ELLIPS_INSUFF_DATA)) != 0
+    uncovered = (probe["quality_flags"][:, 0] & int(SpatialQualityFlags.CALC_ELLIPS_INSUFF_DATA)) != 0
     if uncovered.all():
         raise RuntimeError(
             f"SPICE kernels cover none of the {uncovered.size} camera frame(s) for {spice_body!r}; "
@@ -954,9 +968,7 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
         raise ValueError("Placeholder geolocation takes its time chunks from a Dask-backed 'image_data' variable.")
     shape = (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X)
     chunks = (ds["image_data"].chunks[0], (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,))
-    fills = {name: fill for name, (_, _, fill, _) in _PIXEL_VARIABLES.items()} | {
-        "quality_flags": _GEO_NOT_COMPUTED_FLAG
-    }
+    fills = {name: fill for name, (_, fill, _) in _PIXEL_VARIABLES.items()} | {"quality_flags": _GEO_NOT_COMPUTED_FLAG}
     for name, (variable, dtype) in _FIELD_VARIABLES.items():
         ds[variable] = (("camera_time", "y", "x"), da.full(shape, fills[name], dtype=dtype, chunks=chunks))
 
