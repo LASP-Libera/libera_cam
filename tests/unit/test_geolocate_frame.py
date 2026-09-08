@@ -5,39 +5,43 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 import yaml
-from curryer.compute import spatial
 from curryer.compute.constants import SpatialQualityFlags as SQF
 
 from libera_cam.config import product_config_path
-from libera_cam.geolocation import _AZIMUTH_FIELDS, _PIXEL_VARIABLES, FrameGeometry, geolocate_frame
+from libera_cam.geolocation import (
+    _AZIMUTH_FIELDS,
+    _PIXEL_FIELDS,
+    _PIXEL_VARIABLES,
+    FrameGeometry,
+    geolocate_frame,
+)
 
 FRAME_SHAPE = (2, 3)
 N_PIXELS = 6
-_PIXEL_VARIABLES_CURRYER_NAMES = tuple(curryer_name for curryer_name, *_ in _PIXEL_VARIABLES.values())
 EPOCHS = np.array([1_000_000, 2_000_000])
 VECTORS = np.tile([0.0, 0.0, 1.0], (N_PIXELS, 1))
 
 
-def _curryer_result(n_epochs: int) -> spatial.PixelGeometry:
-    """Values encode ``100 * epoch + pixel`` so per-pixel epoch selection is visible; pixel 5 misses."""
+def _curryer_result(n_epochs: int) -> dict[str, np.ndarray]:
+    """Values encode ``100 * epoch + pixel`` so per-pixel epoch selection is visible; pixel 5 misses.
+
+    Keyed the way curryer keys its return: one entry per requested ``PixelField`` column.
+    """
     base = 100.0 * np.arange(n_epochs)[:, None] + np.arange(N_PIXELS)[None, :]
     base[:, 5] = np.nan
     flags = np.zeros((n_epochs, N_PIXELS), dtype=np.int64)
     flags[:, 5] = int(SQF.CALC_ELLIPS_NO_INTERSECT)
-    return spatial.PixelGeometry(
-        lon=base + 0.1,
-        lat=base + 0.2,
-        alt=np.where(np.isnan(base), np.nan, 0.0),
-        surface_xyz=np.zeros((n_epochs, N_PIXELS, 3)),
-        solar_zenith=base + 0.3,
-        solar_azimuth=base + 0.4,
-        viewing_zenith=base + 0.5,
-        viewing_azimuth=base + 0.6,
-        relative_azimuth=base + 0.7,
-        quality_flags=flags,
-        sc_position=np.zeros((n_epochs, 3)),
-        sun_position=np.zeros((n_epochs, 3)),
-    )
+    return {
+        "longitude": base + 0.1,
+        "latitude": base + 0.2,
+        "altitude": np.where(np.isnan(base), np.nan, 0.0),
+        "solar_zenith": base + 0.3,
+        "solar_azimuth": base + 0.4,
+        "viewing_zenith": base + 0.5,
+        "viewing_azimuth": base + 0.6,
+        "relative_azimuth": base + 0.7,
+        "quality_flags": flags,
+    }
 
 
 def test_pixel_variable_mapping_is_bound_to_curryer_and_the_product_definition():
@@ -45,8 +49,10 @@ def test_pixel_variable_mapping_is_bound_to_curryer_and_the_product_definition()
     product_variables = yaml.safe_load(product_config_path.read_text())["variables"]
     assert set(_PIXEL_VARIABLES) == set(FrameGeometry._fields) - {"quality_flags"}
     assert set(_AZIMUTH_FIELDS) <= set(_PIXEL_VARIABLES)
-    for curryer_name, product_name, fill, dtype in _PIXEL_VARIABLES.values():
-        assert curryer_name in spatial.PixelGeometry._fields
+    # Every key must be a column curryer actually returns for the fields this product requests.
+    requested_columns = {column for field in _PIXEL_FIELDS for column in field.columns}
+    assert set(_PIXEL_VARIABLES) | {"quality_flags"} == requested_columns
+    for product_name, fill, dtype in _PIXEL_VARIABLES.values():
         definition = product_variables[product_name]
         assert definition["dimensions"] == ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
         assert np.dtype(definition["dtype"]) == np.dtype(dtype)
@@ -61,6 +67,8 @@ def test_single_epoch_selects_epoch_zero_and_applies_fills():
     np.testing.assert_array_equal(args[0], EPOCHS[:1])
     assert args[1] == "LIBERA_WFOV_CAM"
     np.testing.assert_array_equal(args[2], VECTORS)
+    # The declared field list is what reaches curryer, so nothing is computed that this product drops.
+    assert mock_geometry.call_args.kwargs["fields"] == list(_PIXEL_FIELDS)
 
     expected = np.arange(6, dtype=np.float64).reshape(FRAME_SHAPE)
     np.testing.assert_allclose(frame.latitude, np.where(expected == 5, -999.0, expected + 0.2), rtol=1e-6)
@@ -88,10 +96,9 @@ def test_two_epochs_select_per_pixel_by_exposure_index():
 def test_azimuths_just_under_360_wrap_to_zero_after_float32_cast():
     """359.99999 in float64 is 360.0 in float32; curryer's azimuth convention is the half-open [0, 360)."""
     result = _curryer_result(1)
-    nearly_full_turn = np.where(np.isnan(result.lat), np.nan, 359.9999999)
-    result = result._replace(
-        solar_azimuth=nearly_full_turn, viewing_azimuth=nearly_full_turn, relative_azimuth=nearly_full_turn
-    )
+    nearly_full_turn = np.where(np.isnan(result["latitude"]), np.nan, 359.9999999)
+    for column in ("solar_azimuth", "viewing_azimuth", "relative_azimuth"):
+        result[column] = nearly_full_turn
     with patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=result):
         frame = geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", VECTORS, frame_shape=FRAME_SHAPE)
 
@@ -106,7 +113,7 @@ def test_azimuths_just_under_360_wrap_to_zero_after_float32_cast():
 
 def test_altitude_is_converted_from_kilometers_to_meters():
     result = _curryer_result(1)
-    result = result._replace(alt=np.where(np.isnan(result.alt), np.nan, 1.5))
+    result["altitude"] = np.where(np.isnan(result["altitude"]), np.nan, 1.5)
     with patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=result):
         frame = geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", VECTORS, frame_shape=FRAME_SHAPE)
     assert frame.altitude[0, 0] == np.float32(1500.0)
@@ -152,12 +159,11 @@ def test_uncovered_epoch_keeps_its_compound_flag_word():
     """A SPICE gap fills the whole epoch and the compound curryer flag survives the uint16 narrowing."""
     result = _curryer_result(2)
     gap = int(SQF.SPICE_ERR_MISSING_ATTITUDE | SQF.CALC_ELLIPS_INSUFF_DATA)
-    result.quality_flags[1, :] = gap
+    result["quality_flags"][1, :] = gap
     # curryer leaves every per-pixel value of an uncovered epoch NaN.
     gap_row = np.array([[False] * 6, [True] * 6])
-    result = result._replace(
-        **{name: np.where(gap_row, np.nan, getattr(result, name)) for name in _PIXEL_VARIABLES_CURRYER_NAMES}
-    )
+    for column in _PIXEL_VARIABLES:
+        result[column] = np.where(gap_row, np.nan, result[column])
     exposure_index = np.array([[0, 1, 0], [1, 0, 1]], dtype=np.uint8)
     with patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=result):
         frame = geolocate_frame(EPOCHS, exposure_index, "LIBERA_WFOV_CAM", VECTORS, frame_shape=FRAME_SHAPE)
@@ -176,7 +182,7 @@ def test_uncovered_epoch_keeps_its_compound_flag_word():
 
 def test_geolocate_frame_rejects_flags_beyond_uint16():
     result = _curryer_result(1)
-    result.quality_flags[0, 0] = 1 << 16
+    result["quality_flags"][0, 0] = 1 << 16
     with (
         patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=result),
         pytest.raises(RuntimeError, match="uint16"),
