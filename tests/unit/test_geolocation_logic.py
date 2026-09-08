@@ -10,6 +10,7 @@ import yaml
 from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
 from curryer.compute.constants import SpatialQualityFlags as SQF
+from curryer.compute.geometry_fields import PixelField
 
 from libera_cam import geolocation
 from libera_cam.config import product_config_path
@@ -186,8 +187,9 @@ def coverage_mocks():
         yield SimpleNamespace(km=km, adapt=adapt, pixel_geometry=pixel_geometry)
 
 
-def _probe(flags: list[int]) -> MagicMock:
-    return MagicMock(quality_flags=np.array(flags, dtype=np.int64)[:, None])
+def _probe(flags: list[int]) -> dict[str, np.ndarray]:
+    """The coverage probe requests only ``quality_flags``, so that is all curryer returns."""
+    return {"quality_flags": np.array(flags, dtype=np.int64)[:, None]}
 
 
 def test_require_frame_coverage_probes_the_boresight_once_per_frame(coverage_mocks):
@@ -204,7 +206,8 @@ def test_require_frame_coverage_probes_the_boresight_once_per_frame(coverage_moc
     np.testing.assert_array_equal(call.args[0], [1, 2, 3])
     assert call.args[1] == "LIBERA_WFOV_CAM"
     np.testing.assert_array_equal(call.args[2], [[0.0, 0.0, 1.0]])
-    assert call.kwargs == {"allow_nans": True}
+    # Only the flags are read, so only that field is requested: no Sun query, no angle math.
+    assert call.kwargs == {"fields": [PixelField.QUALITY_FLAGS], "allow_nans": True}
 
 
 def test_require_frame_coverage_raises_when_no_frame_is_covered(coverage_mocks):
@@ -310,7 +313,7 @@ def test_add_placeholder_geolocation_to_dataset(small_detector):
         assert result[variable].dtype == dtype, variable
         assert result[variable].shape == (6, *FRAME_SHAPE), variable
         assert result[variable].data.chunks[0] == ds["image_data"].data.chunks[0], variable
-    for _, variable, fill, _ in _PIXEL_VARIABLES.values():
+    for variable, fill, _ in _PIXEL_VARIABLES.values():
         np.testing.assert_array_equal(result[variable].values, fill, err_msg=variable)
     np.testing.assert_array_equal(result["Geolocation_Quality_Flag"].values, 0x8000)
 
