@@ -29,6 +29,7 @@ variables:
       valid_range: [-90, 90]
       _FillValue: -999 #off Earth
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Terrain_Corrected_Latitude:
     dtype: float32
@@ -39,6 +40,7 @@ variables:
       valid_range: [-90, 90]
       _FillValue: -999 #off Earth
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Longitude:
     dtype: float32
@@ -49,6 +51,7 @@ variables:
       valid_range: [-180, 180]
       _FillValue: -999 #off Earth
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Terrain_Corrected_Longitude:
     dtype: float32
@@ -59,6 +62,7 @@ variables:
       valid_range: [-180, 180]
       _FillValue: -999 #off Earth
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Altitude:
     dtype: float32
@@ -69,6 +73,7 @@ variables:
       valid_range: [-1000, 30000]
       _FillValue: -9999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Terrain_Corrected_Altitude:
     dtype: float32
@@ -79,6 +84,7 @@ variables:
       valid_range: [-1000, 30000]
       _FillValue: -9999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Subsatellite_Latitude:
     dtype: float32
@@ -195,6 +201,7 @@ variables:
       valid_range: [0, 180]
       _FillValue: -999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Relative_Azimuth_Surface:
     dtype: float32
@@ -207,6 +214,7 @@ variables:
       valid_range: [0, 360]
       _FillValue: -999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Viewing_Zenith_Surface:
     dtype: float32
@@ -217,6 +225,7 @@ variables:
       valid_range: [0, 180]
       _FillValue: -999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Viewing_Azimuth_Surface_WRT_North:
     dtype: float32
@@ -227,6 +236,7 @@ variables:
       valid_range: [0, 360]
       _FillValue: -999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Solar_Azimuth_Surface_WRT_North:
     dtype: float32
@@ -237,6 +247,7 @@ variables:
       valid_range: [0, 360]
       _FillValue: -999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Geolocation_Quality_Flag:
     dtype: uint16
@@ -252,6 +263,7 @@ variables:
         fill); [b14] a surface angle was not finite (fill). [b15] geolocation was not run (use_geo
         false).
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Azimuth:
     dtype: float32
@@ -298,6 +310,7 @@ variables:
       units: dn
       valid_range: [0, 10000]
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: true
   Radiance:
     dtype: float32
@@ -310,6 +323,7 @@ variables:
       valid_range: [0, 1000]
       _FillValue: -999
     encoding:
+      chunksizes: [1, 512, 512]
       shuffle: false
   Camera_Mask:
     #If we need to save storage space, this can become a per-image trace to the mask that was applied,
@@ -319,12 +333,16 @@ variables:
     attributes:
       long_name: Pixel level mask for data
       valid_range: [0, 1]
+    encoding:
+      chunksizes: [1, 512, 512]
   Integration_Time_Flag:
     dtype: uint8
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Integration time for camera exposure. 0 for short, 1 for long
       valid_range: [0, 1]
+    encoding:
+      chunksizes: [1, 512, 512]
   Quality_Flag:
     dtype: uint32
     dimensions: ["CAMERA_TIME"]
