@@ -42,7 +42,7 @@ dependencies = [
     "libera-utils >= 5.8.0,<5.10.3",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
-    "pillow-jpls", # Needed for decompressing JPLS images
+    "pyjpegls>=1.5.1", # Needed for decompressing JPEG-LS images
     "dask>=2026.1.1",
     "distributed>=2026.1.1",
     "netCDF4>=1.6.0"
