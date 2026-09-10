@@ -271,13 +271,11 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     # Dask supports .max(), so this operation will remain lazy
     ds["good_image_flag"] = ds["image_data"].max(dim=["y", "x"]) > 0
 
-    # Add 'valid_pixel_mask' (Lazy)
-    # Used to skip geolocation for dark/invalid pixels (e.g. fisheye corners)
-    # Logic: Any pixel with value > 0 is considered potentially valid for geolocation.
+    # Add 'valid_pixel_mask' (Lazy): any pixel with a non-zero count.
     ds["valid_pixel_mask"] = ds["image_data"] > 0
     ds["valid_pixel_mask"].attrs = {
         "long_name": "Valid Pixel Mask",
-        "description": "True where image_data > 0, False otherwise. Used to mask geolocation.",
+        "description": "True where image_data > 0, False otherwise.",
     }
 
     ds.attrs["description"] = "WFOV Camera Image Cube reconstructed from L1A packets"

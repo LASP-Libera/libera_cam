@@ -177,7 +177,6 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
         mock_lazy_ds.integration_mask = MagicMock()
-        mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
         mock_read_l1a.return_value = mock_lazy_ds
 
@@ -192,13 +191,15 @@ class TestL1b(unittest.TestCase):
         l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, use_geo=True)
 
         mock_geo.assert_called_once()
-        call_kwargs = mock_geo.call_args
-        assert call_kwargs.args[1].dynamic_kernel_sources == dynamic_kernel_sources
-        assert call_kwargs.kwargs["pixel_mask"] is mock_lazy_ds.valid_pixel_mask
+        geo_config = mock_geo.call_args.args[1]
+        # Every pixel is geolocated: no mask travels with the dataset.
+        assert mock_geo.call_args.kwargs == {}
+        assert mock_geo.call_args.args[0] is mock_lazy_ds
+        assert geo_config.dynamic_kernel_sources == dynamic_kernel_sources
 
         # The spacecraft-level fields and the motor azimuth share the geolocation kernel config.
-        mock_spacecraft_geo.assert_called_once_with(mock_lazy_ds, call_kwargs.args[1])
-        mock_azimuth.assert_called_once_with(mock_lazy_ds, call_kwargs.args[1])
+        mock_spacecraft_geo.assert_called_once_with(mock_lazy_ds, geo_config)
+        mock_azimuth.assert_called_once_with(mock_lazy_ds, geo_config)
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
@@ -215,7 +216,6 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
         mock_lazy_ds.integration_mask = MagicMock()
-        mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
         mock_read_l1a.return_value = mock_lazy_ds
 
@@ -231,6 +231,9 @@ class TestL1b(unittest.TestCase):
         result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, jpss_only_mode=True)
 
         mock_jpss_geo.assert_called_once()
+        assert mock_jpss_geo.call_args.kwargs == {}
+        assert mock_jpss_geo.call_args.args[0] is mock_lazy_ds
+        assert mock_jpss_geo.call_args.args[1].dynamic_kernel_sources == dynamic_kernel_sources
         # The spacecraft fields need no instrument frame, so jpss_only takes the same path.
         mock_spacecraft_geo.assert_called_once()
         mock_jpss_azimuth.assert_called_once_with(mock_lazy_ds)

@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "0.2.7"
+version = "0.2.8"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar" },
@@ -39,10 +39,18 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    "libera-utils >= 5.8.0,<5.10.3",
-    # Imported directly by geolocation.py. 0.5.0 is the first release with the GeometryField
-    # enum and the SPICE error classifier the spacecraft-level geometry fields rely on.
-    "lasp-curryer>=0.5.0,<1.0",
+    # Both upstreams are pinned to immutable commits on their review branches so a push to either
+    # branch cannot change what CI resolves. Restore the release pins before merge:
+    # `libera-utils >=5.10.9,<6.0.0` and `lasp-curryer >=0.5.3,<1.0`. TODO[LIBSDC-808]
+    #
+    # Carries the NetCDF write-path fix (a path rather than an unpicklable file object, which is
+    # what lets `h5netcdf` run under the distributed scheduler) and the `chunksizes` tuple
+    # coercion that makes chunk shape settable from the product definition
+    # (LASP-Libera/libera_utils#66).
+    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@a71d5f3b745c0e2924a1dd16b80abb0d4c1595b8",
+    # Imported directly by geolocation.py. Carries `spatial.pixel_geometry` and the `PixelField`
+    # registry it selects fields from (lasp/curryer#188).
+    "lasp-curryer @ git+https://github.com/lasp/curryer.git@fef750c63eef934197ce4a11b2d997caa036bb1b",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images
