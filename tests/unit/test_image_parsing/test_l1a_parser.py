@@ -1,6 +1,6 @@
 """Unit tests for L1A image parsing logic."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 
@@ -50,31 +50,14 @@ def test_parse_image_metadata_structure(mock_extract):
     assert result["some_meta"] == 123
 
 
-@patch("libera_cam.image_parsing.l1a_parser.Image.open")
+@patch("libera_cam.image_parsing.l1a_parser.jpeg_ls.jlsread")
 @patch("libera_cam.image_parsing.l1a_parser.extract_dict_from_bytearray")
-def test_decompress_image(mock_extract, mock_img_open):
+def test_decompress_image(mock_extract, mock_jlsread):
     """Verify decompress_image calls proper helpers and splits bits."""
     mock_extract.return_value = {"compressed_image_data": b"fake_jpls_bytes"}
 
-    # We need to mock the context manager behavior of Image.open
-    mock_img = MagicMock()
-    # When np.array(img) is called, it iterates or uses __array__ interface.
-    fake_raw_data = np.array([[0x1FFF, 0x0ABC]], dtype=np.int32)
-
-    # Setup the context manager to return our mock image
-    mock_img_ctx = mock_img_open.return_value
-    mock_img_ctx.__enter__.return_value = mock_img
-
-    mock_img.__array__ = lambda *args, **kwargs: fake_raw_data
-
-    class MockImage:
-        def __array__(self, dtype=None):
-            return fake_raw_data.astype(dtype if dtype else np.int32)
-
-        def close(self):
-            pass
-
-    mock_img_ctx.__enter__.return_value = MockImage()
+    # jlsread returns the raw 13-bit samples as an unsigned integer array
+    mock_jlsread.return_value = np.array([[0x1FFF, 0x0ABC]], dtype=np.uint16)
 
     # Act
     blob = bytearray(b"dummy")
@@ -82,6 +65,7 @@ def test_decompress_image(mock_extract, mock_img_open):
 
     # Assert
     mock_extract.assert_called_once_with(blob)
+    mock_jlsread.assert_called_once_with(b"fake_jpls_bytes")
 
     # Check values
     # 0x1FFF -> Data 0xFFF, Mask 1

@@ -1,9 +1,7 @@
-import io
 import logging
 
+import jpeg_ls
 import numpy as np
-import pillow_jpls  # noqa: F401 - Register JPEG-LS plugin
-from PIL import Image
 
 from libera_cam.image_parsing.metadata_parser import extract_dict_from_bytearray
 
@@ -48,13 +46,12 @@ def decompress_image(blob: bytearray) -> tuple[np.ndarray, np.ndarray]:
     compressed_bytes = full_data["compressed_image_data"]
 
     # Decompress Image
-    with io.BytesIO(compressed_bytes) as bytes_io:
-        try:
-            with Image.open(bytes_io) as img:
-                raw_image_data = np.array(img, dtype=np.int32)
-        except Exception as e:
-            logger.error(f"JPEG-LS Decompression failed: {e}")
-            raise
+    # jlsread returns a (rows, columns) array of the raw 13-bit sample values.
+    try:
+        raw_image_data = jpeg_ls.jlsread(compressed_bytes).astype(np.int32)
+    except Exception as e:
+        logger.error(f"JPEG-LS Decompression failed: {e}")
+        raise
 
     # Process 12-bit Data vs 13th-bit Mask
     # Mask 0x0FFF gets the lower 12 bits (Pixel value)
