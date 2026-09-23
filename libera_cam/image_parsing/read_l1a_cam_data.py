@@ -6,9 +6,12 @@ import logging
 import os
 
 import dask.array as da
+import h5py
 import numpy as np
 import xarray as xr
+from cloudpathlib import AnyPath
 from dask import delayed
+from libera_utils import smart_open
 from libera_utils.l1a.wfov_image_metadata import (
     CAMERA_PACKET_INDEX_VAR,
     CAMERA_TIME_COORD,
@@ -73,19 +76,21 @@ def _require_image_centric_l1a(cam_dataset: xr.Dataset) -> None:
         )
 
 
-def _drop_unparsed_headers(cam_dataset: xr.Dataset) -> xr.Dataset:
+def _drop_unparsed_headers(cam_dataset: xr.Dataset) -> tuple[xr.Dataset, np.ndarray]:
     """Drop CAMERA_TIME rows whose FSW/FPGA header failed to decode at L1A.
 
     Rows flagged invalid carry a NaT ``CAMERA_TIME`` and zero-filled metadata, so they cannot be
-    geolocated or attributed to an acquisition instant. Raises if no row survives.
+    geolocated or attributed to an acquisition instant. Returns the filtered dataset along with the
+    array of original HDF5 row indices for the surviving images. Raises if no row survives.
     """
+    n_total = int(cam_dataset.sizes[CAMERA_TIME_COORD])
     if WFOV_HEADER_PARSE_VALID_VAR not in cam_dataset:
-        return cam_dataset
+        return cam_dataset, np.arange(n_total)
 
     valid = np.asarray(cam_dataset[WFOV_HEADER_PARSE_VALID_VAR].values, dtype=bool)
     n_invalid = int((~valid).sum())
     if n_invalid == 0:
-        return cam_dataset
+        return cam_dataset, np.arange(n_total)
 
     if not valid.any():
         raise ValueError(
@@ -99,7 +104,8 @@ def _drop_unparsed_headers(cam_dataset: xr.Dataset) -> xr.Dataset:
         valid.size,
         WFOV_HEADER_PARSE_VALID_VAR,
     )
-    return cam_dataset.isel({CAMERA_TIME_COORD: valid})
+    surviving_indices = np.flatnonzero(valid)
+    return cam_dataset.isel({CAMERA_TIME_COORD: valid}), surviving_indices
 
 
 def _validate_execution_config(chunk_size: int) -> None:
@@ -127,15 +133,37 @@ def _validate_execution_config(chunk_size: int) -> None:
             logger.debug("Could not parse DASK_MEMORY_LIMIT (%s): %s", raw_memory_limit, e)
 
 
-def _extract_jpeg_ls_payloads(cam_dataset: xr.Dataset) -> list[bytes]:
-    """Slice JPEG-LS bytes from ``WFOV_COMPRESSED_IMAGE`` using per-image lengths."""
-    lengths = cam_dataset[WFOV_COMPRESSED_IMAGE_LENGTH_VAR].values
-    images = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].values
-    payloads: list[bytes] = []
-    for i in range(len(lengths)):
-        length = int(lengths[i])
-        payloads.append(images[i, :length].tobytes())
-    return payloads
+def decompress_batch(payloads_batch: list[bytes]) -> tuple[np.ndarray, np.ndarray]:
+    """Decompress a list of JPEG-LS payloads and return stacked arrays."""
+    images, masks = [], []
+    for payload in payloads_batch:
+        img, mask = l1a_parser.decompress_image(payload)
+        images.append(img)
+        masks.append(mask)
+    return np.stack(images, axis=0), np.stack(masks, axis=0)
+
+
+def _decompress_batch_from_source(
+    source: str | AnyPath,
+    row_indices: list[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Worker task: open file via smart_open, slice byte blobs for row_indices, decompress."""
+    with smart_open(source) as fh:
+        with h5py.File(fh, "r") as f:
+            blob = f[WFOV_COMPRESSED_IMAGE_VAR]
+            lengths = f[WFOV_COMPRESSED_IMAGE_LENGTH_VAR]
+            payloads = [blob[r, : int(lengths[r])].tobytes() for r in row_indices]
+    return decompress_batch(payloads)
+
+
+def _decompress_batch_from_arrays(
+    blob: np.ndarray,
+    lengths: np.ndarray,
+    row_indices: list[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fallback worker task for in-memory synthetic test datasets."""
+    payloads = [blob[r, : int(lengths[r])].tobytes() for r in row_indices]
+    return decompress_batch(payloads)
 
 
 def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
@@ -159,7 +187,19 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
         are found.
     """
     _require_image_centric_l1a(cam_dataset)
-    cam_dataset = _drop_unparsed_headers(cam_dataset)
+
+    source = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].encoding.get("source") or cam_dataset.encoding.get("source")
+    is_file_source = source is not None and (isinstance(source, str) or isinstance(source, AnyPath))
+    if is_file_source and isinstance(source, str) and not source.startswith("s3://") and not os.path.exists(source):
+        is_file_source = False
+
+    raw_blob = None
+    raw_lengths = None
+    if not is_file_source:
+        raw_blob = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].values
+        raw_lengths = cam_dataset[WFOV_COMPRESSED_IMAGE_LENGTH_VAR].values
+
+    cam_dataset, surviving_indices = _drop_unparsed_headers(cam_dataset)
 
     chunk_size = int(os.getenv("LIBERA_CAM_CHUNK_SIZE", DEFAULT_TIME_CHUNK_SIZE))
     _validate_execution_config(chunk_size)
@@ -170,27 +210,26 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
         logger.warning("No complete images found in L1A data.")
         return xr.Dataset()
 
-    def decompress_batch(payloads_batch: list[bytes]):
-        """Decompress a list of JPEG-LS payloads and return stacked arrays."""
-        images, masks = [], []
-        for payload in payloads_batch:
-            img, mask = l1a_parser.decompress_image(payload)
-            images.append(img)
-            masks.append(mask)
-        return np.stack(images, axis=0), np.stack(masks, axis=0)
+    delayed_decompress_source = delayed(_decompress_batch_from_source, nout=2, pure=False)
+    delayed_decompress_arrays = delayed(_decompress_batch_from_arrays, nout=2, pure=False)
 
-    delayed_decompress_batch = delayed(decompress_batch, nout=2, pure=False)
-
-    logger.info("Extracting JPEG-LS payloads from L1A WFOV_COMPRESSED_IMAGE...")
-    payloads = _extract_jpeg_ls_payloads(cam_dataset)
     times = np.asarray(cam_dataset[CAMERA_TIME_COORD].values)
     logger.info("Found %s complete images. Constructing Dask graph...", n_images)
 
     delayed_image_chunks, delayed_mask_chunks = [], []
     for i in range(0, n_images, chunk_size):
-        batch = payloads[i : min(n_images, i + chunk_size)]
-        actual_size = len(batch)
-        out = delayed_decompress_batch(batch)
+        chunk_indices = surviving_indices[i : min(n_images, i + chunk_size)].tolist()
+        actual_size = len(chunk_indices)
+
+        if is_file_source:
+            out = delayed_decompress_source(source, chunk_indices)
+        else:
+            out = delayed_decompress_arrays(
+                raw_blob,
+                raw_lengths,
+                chunk_indices,
+            )
+
         delayed_image_chunks.append(
             da.from_delayed(
                 out[0], shape=(actual_size, constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X), dtype=np.int32

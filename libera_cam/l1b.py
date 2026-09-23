@@ -14,7 +14,7 @@ import numpy as np
 import xarray as xr
 from cloudpathlib import AnyPath, S3Path
 from dask.distributed import Client
-from libera_utils import Manifest, smart_open
+from libera_utils import Manifest
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.netcdf import write_libera_data_product
@@ -279,11 +279,11 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
                     product_id,
                 )
             else:
-                with smart_open(file_info.filename) as file_handle:
-                    LiberaDataProductFilename.from_file_path(file_info.filename)  # Ensure file is Libera Data Product
-                    dataset = xr.open_dataset(file_handle, decode_times=True).load()
-                    all_data[file_info.filename] = dataset
-                    logger.info(f"Successfully loaded dataset: {file_handle}")
+                LiberaDataProductFilename.from_file_path(file_info.filename)  # Ensure file is Libera Data Product
+                anypath = AnyPath(file_info.filename)
+                dataset = xr.open_dataset(anypath, decode_times=True)
+                all_data[file_info.filename] = dataset
+                logger.info(f"Successfully loaded dataset lazily: {file_info.filename}")
         except Exception as e:
             logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
             raise
