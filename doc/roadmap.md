@@ -12,20 +12,7 @@ dependencies, open design questions, and forward-looking engineering priorities.
 
 ---
 
-## 1. Image-aligned NetCDF chunking
-
-The on-disk NetCDF chunk policy for L1A — images per chunk vs. target byte size — is undecided,
-so Dask block sizes cannot be matched to disk chunks. `_extract_jpeg_ls_payloads` reads every
-blob into memory up front; lazy per-chunk blob reads depend on that policy.
-
-Open questions:
-
-- Whether the policy targets a fixed image count or a target byte size per chunk
-- Guaranteeing L1A chunk boundaries contain only complete images
-
----
-
-## 2. VIDEO mode and duplicate `CAMERA_TIME` values
+## 1. VIDEO mode and duplicate `CAMERA_TIME` values
 
 ### Problem today
 
@@ -60,7 +47,7 @@ Rather than altering timestamps (which introduces synthetic errors), candidate a
 
 ---
 
-## 3. Per-pixel integration time and geolocation time
+## 2. Per-pixel integration time and geolocation time
 
 ### Problem today
 
@@ -85,7 +72,7 @@ currently evaluates SPICE at the frame-level `CAMERA_TIME` for all active un-mas
 
 ---
 
-## 4. Surface geometry geolocation performance & sparse geometry
+## 3. Surface geometry geolocation performance & sparse geometry
 
 ### Problem today
 
@@ -105,7 +92,7 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ---
 
-## 5. Direct worker NetCDF chunk output
+## 4. Direct worker NetCDF chunk output
 
 ### Problem today
 
@@ -121,7 +108,7 @@ write their completed chunks independently without returning payload data to the
 
 ---
 
-## 6. Automated performance regression benchmarking
+## 5. Automated performance regression benchmarking
 
 ### Target state
 
@@ -131,7 +118,7 @@ radiometric calibration, JPEG-LS decompression, and SPICE geolocation.
 
 ---
 
-## 7. Dask performance testing
+## 6. Dask performance testing
 
 ## Aspects worth testing more thoroughly
 

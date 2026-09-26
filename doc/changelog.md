@@ -11,6 +11,10 @@
 - **L1B product definition:** Rename operational-mode fields to
   `Radiometer_Observation_ID` / `Camera_Observation_ID`; add `Image_Mode` and
   `Camera_Packet_Index`. The ObsID fields no longer declare `_FillValue`.
+- **Dask graph memory:** Decompression tasks carry the L1A file path and row indices instead of
+  embedded JPEG-LS payloads; each worker reads its own rows from the file, so the graph no longer
+  holds every compressed image in memory. In-memory datasets without a file source still embed
+  the arrays.
 - **Docs:** Document exposure timing equations in
   `doc/wfov_fsw_header_reference.md`.
 

@@ -40,9 +40,6 @@ FSW/FPGA header metadata is decoded into `WFOV_FSW_HEADER_*`, `WFOV_IMAGE_HEADER
 `WFOV_IMAGE_FOOTER_*`, and `WFOV_FPGA_STATUS_*` variables. A packet-only L1A product raises a
 `ValueError` naming the missing fields.
 
-Images whose `WFOV_HEADER_PARSE_VALID` is false are dropped with a logged warning — they carry a
-NaT `CAMERA_TIME` and cannot be geolocated. L1B raises if no image survives.
-
 L1A header fields reach the L1B product as:
 
 | L1B variable                    | L1A source                                   | Notes                           |

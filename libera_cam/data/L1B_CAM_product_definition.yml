@@ -166,6 +166,7 @@ variables:
   ###########
   # Science #
   ###########
+  # TODO[LIBSDC-709]: Add any camera telemetry needed for calibration or L2 processing
   Pixel_Counts:
     dtype: uint16
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
