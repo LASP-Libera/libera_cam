@@ -91,7 +91,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     placeholder lat/lon/alt values are written. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
-    frame, Azimuth 0°) and cannot be combined with ``use_geo: false``.
+    frame, Azimuth_FSW_Metadata 0°) and cannot be combined with ``use_geo: false``.
     """
     dask_scheduler = os.getenv("DASK_SCHEDULER", "synchronous")
     if dask_scheduler not in _ALLOWED_DASK_SCHEDULERS:
@@ -366,7 +366,7 @@ def process_l1a_to_l1b(
         ``configuration.use_geo``; omitting the key is equivalent to True.
     jpss_only_mode : bool, optional
         When True, uses per-pixel geolocation with ``LIBERA_BASE`` (zero-azimuth
-        approximation) and sets Azimuth to 0°. Requires ``use_geo`` True and JPSS-only
+        approximation) and sets Azimuth_FSW_Metadata to 0°. Requires ``use_geo`` True and JPSS-only
         SPICE kernels in the manifest.
 
     Returns

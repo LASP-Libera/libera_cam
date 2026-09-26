@@ -7,10 +7,10 @@
   header parser; JPEG-LS decompression operates on pre-sliced blob payloads.
 - **Exposure metadata:** Convert FPGA actual exposure registers and `WFOV_IMAGE_HEADER_DELTA` to
   milliseconds; write `Actual_Exposure_Time_1/2` and `Exposure_Delta` in L1B.
-- **Azimuth:** Drop the `[0, 360]` `valid_range` on `Azimuth` and use value passed through from `WFOV_FSW_HEADER_AZIMUTH_ANGLE`.
+- **Azimuth:** Rename to `Azimuth_FSW_Metadata`, drop the `[0, 360]` `valid_range`, and pass through from `WFOV_FSW_HEADER_AZIMUTH_ANGLE`.
 - **L1B product definition:** Rename operational-mode fields to
   `Radiometer_Observation_ID` / `Camera_Observation_ID`; add `Image_Mode` and
-  `Camera_Packet_Index`. The ObsID fields no longer declare `_FillValue`
+  `Camera_Packet_Index`. The ObsID fields no longer declare `_FillValue`.
 - **Docs:** Document exposure timing equations in
   `doc/wfov_fsw_header_reference.md`.
 

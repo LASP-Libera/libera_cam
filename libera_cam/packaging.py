@@ -54,7 +54,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
 
     # 1. Rename variables/dims to match Product Definition.
     rename_map = {
-        "azimuth_angle": "Azimuth",
+        "azimuth_angle": "Azimuth_FSW_Metadata",
         "rad_obs_id": "Radiometer_Observation_ID",
         "cam_obs_id": "Camera_Observation_ID",
         "img_mode": "Image_Mode",
@@ -96,7 +96,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
 
     # 4. Ensure Types (Cast if necessary)
     type_map = {
-        "Azimuth": np.float32,
+        "Azimuth_FSW_Metadata": np.float32,
         "Radiometer_Observation_ID": np.uint16,
         "Camera_Observation_ID": np.uint16,
         "Image_Mode": np.uint8,
@@ -105,6 +105,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "Actual_Exposure_Time_2": np.float32,
         "Exposure_Delta": np.float32,
         "Pixel_Counts": np.uint16,
+        "Integration_Time_Flag": np.uint8,
         "Quality_Flag": np.uint32,
         "Latitude": np.float32,
         "Longitude": np.float32,

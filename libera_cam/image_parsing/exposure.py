@@ -8,6 +8,9 @@ import numpy.typing as npt
 from libera_cam.constants import WFOV_DEFAULT_CLK_PER_VALUE
 
 # Constants from the L1A product definition for WFOV_IMAGE_HEADER_ACTUAL_EXP_TIME_*.
+# - _ACTUAL_EXP_OFFSET (0.43 * 20 = 8.6): Fixed register offset.
+# - _ACTUAL_EXP_LINE_FACTOR (129.0): Line readout timing factor.
+# See doc/wfov_fsw_header_reference.md (Exposure timing) for details.
 _ACTUAL_EXP_OFFSET = 0.43 * 20
 _ACTUAL_EXP_LINE_FACTOR = 129.0
 
@@ -18,6 +21,9 @@ def actual_exposure_counts_to_ms(value: npt.ArrayLike) -> npt.NDArray[np.float32
     Uses the L1A-documented equation::
 
         ms = (value + 0.43 * 20) * 129.0 * 0.15625 / 1000
+
+    where ``0.43 * 20`` is the register offset, ``129.0`` is the line factor, and ``0.15625``
+    is the FPGA clock period (us/count); see ``doc/wfov_fsw_header_reference.md``.
 
     Parameters
     ----------

@@ -184,7 +184,7 @@ class TestL1b(unittest.TestCase):
     @patch("libera_cam.l1b._apply_azimuth_fill")
     @patch("libera_cam.l1b.add_jpss_only_geolocation_to_dataset")
     def test_process_l1a_to_l1b_jpss_only_mode(self, mock_jpss_geo, mock_az_fill, mock_convert, mock_read_l1a):
-        """jpss_only uses LIBERA_BASE per-pixel geolocation and zero Azimuth."""
+        """jpss_only uses LIBERA_BASE per-pixel geolocation and zero Azimuth_FSW_Metadata."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
