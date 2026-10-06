@@ -45,7 +45,8 @@ dependencies = [
     "pillow-jpls", # Needed for decompressing JPLS images
     "dask>=2026.1.1",
     "distributed>=2026.1.1",
-    "netCDF4>=1.6.0"
+    "netCDF4>=1.6.0",
+    "h5py>=3.0",
 ]
 
 [tool.poetry.scripts]

@@ -1,5 +1,6 @@
 """Unit tests for building the working dataset from image-centric L1A products."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -12,14 +13,18 @@ from libera_cam.image_parsing.read_l1a_cam_data import _validate_execution_confi
 _PAYLOAD_LENGTH = 8
 
 
-def make_synthetic_l1a(n_images: int = 3, valid: list[bool] | None = None, drop: tuple[str, ...] = ()) -> xr.Dataset:
-    """Build a minimal image-centric L1A dataset (libera-utils >= 5.10.5 layout).
+def make_synthetic_l1a(
+    tmp_path: Path, n_images: int = 3, valid: list[bool] | None = None, drop: tuple[str, ...] = ()
+) -> xr.Dataset:
+    """Write a minimal image-centric L1A file (libera-utils >= 5.10.5 layout) and open it by path.
 
     Each image's payload bytes are filled with its own index + 1, so a decompressed image can be
     traced back to the L1A row it came from.
 
     Parameters
     ----------
+    tmp_path : Path
+        Directory the NetCDF file is written to.
     n_images : int
         Number of CAMERA_TIME rows.
     valid : list[bool] or None
@@ -51,7 +56,9 @@ def make_synthetic_l1a(n_images: int = 3, valid: list[bool] | None = None, drop:
     for name in drop:
         del data_vars[name]
 
-    return xr.Dataset(data_vars, coords={"CAMERA_TIME": times})
+    path = tmp_path / "synthetic_l1a.nc"
+    xr.Dataset(data_vars, coords={"CAMERA_TIME": times}).to_netcdf(path)
+    return xr.open_dataset(path)
 
 
 def _fake_decompress(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
@@ -60,9 +67,9 @@ def _fake_decompress(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
     return np.full(shape, payload[0], dtype=np.int32), np.zeros(shape, dtype=np.uint8)
 
 
-def test_drops_invalid_header_rows_keeping_images_aligned_with_metadata():
+def test_drops_invalid_header_rows_keeping_images_aligned_with_metadata(tmp_path):
     """Rows flagged WFOV_HEADER_PARSE_VALID False are dropped from images and metadata together."""
-    l1a = make_synthetic_l1a(n_images=4, valid=[True, False, False, True])
+    l1a = make_synthetic_l1a(tmp_path, n_images=4, valid=[True, False, False, True])
 
     with patch("libera_cam.image_parsing.l1a_parser.decompress_image", side_effect=_fake_decompress):
         ds = read_l1a_cam_data(l1a)
@@ -76,17 +83,35 @@ def test_drops_invalid_header_rows_keeping_images_aligned_with_metadata():
     np.testing.assert_array_equal(image_markers, [1, 4])
 
 
-def test_all_invalid_headers_raises():
+def test_all_invalid_headers_raises(tmp_path):
     """An L1A granule with no usable CAMERA_TIME fails loudly rather than producing an empty product."""
     with pytest.raises(ValueError, match="WFOV_HEADER_PARSE_VALID"):
-        read_l1a_cam_data(make_synthetic_l1a(n_images=2, valid=[False, False]))
+        read_l1a_cam_data(make_synthetic_l1a(tmp_path, n_images=2, valid=[False, False]))
 
 
-def test_missing_header_metadata_raises_naming_the_variable():
+def test_missing_header_metadata_raises_naming_the_variable(tmp_path):
     """A product-version mismatch names the absent variable instead of silently dropping it."""
-    l1a = make_synthetic_l1a(drop=("WFOV_IMAGE_HEADER_DELTA",))
+    l1a = make_synthetic_l1a(tmp_path, drop=("WFOV_IMAGE_HEADER_DELTA",))
 
     with pytest.raises(ValueError, match="WFOV_IMAGE_HEADER_DELTA"):
+        read_l1a_cam_data(l1a)
+
+
+def test_dataset_opened_from_file_handle_raises(tmp_path):
+    """Without a path in the encoding, workers cannot reopen the file, so the read fails loudly."""
+    make_synthetic_l1a(tmp_path)
+
+    with open(tmp_path / "synthetic_l1a.nc", "rb") as fh:
+        l1a = xr.open_dataset(fh)
+        with pytest.raises(ValueError, match="AnyPath"):
+            read_l1a_cam_data(l1a)
+
+
+def test_sliced_dataset_raises(tmp_path):
+    """A sliced dataset still points at the whole file, so its row indices would read the wrong images."""
+    l1a = make_synthetic_l1a(tmp_path, n_images=4).isel(CAMERA_TIME=slice(2, None))
+
+    with pytest.raises(ValueError, match="without slicing"):
         read_l1a_cam_data(l1a)
 
 

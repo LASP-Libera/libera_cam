@@ -9,7 +9,6 @@ import dask.array as da
 import h5py
 import numpy as np
 import xarray as xr
-from cloudpathlib import AnyPath
 from dask import delayed
 from libera_utils import smart_open
 from libera_utils.l1a.wfov_image_metadata import (
@@ -144,7 +143,7 @@ def decompress_batch(payloads_batch: list[bytes]) -> tuple[np.ndarray, np.ndarra
 
 
 def _decompress_batch_from_source(
-    source: str | AnyPath,
+    source: str,
     row_indices: list[int],
 ) -> tuple[np.ndarray, np.ndarray]:
     """Worker task: open file via smart_open, slice byte blobs for row_indices, decompress."""
@@ -153,16 +152,6 @@ def _decompress_batch_from_source(
             blob = f[WFOV_COMPRESSED_IMAGE_VAR]
             lengths = f[WFOV_COMPRESSED_IMAGE_LENGTH_VAR]
             payloads = [blob[r, : int(lengths[r])].tobytes() for r in row_indices]
-    return decompress_batch(payloads)
-
-
-def _decompress_batch_from_arrays(
-    blob: np.ndarray,
-    lengths: np.ndarray,
-    row_indices: list[int],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Fallback worker task for in-memory synthetic test datasets."""
-    payloads = [blob[r, : int(lengths[r])].tobytes() for r in row_indices]
     return decompress_batch(payloads)
 
 
@@ -176,7 +165,8 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     Parameters
     ----------
     cam_dataset : xr.Dataset
-        Image-enhanced L1A WFOV SCI DECODED dataset (libera-utils >= 5.10.5).
+        Image-enhanced L1A WFOV SCI DECODED dataset (libera-utils >= 5.10.5), opened from a file
+        path with ``xr.open_dataset(AnyPath(path))``.
 
     Returns
     -------
@@ -188,16 +178,23 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     """
     _require_image_centric_l1a(cam_dataset)
 
-    source = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].encoding.get("source") or cam_dataset.encoding.get("source")
-    is_file_source = source is not None and (isinstance(source, str) or isinstance(source, AnyPath))
-    if is_file_source and isinstance(source, str) and not source.startswith("s3://") and not os.path.exists(source):
-        is_file_source = False
-
-    raw_blob = None
-    raw_lengths = None
-    if not is_file_source:
-        raw_blob = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].values
-        raw_lengths = cam_dataset[WFOV_COMPRESSED_IMAGE_LENGTH_VAR].values
+    # Workers reopen the file by path so the compressed payloads never enter the Dask graph. A dataset
+    # opened from a file handle still has a string source, the handle's repr, so check it names a file.
+    source = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].encoding.get("source")
+    if not isinstance(source, str) or not os.path.isfile(source):
+        raise ValueError(
+            "L1A camera dataset has no file path in its encoding; open it from a path with "
+            "xr.open_dataset(AnyPath(path)), not from an open file handle or an in-memory dataset."
+        )
+    # Workers index the file by dataset row, which is only valid while the dataset spans the whole file.
+    # A sliced or concatenated dataset keeps the original source, so check the row count against it.
+    n_rows = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].shape[0]
+    n_file_rows = cam_dataset[WFOV_COMPRESSED_IMAGE_VAR].encoding.get("original_shape", (n_rows,))[0]
+    if n_rows != n_file_rows:
+        raise ValueError(
+            f"L1A camera dataset has {n_rows} {CAMERA_TIME_COORD} rows but its source file has {n_file_rows}; "
+            "pass the dataset as opened, without slicing or concatenating it first."
+        )
 
     cam_dataset, surviving_indices = _drop_unparsed_headers(cam_dataset)
 
@@ -211,7 +208,6 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
         return xr.Dataset()
 
     delayed_decompress_source = delayed(_decompress_batch_from_source, nout=2, pure=False)
-    delayed_decompress_arrays = delayed(_decompress_batch_from_arrays, nout=2, pure=False)
 
     times = np.asarray(cam_dataset[CAMERA_TIME_COORD].values)
     logger.info("Found %s complete images. Constructing Dask graph...", n_images)
@@ -221,14 +217,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
         chunk_indices = surviving_indices[i : min(n_images, i + chunk_size)].tolist()
         actual_size = len(chunk_indices)
 
-        if is_file_source:
-            out = delayed_decompress_source(source, chunk_indices)
-        else:
-            out = delayed_decompress_arrays(
-                raw_blob,
-                raw_lengths,
-                chunk_indices,
-            )
+        out = delayed_decompress_source(source, chunk_indices)
 
         delayed_image_chunks.append(
             da.from_delayed(
