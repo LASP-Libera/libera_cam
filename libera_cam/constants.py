@@ -45,3 +45,7 @@ class IntegrationTime(IntEnum):
 # This balances memory usage (smaller chunks) against SPICE setup overhead (larger chunks).
 # 50 images: ~800 MB raw data + ~2.5 GB float32 geolocation arrays ~= 3.3 GB total per chunk.
 DEFAULT_TIME_CHUNK_SIZE = 50
+
+# FPGA clock period used to convert raw register counts to microseconds (then ms).
+# Shared by actual-exposure and DELTA_EXP conversions; see L1A product definition.
+WFOV_DEFAULT_CLK_PER_VALUE = 0.15625

@@ -33,7 +33,7 @@ def generate_input_manifest(tmp_path, test_data_path):
 
     ditl_data_path = test_data_path / "DITL_3min"
     filenames = (
-        ditl_data_path / "LIBERA_L1A_WFOV-SCI-DECODED_V5-8-4_20280212T080001_20280212T080342_R26157025734.nc",
+        ditl_data_path / "LIBERA_L1A_WFOV-SCI-DECODED_V5-10-6_20280212T034136_20280212T034141_R26247171104.nc",
         ditl_data_path / "LIBERA_SPICE_AZROT-CK_V5-8-4_20280212T033106_20280212T040027_R26157131711.bc",
         ditl_data_path / "LIBERA_SPICE_JPSS-CK_V5-4-2_20280212T000000_20280212T235959_R26006200637.bc",
         ditl_data_path / "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280212T000000_20280212T235959_R26006200633.bsp",
@@ -57,7 +57,7 @@ def test_ditl_l1a_file_path(test_data_path):
     return (
         test_data_path
         / "DITL_3min"
-        / "LIBERA_L1A_WFOV-SCI-DECODED_V5-8-4_20280212T080001_20280212T080342_R26157025734.nc"
+        / "LIBERA_L1A_WFOV-SCI-DECODED_V5-10-6_20280212T034136_20280212T034141_R26247171104.nc"
     )
 
 

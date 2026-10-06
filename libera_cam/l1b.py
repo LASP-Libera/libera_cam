@@ -14,7 +14,7 @@ import numpy as np
 import xarray as xr
 from cloudpathlib import AnyPath, S3Path
 from dask.distributed import Client
-from libera_utils import Manifest, smart_open
+from libera_utils import Manifest
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.filenaming import LiberaDataProductFilename
 from libera_utils.io.netcdf import write_libera_data_product
@@ -91,7 +91,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     placeholder lat/lon/alt values are written. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
-    frame, Azimuth 0°) and cannot be combined with ``use_geo: false``.
+    frame, Azimuth_FSW_Metadata 0°) and cannot be combined with ``use_geo: false``.
     """
     dask_scheduler = os.getenv("DASK_SCHEDULER", "synchronous")
     if dask_scheduler not in _ALLOWED_DASK_SCHEDULERS:
@@ -279,11 +279,11 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
                     product_id,
                 )
             else:
-                with smart_open(file_info.filename) as file_handle:
-                    LiberaDataProductFilename.from_file_path(file_info.filename)  # Ensure file is Libera Data Product
-                    dataset = xr.open_dataset(file_handle, decode_times=True).load()
-                    all_data[file_info.filename] = dataset
-                    logger.info(f"Successfully loaded dataset: {file_handle}")
+                LiberaDataProductFilename.from_file_path(file_info.filename)  # Ensure file is Libera Data Product
+                anypath = AnyPath(file_info.filename)
+                dataset = xr.open_dataset(anypath, decode_times=True)
+                all_data[file_info.filename] = dataset
+                logger.info(f"Successfully loaded dataset lazily: {file_info.filename}")
         except Exception as e:
             logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
             raise
@@ -366,7 +366,7 @@ def process_l1a_to_l1b(
         ``configuration.use_geo``; omitting the key is equivalent to True.
     jpss_only_mode : bool, optional
         When True, uses per-pixel geolocation with ``LIBERA_BASE`` (zero-azimuth
-        approximation) and sets Azimuth to 0°. Requires ``use_geo`` True and JPSS-only
+        approximation) and sets Azimuth_FSW_Metadata to 0°. Requires ``use_geo`` True and JPSS-only
         SPICE kernels in the manifest.
 
     Returns

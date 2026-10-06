@@ -75,7 +75,7 @@ class TestL1bManifestUseGeoConfiguration:
             assert np.all(dataset["Latitude"].values == np.float32(-999))
             assert np.all(dataset["Longitude"].values == np.float32(-999))
             assert np.all(dataset["Altitude"].values == np.float32(-9999))
-            assert np.all(dataset["Azimuth"].values == np.float32(-999))
+            assert np.all(dataset["Azimuth_FSW_Metadata"].values == np.float32(-999))
             assert np.any(np.isfinite(dataset["Radiance"].values))
 
     def test_jpss_only_runs_per_pixel_geolocation(self, generate_input_manifest, monkeypatch, tmp_path):
@@ -112,7 +112,7 @@ class TestL1bManifestUseGeoConfiguration:
                     f"Frame {t}: expected per-pixel geolocation variation across {n_valid} valid pixels"
                 )
 
-            assert np.all(dataset["Azimuth"].values == 0)
+            assert np.all(dataset["Azimuth_FSW_Metadata"].values == 0)
             assert np.all(dataset["Solar_Zenith_Surface"].values == 0)
             assert np.all(dataset["Viewing_Zenith_Surface"].values == 0)
             assert np.all(dataset["Relative_Azimuth_Surface"].values == 0)
