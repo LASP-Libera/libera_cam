@@ -336,10 +336,6 @@ def two_timestamps():
     return np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"], dtype="datetime64[ns]")
 
 
-def _all_nan_spacecraft_geometry():
-    return pd.DataFrame({column: [np.nan] for field in geolocation._SPACECRAFT_FIELDS for column in field.columns})
-
-
 def test_spacecraft_field_mapping_matches_curryer_and_product_definition():
     """The variable maps must name curryer columns and reproduce each product variable's fill and dtype."""
     curryer_columns = {column for field in geolocation._SPACECRAFT_FIELDS for column in field.columns}
@@ -369,6 +365,9 @@ def test_calculate_spacecraft_geometry_uses_curryer(
 
     mock_kernel_manager.ensure_known_kernels_are_furnished.assert_called_once()
     mock_geometry_data.assert_called_once_with("JPSS4_SC", attitude_frame=spatial.EARTH_FRAME)
+    # curryer owns the whole-granule coverage check, per SPICE input, so a missing attitude CK
+    # raises even while the ephemeris fields are finite.
+    assert mock_geometry_data.return_value.get_geometry.call_args.kwargs["require_coverage"] is True
     assert mock_geometry_data.return_value.get_geometry.call_args.kwargs["fields"] == [
         geometry.GeometryField.SUBSATELLITE,
         geometry.GeometryField.SUBSOLAR,
@@ -401,31 +400,6 @@ def test_calculate_spacecraft_geometry_raises_friendly_message_on_spice_error(
 
     with pytest.raises(RuntimeError, match="no coverage for the requested time"):
         calculate_spacecraft_geometry(mock_kernel_manager, two_timestamps)
-
-
-@patch("libera_cam.geolocation.geometry.GeometryData")
-@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1]))
-def test_calculate_spacecraft_geometry_raises_when_no_coverage(mock_adapt, mock_geometry_data, mock_kernel_manager):
-    """All-NaN spacecraft fields mean the kernels miss the granule: a misconfiguration, not a data gap."""
-    mock_geometry_data.return_value.get_geometry.return_value = _all_nan_spacecraft_geometry()
-
-    with pytest.raises(RuntimeError, match="no coverage"):
-        calculate_spacecraft_geometry(mock_kernel_manager, np.array(["2025-01-01"], dtype="datetime64[ns]"))
-
-
-@patch("libera_cam.geolocation.geometry.GeometryData")
-@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1]))
-def test_calculate_spacecraft_geometry_raises_when_only_sun_fields_covered(
-    mock_adapt, mock_geometry_data, mock_kernel_manager
-):
-    """The Sun-only fields stay finite without spacecraft kernels; coverage is judged on the subsatellite point."""
-    frame = _all_nan_spacecraft_geometry()
-    for column in (*geometry.GeometryField.SUBSOLAR.columns, *geometry.GeometryField.EARTH_SUN_DISTANCE.columns):
-        frame[column] = [1.0]
-    mock_geometry_data.return_value.get_geometry.return_value = frame
-
-    with pytest.raises(RuntimeError, match="no coverage"):
-        calculate_spacecraft_geometry(mock_kernel_manager, np.array(["2025-01-01"], dtype="datetime64[ns]"))
 
 
 @patch("libera_cam.geolocation.KernelManager")
@@ -485,7 +459,7 @@ def test_granule_earth_sun_distance_ignores_gaps():
 
 
 def test_granule_earth_sun_distance_raises_without_coverage():
-    with pytest.raises(RuntimeError, match="Earth-Sun distance has no coverage"):
+    with pytest.raises(ValueError, match="Earth-Sun distance has no coverage"):
         granule_earth_sun_distance(np.array([np.nan, np.nan]))
 
 
@@ -542,14 +516,12 @@ def test_calculate_azimuth_uses_curryer_frame_euler(mock_adapt, mock_euler, mock
 
 @patch("libera_cam.geolocation.spatial.frame_to_frame_euler")
 @patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2]))
-def test_calculate_azimuth_warns_when_ck_has_no_coverage(mock_adapt, mock_euler, mock_kernel_manager, caplog):
+def test_calculate_azimuth_raises_when_ck_has_no_coverage(mock_adapt, mock_euler, mock_kernel_manager):
+    """A granule the CK does not cover at all is a missing input, not a per-frame gap."""
     mock_euler.return_value = _euler_frame([np.nan, np.nan])
 
-    with caplog.at_level("WARNING", logger="libera_cam.geolocation"):
-        azimuth = calculate_azimuth(mock_kernel_manager, np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]"))
-
-    np.testing.assert_array_equal(azimuth, [-999.0, -999.0])
-    assert any("Azimuth CK returned no coverage" in record.message for record in caplog.records)
+    with pytest.raises(ValueError, match="LIBERA_BASE_COORD -> LIBERA_AZ_COORD transform has no coverage"):
+        calculate_azimuth(mock_kernel_manager, np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]"))
 
 
 @patch("libera_cam.geolocation.KernelManager")
