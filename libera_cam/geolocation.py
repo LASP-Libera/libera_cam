@@ -162,12 +162,10 @@ def _query_geometry(
     observer: str,
     u_gps_times: np.ndarray,
     fields: tuple[geometry.GeometryField, ...],
-    require_coverage: bool,
-    coverage_fields: tuple[geometry.GeometryField, ...] = (),
     **data_kwargs,
 ) -> pd.DataFrame:
     """
-    One curryer ``GeometryData`` query, surfacing SPICE failures as readable errors.
+    One curryer ``GeometryData`` query that the kernels must cover, surfacing SPICE failures as readable errors.
 
     Extra keyword arguments (e.g. ``attitude_frame``) are forwarded to ``GeometryData``.
 
@@ -179,14 +177,6 @@ def _query_geometry(
         Query times in uGPS.
     fields : tuple of GeometryField
         Fields to compute for this observer.
-    require_coverage : bool
-        If True, raise when the coverage fields are entirely NaN -- the kernels do not cover
-        the granule at all (a misconfiguration).
-    coverage_fields : tuple of GeometryField, optional
-        Fields whose all-NaN state signals no coverage; defaults to every requested field. The
-        spacecraft observer restricts this to an ephemeris-derived field, since the subsolar
-        point and Earth-Sun distance are computed from the Sun ephemeris alone and stay finite
-        even when the spacecraft kernels miss the granule.
 
     Returns
     -------
@@ -197,21 +187,18 @@ def _query_geometry(
     ------
     RuntimeError
         If the curryer SPICE query fails outright (e.g. an unparsable time or a missing
-        kernel), or -- when ``require_coverage`` -- if it returns no coverage at all. Both
-        carry a parsed, user-facing description of the cause.
+        kernel), with a parsed, user-facing description of the cause.
+    ValueError
+        If a SPICE input the fields read (spacecraft ephemeris, attitude, Sun ephemeris) is
+        NaN at every requested time, i.e. the kernels do not cover the granule. Per-frame
+        gaps come back as NaN.
     """
     try:
-        result = geometry.GeometryData(observer, **data_kwargs).get_geometry(u_gps_times, fields=list(fields))
+        return geometry.GeometryData(observer, **data_kwargs).get_geometry(
+            u_gps_times, fields=list(fields), require_coverage=True
+        )
     except sp.utils.exceptions.SpiceyError as err:
         raise RuntimeError(f"curryer geometry query failed for {observer!r}: {spice_error_message(err)}") from err
-    if require_coverage:
-        coverage_columns = [column for field in (coverage_fields or fields) for column in field.columns]
-        if bool(result[coverage_columns].isna().to_numpy().all()):
-            raise RuntimeError(
-                f"curryer geometry returned no coverage for observer {observer!r} over the granule; "
-                "check that the SPICE kernels cover the requested times."
-            )
-    return result
 
 
 def calculate_spacecraft_geometry(
@@ -247,24 +234,17 @@ def calculate_spacecraft_geometry(
     Raises
     ------
     ValueError
-        If ``spacecraft_observer`` is not a known Libera spacecraft frame.
+        If ``spacecraft_observer`` is not a known Libera spacecraft frame, or a SPICE input
+        these fields read (spacecraft ephemeris, attitude, Sun ephemeris) covers no frame.
     RuntimeError
-        If the curryer SPICE query fails outright, or returns no coverage at all. Both carry a
-        parsed, user-facing description of the cause.
+        If the curryer SPICE query fails outright, with a parsed, user-facing description of
+        the cause.
     """
     _validate_observer(spacecraft_observer, SPACECRAFT_OBSERVERS, "spacecraft")
     kernel_manager.ensure_known_kernels_are_furnished()
     u_gps_times = spicetime.adapt(pd.DatetimeIndex(timestamps), "iso")
-    # Spacecraft fields resolve in every mode, so all-NaN means the kernels miss the granule. The
-    # attitude quaternion is Earth-fixed (product convention); the inertial fields keep J2000.
-    return _query_geometry(
-        spacecraft_observer,
-        u_gps_times,
-        _SPACECRAFT_FIELDS,
-        require_coverage=True,
-        coverage_fields=(geometry.GeometryField.SUBSATELLITE,),
-        attitude_frame=spatial.EARTH_FRAME,
-    )
+    # The attitude quaternion is Earth-fixed (product convention); the inertial fields keep J2000.
+    return _query_geometry(spacecraft_observer, u_gps_times, _SPACECRAFT_FIELDS, attitude_frame=spatial.EARTH_FRAME)
 
 
 def create_placeholder_spacecraft_geometry(n_samples: int) -> pd.DataFrame:
@@ -319,12 +299,12 @@ def granule_earth_sun_distance(distances: np.ndarray) -> float:
 
     Raises
     ------
-    RuntimeError
+    ValueError
         If no frame has a finite distance. The Sun ephemeris comes from the generic NAIF
         kernels, so this means they are not furnished rather than a per-frame gap.
     """
     if not np.isfinite(distances).any():
-        raise RuntimeError("Earth-Sun distance has no coverage over the granule; check the generic NAIF kernels.")
+        raise ValueError("Earth-Sun distance has no coverage over the granule; check the generic NAIF kernels.")
     return float(np.nanmedian(distances))
 
 
@@ -366,10 +346,10 @@ def add_spacecraft_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernel
     Raises
     ------
     ValueError
-        If ``ds`` has no ``camera_time`` coordinate or ``config`` names no kernel sources.
+        If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources, or the
+        kernels do not cover the granule at all (see :func:`calculate_spacecraft_geometry`).
     RuntimeError
-        If the curryer SPICE query fails or the kernels do not cover the granule at all
-        (see :func:`calculate_spacecraft_geometry`).
+        If the curryer SPICE query fails (see :func:`calculate_spacecraft_geometry`).
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
@@ -421,12 +401,11 @@ def calculate_azimuth(
     instrument base, not a pointing angle in the spacecraft or orbital frame. curryer's
     ``frame_to_frame_euler`` does the per-sample frame transform and factoring.
 
-    Every per-sample SPICE failure -- a CK coverage gap, but equally a CK or frame kernel that
-    is not furnished -- comes back as NaN under ``allow_nans`` and is written as ``fill_value``;
-    a granule with no covered frame is logged as a warning, not raised. The caller furnishes the
-    kernels (:func:`add_azimuth_to_dataset` loads the static set, which carries the Libera frame
-    kernel, alongside the CK), and the granule-level coverage check is tracked under
-    LIBSDC-788, matching ``libera_rad``.
+    A per-sample CK coverage gap comes back as NaN under ``allow_nans`` and is written as
+    ``fill_value``. A granule with no covered frame at all means the azimuth CK or the Libera
+    frame kernel is not furnished, or does not cover the granule, and raises. The caller
+    furnishes the kernels (:func:`add_azimuth_to_dataset` loads the static set, which carries
+    the Libera frame kernel, alongside the CK).
 
     Parameters
     ----------
@@ -441,10 +420,13 @@ def calculate_azimuth(
     -------
     np.ndarray
         Azimuth in degrees, shape ``(N,)``, dtype float32, in ``[0, 360)`` or ``fill_value``.
+
+    Raises
+    ------
+    ValueError
+        If no camera frame has a finite azimuth.
     """
     kernel_manager.ensure_known_kernels_are_furnished()
-
-    # TODO[LIBSDC-788]: CK coverage check via KernelManager; an uncovered granule currently fills.
 
     u_gps_times = spicetime.adapt(pd.DatetimeIndex(timestamps), "iso")
     base_frame, azimuth_frame = AZIMUTH_ENCODER_FRAMES
@@ -452,8 +434,10 @@ def calculate_azimuth(
 
     azimuth = np.mod(euler["euler3"].to_numpy(), 360.0)
     if np.isnan(azimuth).all():
-        logger.warning(
-            "Azimuth CK returned no coverage over %d camera frame(s); Azimuth is written as fill.", azimuth.size
+        raise ValueError(
+            f"The {base_frame} -> {azimuth_frame} transform has no coverage over any of the {azimuth.size} camera "
+            "frame(s); check that the azimuth CK in the kernel manifest covers the granule and that the Libera "
+            "frame kernel is furnished."
         )
     return _apply_fill(azimuth, fill_value, np.float32)
 
@@ -519,7 +503,8 @@ def add_azimuth_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> x
     Raises
     ------
     ValueError
-        If ``ds`` has no ``camera_time`` coordinate or ``config`` names no kernel sources.
+        If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources, or the
+        azimuth CK covers no camera frame (see :func:`calculate_azimuth`).
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")

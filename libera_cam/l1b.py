@@ -376,7 +376,11 @@ def process_l1a_to_l1b(
     ------
     ValueError
         If required input datasets (camera or housekeeping data) are not found,
-        or SPICE kernel sources are missing when ``use_geo`` is True.
+        SPICE kernel sources are missing when ``use_geo`` is True, or the kernels do
+        not cover the granule (spacecraft ephemeris or attitude, Sun ephemeris, or the
+        azimuth CK in production mode).
+    RuntimeError
+        If the curryer spacecraft geometry query fails outright.
     FileNotFoundError
         If the calibration data file is not found.
     """
