@@ -41,13 +41,13 @@ dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
     # Both upstreams are pinned to immutable commits on their review branches so a push to either
     # branch cannot change what CI resolves. Restore the release pins before merge:
-    # `libera-utils >=5.10.9,<6.0.0` and `lasp-curryer >=0.5.3,<1.0`. TODO[LIBSDC-808]
+    # `libera-utils >=5.11.2,<6.0.0` and `lasp-curryer >=0.5.3,<1.0`. TODO[LIBSDC-808]
     #
     # Carries the NetCDF write-path fix (a path rather than an unpicklable file object, which is
     # what lets `h5netcdf` run under the distributed scheduler) and the `chunksizes` tuple
     # coercion that makes chunk shape settable from the product definition
     # (LASP-Libera/libera_utils#66).
-    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@a71d5f3b745c0e2924a1dd16b80abb0d4c1595b8",
+    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@5e10ca5052e40f628b93b0de1cd41e284a8f776f",
     # Imported directly by geolocation.py. Carries `spatial.pixel_geometry` and the `PixelField`
     # registry it selects fields from (lasp/curryer#188).
     "lasp-curryer @ git+https://github.com/lasp/curryer.git@fef750c63eef934197ce4a11b2d997caa036bb1b",
