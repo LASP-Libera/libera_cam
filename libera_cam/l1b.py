@@ -41,7 +41,7 @@ _ALLOWED_DASK_SCHEDULERS = frozenset({"synchronous", "distributed"})
 _USE_DASK_DASHBOARD = False  # Set to True to enable Dask dashboard for debugging; requires distributed scheduler
 _DASK_DASHBOARD_SESSION_TOKEN_EXPIRATION_MS = 3_600_000
 _DEFAULT_DASK_NUM_WORKERS = 1
-_DEFAULT_DASK_MEMORY_LIMIT = "8GB"
+_DEFAULT_DASK_MEMORY_LIMIT = "12GB"
 
 # Required dynamic SPICE inputs keyed by Libera data product id (see libera_utils.constants).
 _REQUIRED_SPICE_JPSS_ONLY: tuple[DataProductIdentifier, ...] = (

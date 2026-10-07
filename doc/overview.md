@@ -71,7 +71,7 @@ environment variables before starting the pipeline:
 | `XARRAY_NETCDF_ENGINE`      | `h5netcdf`    | NetCDF engine used by `libera_utils` to write the product. Both engines write to S3 and both work under `distributed`; `h5netcdf` is faster and produces smaller granules (see the tuning guide).                 |
 | `DASK_SCHEDULER`            | `synchronous` | Dask scheduler. **`synchronous`** (single-process, default) or **`distributed`** (local cluster with dashboard). **`threads`** and **`processes`** are not supported — CSPICE is not thread-safe within a worker. |
 | `DASK_NUM_WORKERS`          | `1`           | Number of Dask workers when using `distributed`.                                                                                                                                                                  |
-| `DASK_MEMORY_LIMIT`         | `8GB`         | Per-worker memory limit for `distributed` (e.g. `4GB`, `8GB`, `16GB`).                                                                                                                                            |
+| `DASK_MEMORY_LIMIT`         | `12GB`        | Per-worker memory limit for `distributed`. At `8GB`, workers on a 695-frame granule passed 7.1 GiB and were restarted, recomputing their tasks. Size the container for at least `DASK_NUM_WORKERS` times this.    |
 | `LIBERA_CAM_CHUNK_SIZE`     | `50`          | Number of L1A images per Dask batch during JPEG-LS decompression in `read_l1a_cam_data`. Lower values reduce peak memory; higher values reduce scheduler overhead.                                                |
 | `LIBERA_CAM_GEO_CHUNK_SIZE` | `10`          | Number of frames per per-pixel geometry task in `add_geolocation_to_dataset`, independent of the decompression chunk. Each task furnishes the kernels once and geolocates its frames one at a time.               |
 
@@ -169,9 +169,12 @@ across the 1003-frame run — with a short spike at the end. Blocks are held for
 write, not for the length of the granule. The "roughly 750 frames in 32 GB" cap that earlier
 releases derived is withdrawn: no such cap was observed.
 
-`DASK_MEMORY_LIMIT` must still be raised above its `8GB` default to run `distributed` at these
-sizes: at the default, both `h5netcdf` + `distributed` and `netcdf4` + `distributed` died with
-`distributed.scheduler.KilledWorker` on the store tasks at 60 frames. Every measurement above
+`DASK_MEMORY_LIMIT` defaults to `12GB` because `8GB` is too small for `distributed`: at `8GB`,
+both `h5netcdf` + `distributed` and `netcdf4` + `distributed` died with
+`distributed.scheduler.KilledWorker` on the store tasks at 60 frames, and a 695-frame granule
+from S3 at four workers restarted five of them and recomputed geometry 1,451 times for 695 frames
+without finishing in 45 minutes. The same granule at two workers and `14GB` finished in 25 minutes
+(2.2 s/frame) with no restarts and no process above 6.6 GB. Every measurement in the table above
 used `DASK_MEMORY_LIMIT=24GB`. Peak is insensitive to `LIBERA_CAM_GEO_CHUNK_SIZE` (60 frames
 peak at 9.0 GB with a chunk of 10 and 8.6 GB with a chunk of 2 under the default path), and
 stage checkpoints put the growth inside `to_netcdf`: at 60 frames the dataset is still lazy at
@@ -210,18 +213,22 @@ export DASK_SCHEDULER=synchronous
 libera-cam /path/to/input_manifest.json
 ```
 
-Multi-worker local cluster. This currently fails when the product is written (see the tuning
-guide, item 1); it is recorded for when the write path is fixed:
+Multi-worker local cluster. Four workers at `12GB` may use up to 48 GB between them; on a
+smaller machine, use fewer workers rather than a lower limit:
 
 ```bash
 export PROCESSING_PATH=/path/to/output
 export DASK_SCHEDULER=distributed
 export DASK_NUM_WORKERS=4
-export DASK_MEMORY_LIMIT=8GB
+export DASK_MEMORY_LIMIT=12GB
 export LIBERA_CAM_CHUNK_SIZE=50
 export LIBERA_CAM_GEO_CHUNK_SIZE=10
 libera-cam /path/to/input_manifest.json
 ```
+
+The product version in the output filename and `algorithm_version` comes from the installed
+package metadata, not from `pyproject.toml`, so reinstall (`pip install -e .`) after switching
+branches; a stale editable install labels the product with whatever version it last recorded.
 
 When `DASK_SCHEDULER=distributed`, the pipeline logs a Bokeh dashboard URL for task profiling.
 Note that `DASK_SCHEDULER`, `DASK_NUM_WORKERS` and `DASK_MEMORY_LIMIT` are also read by Dask's
