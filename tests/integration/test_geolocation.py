@@ -64,7 +64,7 @@ def test_add_geolocation_rejects_a_granule_the_kernels_do_not_cover(test_data_pa
     ds = ds.assign_coords(camera_time=ds.camera_time + np.timedelta64(1, "D"))
     config = GeolocationKernelConfig(dynamic_kernel_sources=_ditl_dynamic_kernel_sources(test_data_path))
 
-    with pytest.raises(RuntimeError, match="cover none of the 2 camera frame"):
+    with pytest.raises(ValueError, match="cover none of the 2 camera frame"):
         add_geolocation_to_dataset(ds, config)
 
 

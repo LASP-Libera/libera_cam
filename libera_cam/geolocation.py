@@ -823,7 +823,7 @@ def _require_frame_coverage(config: GeolocationKernelConfig, timestamps: np.ndar
 
     Raises
     ------
-    RuntimeError
+    ValueError
         If no frame is covered.
     """
     with _kernel_manager_from_config(config) as km:
@@ -837,7 +837,7 @@ def _require_frame_coverage(config: GeolocationKernelConfig, timestamps: np.ndar
 
     uncovered = (probe["quality_flags"][:, 0] & int(SpatialQualityFlags.CALC_ELLIPS_INSUFF_DATA)) != 0
     if uncovered.all():
-        raise RuntimeError(
+        raise ValueError(
             f"SPICE kernels cover none of the {uncovered.size} camera frame(s) for {spice_body!r}; "
             "check that the manifest kernels span the granule."
         )
@@ -882,10 +882,8 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     Raises
     ------
     ValueError
-        If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources, or
-        ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1.
-    RuntimeError
-        If the kernels cover none of the frames.
+        If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources,
+        ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1, or the kernels cover none of the frames.
 
     Notes
     -----
