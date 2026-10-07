@@ -214,7 +214,7 @@ def test_require_frame_coverage_raises_when_no_frame_is_covered(coverage_mocks):
     gap = int(SQF.SPICE_ERR_MISSING_ATTITUDE | SQF.CALC_ELLIPS_INSUFF_DATA)
     coverage_mocks.pixel_geometry.return_value = _probe([gap, gap, gap])
 
-    with pytest.raises(RuntimeError, match="cover none of the 3 camera frame"):
+    with pytest.raises(ValueError, match="cover none of the 3 camera frame"):
         _require_frame_coverage(GeolocationKernelConfig(dynamic_kernel_sources=["k"]), _datetimes(3), "LIBERA_WFOV_CAM")
 
 
