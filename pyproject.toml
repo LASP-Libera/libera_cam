@@ -47,7 +47,7 @@ dependencies = [
     # what lets `h5netcdf` run under the distributed scheduler) and the `chunksizes` tuple
     # coercion that makes chunk shape settable from the product definition
     # (LASP-Libera/libera_utils#66).
-    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@5e10ca5052e40f628b93b0de1cd41e284a8f776f",
+    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@5ffcc8872840a61901993181879dd4634fbc2d1a",
     # Imported directly by geolocation.py. Carries `spatial.pixel_geometry`, the `PixelField`
     # registry it selects fields from, and `GeometryData.get_geometry(require_coverage=)`, which the
     # spacecraft-level geometry query relies on to fail on a missing kernel (lasp/curryer#188).
