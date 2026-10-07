@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Pin `lasp-curryer` to a lasp/curryer#188 commit for `GeometryData.get_geometry(require_coverage=)`, until curryer 0.5.3 is released.
+- Require `lasp-curryer >= 0.5.3` for `GeometryData.get_geometry(require_coverage=)`.
 
 ### Fixed
 
