@@ -39,19 +39,18 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    # Both upstreams are pinned to immutable commits on their review branches so a push to either
-    # branch cannot change what CI resolves. Restore the release pins before merge:
-    # `libera-utils >=5.11.2,<6.0.0` and `lasp-curryer >=0.5.3,<1.0`. TODO[LIBSDC-808]
+    # Pinned to an immutable commit on LASP-Libera/libera_utils#66 so a push to that branch cannot
+    # change what CI resolves. Restore the release pin `libera-utils >=5.11.2,<6.0.0` once it
+    # ships. TODO[LIBSDC-808]
     #
     # Carries the NetCDF write-path fix (a path rather than an unpicklable file object, which is
     # what lets `h5netcdf` run under the distributed scheduler) and the `chunksizes` tuple
-    # coercion that makes chunk shape settable from the product definition
-    # (LASP-Libera/libera_utils#66).
+    # coercion that makes chunk shape settable from the product definition.
     "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@5ffcc8872840a61901993181879dd4634fbc2d1a",
-    # Imported directly by geolocation.py. Carries `spatial.pixel_geometry`, the `PixelField`
+    # Imported directly by geolocation.py. 0.5.3 adds `spatial.pixel_geometry`, the `PixelField`
     # registry it selects fields from, and `GeometryData.get_geometry(require_coverage=)`, which the
-    # spacecraft-level geometry query relies on to fail on a missing kernel (lasp/curryer#188).
-    "lasp-curryer @ git+https://github.com/lasp/curryer.git@7c374fa53635f143f5068e236149b30bad08b027",
+    # spacecraft-level geometry query relies on to fail on a missing kernel.
+    "lasp-curryer>=0.5.3,<1.0",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images
