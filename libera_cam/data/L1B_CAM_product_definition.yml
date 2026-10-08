@@ -271,7 +271,7 @@ variables:
         [b2] attitude missing, [b3] invalid location or [b4] unclassified SPICE error; [b9] the pixel
         line of sight misses the ellipsoid (fill); [b13] Sun position unavailable (solar angles
         fill); [b14] a surface angle was not finite (fill). [b15] geolocation was not run (use_geo
-        false).
+        false, or the onboard pixel mask removed the pixel; see Camera_Mask).
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -374,6 +374,12 @@ variables:
     attributes:
       long_name: Pixel level mask for data
       valid_range: [0, 1]
+      value_meaning: >-
+        1 where the camera returned the pixel (non-zero count), 0 where the onboard pixel mask
+        removed it. Where this is 0, Radiance and the geolocation fields are their fill value,
+        Geolocation_Quality_Flag has bit 15 set, Pixel_Counts is 0 and Integration_Time_Flag
+        carries no meaning. Video mode applies no onboard mask, so a pixel is 0 there only if it
+        read 0 DN.
     encoding:
       chunksizes: [1, 512, 512]
   Integration_Time_Flag:

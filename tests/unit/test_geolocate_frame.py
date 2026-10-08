@@ -10,6 +10,7 @@ from curryer.compute.constants import SpatialQualityFlags as SQF
 from libera_cam.config import product_config_path
 from libera_cam.geolocation import (
     _AZIMUTH_FIELDS,
+    _GEO_NOT_COMPUTED_FLAG,
     _PIXEL_FIELDS,
     _PIXEL_VARIABLES,
     FrameGeometry,
@@ -188,3 +189,75 @@ def test_geolocate_frame_rejects_flags_beyond_uint16():
         pytest.raises(RuntimeError, match="uint16"),
     ):
         geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", VECTORS, frame_shape=FRAME_SHAPE)
+
+
+# Pixel ids carried in the vectors' x component, so a fake curryer can tell which pixels it was given.
+ID_VECTORS = np.column_stack([np.arange(N_PIXELS, dtype=float), np.zeros(N_PIXELS), np.ones(N_PIXELS)])
+KEPT = np.array([[True, False, True], [False, True, True]])
+
+
+def _curryer_by_pixel_id(epochs, spice_body, vectors, fields, allow_nans):
+    """``100 * epoch + pixel id`` for exactly the vectors passed; pixel 5 misses the ellipsoid."""
+    ids = vectors[:, 0].astype(int)
+    base = 100.0 * np.arange(len(epochs))[:, None] + ids[None, :]
+    base[:, ids == 5] = np.nan
+    flags = np.where(ids == 5, int(SQF.CALC_ELLIPS_NO_INTERSECT), 0)[None, :].repeat(len(epochs), axis=0)
+    columns = {name: base + 0.1 * (i + 1) for i, name in enumerate(_PIXEL_VARIABLES)}
+    columns["altitude"] = np.where(np.isnan(base), np.nan, 0.0)
+    return columns | {"quality_flags": flags}
+
+
+def test_pixel_mask_geolocates_only_kept_pixels_and_fills_the_rest():
+    """curryer sees only the kept pixels' vectors; dropped pixels are fill with bit 15 alone."""
+    with patch("libera_cam.geolocation.spatial.pixel_geometry", side_effect=_curryer_by_pixel_id) as mock_geometry:
+        masked = geolocate_frame(
+            EPOCHS[:1], None, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=FRAME_SHAPE, pixel_mask=KEPT
+        )
+        full = geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=FRAME_SHAPE)
+
+    np.testing.assert_array_equal(mock_geometry.call_args_list[0].args[2], ID_VECTORS[KEPT.ravel()])
+    for name in _PIXEL_VARIABLES:
+        values = getattr(masked, name)
+        assert values.shape == FRAME_SHAPE, name
+        assert values.dtype == np.float32, name
+        np.testing.assert_array_equal(values[KEPT], getattr(full, name)[KEPT], err_msg=name)
+        np.testing.assert_array_equal(values[~KEPT], np.float32(_PIXEL_VARIABLES[name][1]), err_msg=name)
+    np.testing.assert_array_equal(masked.quality_flags[KEPT], full.quality_flags[KEPT])
+    np.testing.assert_array_equal(masked.quality_flags[~KEPT], _GEO_NOT_COMPUTED_FLAG)
+    # Pixel 5 is kept and misses the ellipsoid: curryer's flag, not "not computed".
+    assert masked.quality_flags[1, 2] == SQF.CALC_ELLIPS_NO_INTERSECT
+
+
+def test_pixel_mask_keeps_each_kept_pixels_epoch_selection():
+    exposure_index = np.array([[0, 1, 1], [1, 0, 1]], dtype=np.uint8)
+    with patch("libera_cam.geolocation.spatial.pixel_geometry", side_effect=_curryer_by_pixel_id):
+        masked = geolocate_frame(
+            EPOCHS, exposure_index, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=FRAME_SHAPE, pixel_mask=KEPT
+        )
+        full = geolocate_frame(EPOCHS, exposure_index, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=FRAME_SHAPE)
+
+    np.testing.assert_array_equal(masked.latitude[KEPT], full.latitude[KEPT])
+    np.testing.assert_allclose(masked.latitude[0], [0.1, -999.0, 102.1], rtol=1e-6)
+
+
+def test_pixel_mask_with_no_kept_pixels_skips_curryer():
+    with patch("libera_cam.geolocation.spatial.pixel_geometry") as mock_geometry:
+        frame = geolocate_frame(
+            EPOCHS[:1],
+            None,
+            "LIBERA_WFOV_CAM",
+            ID_VECTORS,
+            frame_shape=FRAME_SHAPE,
+            pixel_mask=np.zeros(FRAME_SHAPE, bool),
+        )
+    mock_geometry.assert_not_called()
+    np.testing.assert_array_equal(frame.latitude, np.float32(-999.0))
+    np.testing.assert_array_equal(frame.quality_flags, _GEO_NOT_COMPUTED_FLAG)
+
+
+@pytest.mark.parametrize("mask", [np.ones((3, 2), dtype=bool), np.ones(FRAME_SHAPE, dtype=np.uint8)])
+def test_geolocate_frame_rejects_a_mask_that_is_not_boolean_and_frame_shaped(mask):
+    with patch("libera_cam.geolocation.spatial.pixel_geometry") as mock_geometry:
+        with pytest.raises(ValueError, match="pixel_mask must be a boolean array"):
+            geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=FRAME_SHAPE, pixel_mask=mask)
+    mock_geometry.assert_not_called()
