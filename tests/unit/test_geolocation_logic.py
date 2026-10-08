@@ -54,11 +54,17 @@ def _frame(value: float, flag: int) -> FrameGeometry:
     return FrameGeometry(quality_flags=np.full(FRAME_SHAPE, flag, dtype=np.uint16), **fields)
 
 
+def _kept_pixels(n_times: int) -> np.ndarray:
+    """A different kept-pixel pattern per frame, so a task handed another frame's mask shows."""
+    return (np.arange(n_times)[:, None, None] + np.arange(np.prod(FRAME_SHAPE)).reshape(FRAME_SHAPE)) % 3 == 0
+
+
 def _frame_dataset(n_times: int, time_chunk: int) -> xr.Dataset:
     times = pd.date_range("2025-01-01", periods=n_times, freq="5s")
     image_data = da.zeros((n_times, *FRAME_SHAPE), chunks=(time_chunk, *FRAME_SHAPE))
+    mask = da.from_array(_kept_pixels(n_times), chunks=(time_chunk, *FRAME_SHAPE))
     return xr.Dataset(
-        {"image_data": (("camera_time", "y", "x"), image_data)},
+        {"image_data": (("camera_time", "y", "x"), image_data), "valid_pixel_mask": (("camera_time", "y", "x"), mask)},
         coords={"camera_time": times, "y": range(FRAME_SHAPE[0]), "x": range(FRAME_SHAPE[1])},
     )
 
@@ -109,7 +115,8 @@ def test_calculate_chunk_geometry_loops_frames_into_typed_blocks(worker_mocks):
     worker_mocks.geolocate.side_effect = [_frame(1.0, 0), _frame(2.0, int(SQF.CALC_ELLIPS_NO_INTERSECT))]
     config = GeolocationKernelConfig(dynamic_kernel_sources=["orbit.bsp"])
 
-    outputs = calculate_chunk_geometry(_datetimes(2)[:, None], None, config)
+    mask = _kept_pixels(2)
+    outputs = calculate_chunk_geometry(_datetimes(2)[:, None], None, mask, config)
 
     worker_mocks.km.load_libera_dynamic_kernels.assert_called_once_with(
         ["orbit.bsp"], needs_naif_kernels=True, needs_static_kernels=True
@@ -130,7 +137,10 @@ def test_calculate_chunk_geometry_loops_frames_into_typed_blocks(worker_mocks):
     assert first.args[1] is None
     assert first.args[2] == "LIBERA_WFOV_CAM"
     assert first.args[3].shape == (15, 3)
-    assert first.kwargs == {"frame_shape": FRAME_SHAPE}
+    assert set(first.kwargs) == {"frame_shape", "pixel_mask"}
+    assert first.kwargs["frame_shape"] == FRAME_SHAPE
+    np.testing.assert_array_equal(first.kwargs["pixel_mask"], mask[0])
+    np.testing.assert_array_equal(second.kwargs["pixel_mask"], mask[1])
 
 
 def test_calculate_chunk_geometry_passes_each_frames_epochs_and_index(worker_mocks):
@@ -141,7 +151,9 @@ def test_calculate_chunk_geometry_passes_each_frames_epochs_and_index(worker_moc
     index[1, 0, 0] = 1
     exposure_times = np.stack([_datetimes(2), _datetimes(2) + np.timedelta64(25, "ms")], axis=1)
 
-    calculate_chunk_geometry(exposure_times, index, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+    calculate_chunk_geometry(
+        exposure_times, index, _kept_pixels(2), GeolocationKernelConfig(dynamic_kernel_sources=["k"])
+    )
 
     first, second = worker_mocks.geolocate.call_args_list
     np.testing.assert_array_equal(first.args[0], [10, 11])
@@ -155,23 +167,30 @@ def test_calculate_chunk_geometry_jpss_only_uses_libera_base(worker_mocks):
     worker_mocks.geolocate.return_value = _frame(0.0, 0)
 
     calculate_chunk_geometry(
-        _datetimes(1)[:, None], None, GeolocationKernelConfig(dynamic_kernel_sources=["k"], jpss_only=True)
+        _datetimes(1)[:, None],
+        None,
+        _kept_pixels(1),
+        GeolocationKernelConfig(dynamic_kernel_sources=["k"], jpss_only=True),
     )
 
     assert worker_mocks.geolocate.call_args.args[2] == "LIBERA_BASE"
 
 
 @pytest.mark.parametrize(
-    ("exposure_times", "exposure_index", "match"),
+    ("exposure_times", "exposure_index", "pixel_mask", "match"),
     [
-        (_datetimes(2), None, r"\(T, K\)"),
-        (_datetimes(2)[:, None], np.zeros((2, 5, 3), dtype=np.uint8), "exposure_index must be shaped"),
-        (_datetimes(2)[:, None], np.zeros((1, 3, 5), dtype=np.uint8), "exposure_index must be shaped"),
+        (_datetimes(2), None, _kept_pixels(2), r"\(T, K\)"),
+        (_datetimes(2)[:, None], np.zeros((2, 5, 3), dtype=np.uint8), _kept_pixels(2), "exposure_index must be shaped"),
+        (_datetimes(2)[:, None], np.zeros((1, 3, 5), dtype=np.uint8), _kept_pixels(2), "exposure_index must be shaped"),
+        (_datetimes(2)[:, None], None, _kept_pixels(1), "pixel_mask must be shaped"),
+        (_datetimes(2)[:, None], None, np.ones((2, 5, 3), dtype=bool), "pixel_mask must be shaped"),
     ],
 )
-def test_calculate_chunk_geometry_rejects_bad_shapes(worker_mocks, exposure_times, exposure_index, match):
+def test_calculate_chunk_geometry_rejects_bad_shapes(worker_mocks, exposure_times, exposure_index, pixel_mask, match):
     with pytest.raises(ValueError, match=match):
-        calculate_chunk_geometry(exposure_times, exposure_index, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+        calculate_chunk_geometry(
+            exposure_times, exposure_index, pixel_mask, GeolocationKernelConfig(dynamic_kernel_sources=["k"])
+        )
     worker_mocks.km_cls.assert_not_called()
 
 
@@ -236,10 +255,12 @@ def orchestration_mocks(small_detector):
         patch("libera_cam.geolocation.calculate_chunk_geometry") as chunk,
     ):
 
-        def fake_chunk(exposure_times, exposure_index, config):
+        def fake_chunk(exposure_times, exposure_index, pixel_mask, config):
             assert exposure_times.shape[1] == 1
             assert exposure_index is None
             n = exposure_times.shape[0]
+            assert pixel_mask.shape == (n, *FRAME_SHAPE)
+            assert pixel_mask.dtype == np.bool_
             return tuple(
                 np.full((n, *FRAME_SHAPE), i, dtype=dtype) for i, (_, dtype) in enumerate(_FIELD_VARIABLES.values())
             )
@@ -248,10 +269,15 @@ def orchestration_mocks(small_detector):
         yield SimpleNamespace(coverage=coverage, chunk=chunk)
 
 
-def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orchestration_mocks, monkeypatch):
-    """Tasks of LIBERA_CAM_GEO_CHUNK_SIZE frames, independent of image_data's chunks; nothing runs until compute."""
+@pytest.mark.parametrize("time_chunk", [5, 3])
+def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orchestration_mocks, monkeypatch, time_chunk):
+    """Tasks of LIBERA_CAM_GEO_CHUNK_SIZE frames, independent of image_data's chunks; nothing runs until compute.
+
+    A decompression chunk of 3 against a geometry chunk of 2 puts frames 2-3 in one task drawn from two
+    source blocks, which must still receive exactly those frames' mask.
+    """
     monkeypatch.setenv("LIBERA_CAM_GEO_CHUNK_SIZE", "2")
-    ds = _frame_dataset(n_times=5, time_chunk=5)
+    ds = _frame_dataset(n_times=5, time_chunk=time_chunk)
     config = GeolocationKernelConfig(dynamic_kernel_sources=["orbit.bsp"])
 
     result = add_geolocation_to_dataset(ds, config)
@@ -272,8 +298,13 @@ def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orches
     assert orchestration_mocks.chunk.call_count == 3
     for i, (variable, _) in enumerate(_FIELD_VARIABLES.values()):
         np.testing.assert_array_equal(computed[variable].values, i, err_msg=variable)
-    passed_config = orchestration_mocks.chunk.call_args.args[2]
+    passed_config = orchestration_mocks.chunk.call_args.args[3]
     assert passed_config is config
+    # Each task receives the mask of exactly the frames whose epochs it receives.
+    frame_of = {time: i for i, time in enumerate(ds.camera_time.values)}
+    for call in orchestration_mocks.chunk.call_args_list:
+        frames = [frame_of[time] for time in call.args[0][:, 0]]
+        np.testing.assert_array_equal(call.args[2], _kept_pixels(5)[frames])
 
 
 def test_add_jpss_only_geolocation_switches_the_body(orchestration_mocks):
@@ -283,7 +314,7 @@ def test_add_jpss_only_geolocation_switches_the_body(orchestration_mocks):
     result["Latitude"].compute(scheduler="synchronous")
 
     assert orchestration_mocks.coverage.call_args.args[2] == "LIBERA_BASE"
-    assert orchestration_mocks.chunk.call_args.args[2].jpss_only is True
+    assert orchestration_mocks.chunk.call_args.args[3].jpss_only is True
 
 
 def test_add_geolocation_requires_kernel_sources_and_camera_time(orchestration_mocks):
@@ -291,6 +322,20 @@ def test_add_geolocation_requires_kernel_sources_and_camera_time(orchestration_m
         add_geolocation_to_dataset(_frame_dataset(2, 2), GeolocationKernelConfig())
     with pytest.raises(ValueError, match="camera_time"):
         add_geolocation_to_dataset(xr.Dataset(), GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+    orchestration_mocks.coverage.assert_not_called()
+
+
+@pytest.mark.parametrize("mask", [None, np.uint8])
+def test_add_geolocation_requires_a_boolean_pixel_mask(orchestration_mocks, mask):
+    """Without the camera's kept-pixel mask there is no defined set of pixels to geolocate."""
+    ds = _frame_dataset(2, 2)
+    ds = (
+        ds.drop_vars("valid_pixel_mask")
+        if mask is None
+        else ds.assign(valid_pixel_mask=ds.valid_pixel_mask.astype(mask))
+    )
+    with pytest.raises(ValueError, match="boolean 'valid_pixel_mask'"):
+        add_geolocation_to_dataset(ds, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
     orchestration_mocks.coverage.assert_not_called()
 
 

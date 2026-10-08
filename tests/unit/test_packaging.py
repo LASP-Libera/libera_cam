@@ -20,6 +20,10 @@ def _processing_dataset() -> xr.Dataset:
             "image_data": (("camera_time", "y", "x"), da.zeros((n_times, n_y, n_x), dtype=np.uint16)),
             "integration_mask": (("camera_time", "y", "x"), da.zeros((n_times, n_y, n_x), dtype=np.uint8)),
             "Radiance": (("camera_time", "y", "x"), da.zeros((n_times, n_y, n_x), dtype=np.float32)),
+            "valid_pixel_mask": (
+                ("camera_time", "y", "x"),
+                da.from_array(np.arange(n_times * n_y * n_x).reshape(n_times, n_y, n_x) % 4 == 0),
+            ),
             "rad_obs_id": (("camera_time",), np.zeros(n_times, dtype=np.uint16)),
             "cam_obs_id": (("camera_time",), np.zeros(n_times, dtype=np.uint16)),
             "good_image_flag": (("camera_time",), np.zeros(n_times, dtype=np.uint32)),
@@ -65,7 +69,24 @@ def test_placeholders_carry_product_fill_values():
         assert placeholder.data.chunks == packaged["Radiance"].data.chunks
         np.testing.assert_array_equal(placeholder.values, np.float32(fill))
     assert packaged["Terrain_Corrected_Altitude"].values.flat[0] == np.float32(-9999.0)
+
+
+def test_camera_mask_is_the_kept_pixel_mask():
+    """Camera_Mask carries valid_pixel_mask as 1/0 in product order, and valid_pixel_mask leaves the product."""
+    dataset = _processing_dataset()
+    kept = dataset["valid_pixel_mask"].values
+
+    packaged = package_l1b_product(dataset)
+
+    assert packaged["Camera_Mask"].dims == ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
     assert packaged["Camera_Mask"].dtype == np.uint8
+    np.testing.assert_array_equal(packaged["Camera_Mask"].values, kept.transpose(0, 2, 1).astype(np.uint8))
+    assert "valid_pixel_mask" not in packaged
+
+
+def test_package_requires_the_kept_pixel_mask():
+    with pytest.raises(ValueError, match="valid_pixel_mask"):
+        package_l1b_product(_processing_dataset().drop_vars("valid_pixel_mask"))
 
 
 def test_packaging_rejects_a_placeholder_variable_that_already_has_data():
