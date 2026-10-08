@@ -93,6 +93,19 @@ When sizing AWS Batch containers and configuring Dask execution, keep the follow
 
 ### Data volume and throughput
 
+Only the pixels the camera's onboard pixel mask kept are geolocated; the rest of each frame is
+written as fill, which compresses to almost nothing. Measured on 50 consecutive DITL2 frames
+(9.1% of pixels kept), single core, with the product encoding:
+
+| Quantity                                  | Every pixel | Kept pixels only |
+| ----------------------------------------- | ----------- | ---------------- |
+| Geometry compute                          | 0.95 s      | 0.095 s          |
+| NetCDF write                              | 2.04 s      | 1.16 s           |
+| Geolocation, radiance and counts, on disk | 41.3 MB     | 7.1 MB           |
+
+Video mode applies no onboard mask, so its frames cost what the "every pixel" column shows. The figures below
+predate the mask and measure every pixel.
+
 Measured on the `DITL_3min` granule (three 2048x2048 frames, 21.7% of pixels off the
 ellipsoid), single core, local SSD, with the default `h5netcdf` engine:
 

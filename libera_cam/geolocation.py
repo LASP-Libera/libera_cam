@@ -580,6 +580,10 @@ _PIXEL_VARIABLES: dict[str, tuple[str, float, type]] = {
     "relative_azimuth": ("Relative_Azimuth_Surface", _FILL_VALUE, np.float32),
 }
 _KM_TO_M = 1000.0
+# Bit 15 of Geolocation_Quality_Flag: geolocation was not run for the pixel, because use_geo is false
+# or the camera's onboard pixel mask removed it. Bits 0-14 are curryer's SpatialQualityFlags, which
+# reach 0x4000, and 0 reads as good geometry, so "not computed" needs a bit of its own.
+_GEO_NOT_COMPUTED_FLAG = np.uint16(1 << 15)
 # Fields on [0, 360) that can land on exactly 360.0: a float64 value just under a full turn rounds
 # up when cast to float32, and curryer's own wrap of a tiny negative angle can return 360.0 itself.
 _AZIMUTH_FIELDS = ("solar_azimuth", "viewing_azimuth", "relative_azimuth")
@@ -592,15 +596,18 @@ def geolocate_frame(
     spice_body: str,
     pointing_vectors: np.ndarray,
     frame_shape: tuple[int, int] = (PIXEL_COUNT_Y, PIXEL_COUNT_X),
+    pixel_mask: np.ndarray | None = None,
 ) -> FrameGeometry:
     """Per-pixel geometry of one camera frame via curryer ``pixel_geometry``, with product fills.
 
     The per-frame unit of the geolocation path: pure, one frame in, one frame out, no kernel
-    management and no Dask. Every pixel that hits the ellipsoid gets geodetic latitude and
-    longitude and the solar and viewing zenith and azimuth at that point; nothing is
-    interpolated. ``altitude`` is the ellipsoid reference and is 0 m at every hit (there is no
-    terrain here; that is ``Terrain_Corrected_Altitude``, LIBSDC-814). A frame is geolocated at
-    one or more exposure epochs: curryer runs once over all ``K`` epochs and each pixel takes
+    management and no Dask. Every pixel ``pixel_mask`` selects that hits the ellipsoid gets
+    geodetic latitude and longitude and the solar and viewing zenith and azimuth at that point;
+    nothing is interpolated. curryer sees only the selected pixels' vectors, so the cost scales
+    with the pixels the camera kept, and the unselected pixels are written as fill.
+    ``altitude`` is the ellipsoid reference and is 0 m at every hit (there is no terrain here;
+    that is ``Terrain_Corrected_Altitude``, LIBSDC-814). A frame is geolocated at one or more
+    exposure epochs: curryer runs once over all ``K`` epochs and each pixel takes
     the epoch ``exposure_index`` names, which is how the two HDR exposures of a frame will be
     handled once their timing is known (LIBSDC-816). Production passes a single epoch until
     then.
@@ -625,21 +632,26 @@ def geolocate_frame(
         something this function can check.
     frame_shape : tuple[int, int], optional
         ``(Y, X)`` of the frame. Default is the WFOV detector.
+    pixel_mask : np.ndarray or None, optional
+        Boolean array shaped ``frame_shape``, True for the pixels to geolocate: the pixels the
+        camera's onboard pixel mask kept. None geolocates every pixel, the full-frame reference
+        computation.
 
     Returns
     -------
     FrameGeometry
-        Float32 fields with the product fill where a pixel misses the ellipsoid or its epoch
-        is uncovered; altitude in meters; azimuths wrapped so the float32 rounding of a value
-        just under 360 lands on 0, not 360; ``quality_flags`` as uint16, 0 where good.
+        Float32 fields with the product fill where a pixel misses the ellipsoid, its epoch is
+        uncovered, or ``pixel_mask`` excludes it; altitude in meters; azimuths wrapped so the
+        float32 rounding of a value just under 360 lands on 0, not 360; ``quality_flags`` as
+        uint16, 0 where good, bit 15 alone where ``pixel_mask`` excludes the pixel.
 
     Raises
     ------
     ValueError
         If ``spice_body`` is not one of the two camera bodies, ``exposure_ugps`` is not a
         non-empty 1-D array, ``exposure_index`` is absent for several epochs, present for one,
-        not integer, wrongly shaped or out of range, or ``pointing_vectors`` is not
-        ``(Y * X, 3)``.
+        not integer, wrongly shaped or out of range, ``pointing_vectors`` is not
+        ``(Y * X, 3)``, or ``pixel_mask`` is not a boolean array shaped ``frame_shape``.
     RuntimeError
         If a curryer quality flag does not fit the uint16 word this function narrows the flags
         to.
@@ -648,7 +660,8 @@ def geolocate_frame(
     -----
     Memory: for the full detector at one epoch curryer returns about 440 MB and works in about
     1.05 GB of transients (250 bytes per pixel), so a call peaks near 1.5 GB and scales with
-    ``K``; the returned ``FrameGeometry`` is 143 MB per frame. Size worker chunks from these.
+    ``K`` and with the selected pixels; the returned ``FrameGeometry`` is 143 MB per frame
+    whatever the mask. Size worker chunks from these.
     """
     _validate_observer(spice_body, _CAMERA_BODIES, "camera")
     epochs = np.asarray(exposure_ugps)
@@ -679,36 +692,52 @@ def geolocate_frame(
             )
         flat_index = index.ravel()
 
-    # Fill-and-flag on a SPICE gap is this function's contract (a granule with no covered frame
-    # is rejected upstream), so the choice is made here rather than left to curryer's default.
-    result = spatial.pixel_geometry(epochs, spice_body, vectors, fields=list(_PIXEL_FIELDS), allow_nans=True)
-    pixel_ids = None if flat_index is None else np.arange(n_pixels)
+    if pixel_mask is None:
+        selected = np.arange(n_pixels)
+    else:
+        mask = np.asarray(pixel_mask)
+        if mask.shape != tuple(frame_shape) or mask.dtype != np.bool_:
+            raise ValueError(
+                f"pixel_mask must be a boolean array shaped {tuple(frame_shape)}, got {mask.dtype} {mask.shape}"
+            )
+        selected = np.flatnonzero(mask)
 
-    def per_pixel(values: np.ndarray) -> np.ndarray:
-        """Select each pixel's epoch from a (K, Y * X) curryer array."""
-        return values[0] if flat_index is None else values[flat_index, pixel_ids]
+    fields = {name: np.full(n_pixels, fill, dtype=dtype) for name, (_, fill, dtype) in _PIXEL_VARIABLES.items()}
+    flags = np.full(n_pixels, _GEO_NOT_COMPUTED_FLAG, dtype=np.uint16)
+    if selected.size:
+        # Fill-and-flag on a SPICE gap is this function's contract (a granule with no covered frame
+        # is rejected upstream), so the choice is made here rather than left to curryer's default.
+        result = spatial.pixel_geometry(
+            epochs, spice_body, vectors[selected], fields=list(_PIXEL_FIELDS), allow_nans=True
+        )
+        selected_index = None if flat_index is None else flat_index[selected]
 
-    fields = {}
-    for name, (_, fill, dtype) in _PIXEL_VARIABLES.items():
-        values = per_pixel(result[name])
-        if name == "altitude":
-            values = values * _KM_TO_M  # 0 at every hit today; kept for a non-zero upstream ``alt``
-        values = _apply_fill(values, fill, dtype)
-        if name in _AZIMUTH_FIELDS:
-            values[values == _FULL_TURN] = 0.0
-        fields[name] = values.reshape(frame_shape)
+        def per_pixel(values: np.ndarray) -> np.ndarray:
+            """Select each selected pixel's epoch from a (K, n_selected) curryer array."""
+            return values[0] if selected_index is None else values[selected_index, np.arange(selected.size)]
 
-    flags = per_pixel(result["quality_flags"])
-    if flags.max() > np.iinfo(np.uint16).max:
-        raise RuntimeError(f"curryer quality flag {flags.max():#x} does not fit the uint16 word FrameGeometry uses")
-    return FrameGeometry(quality_flags=flags.astype(np.uint16).reshape(frame_shape), **fields)
+        for name, (_, fill, dtype) in _PIXEL_VARIABLES.items():
+            values = per_pixel(result[name])
+            if name == "altitude":
+                values = values * _KM_TO_M  # 0 at every hit today; kept for a non-zero upstream ``alt``
+            values = _apply_fill(values, fill, dtype)
+            if name in _AZIMUTH_FIELDS:
+                values[values == _FULL_TURN] = 0.0
+            fields[name][selected] = values
+
+        selected_flags = per_pixel(result["quality_flags"])
+        if selected_flags.max() > np.iinfo(np.uint16).max:
+            raise RuntimeError(
+                f"curryer quality flag {selected_flags.max():#x} does not fit the uint16 word FrameGeometry uses"
+            )
+        flags[selected] = selected_flags
+    return FrameGeometry(
+        quality_flags=flags.reshape(frame_shape),
+        **{name: values.reshape(frame_shape) for name, values in fields.items()},
+    )
 
 
 _GEOLOCATION_FLAG_VARIABLE = "Geolocation_Quality_Flag"
-# Bit 15 of Geolocation_Quality_Flag: geolocation was not run (use_geo false). Bits 0-14 are curryer's
-# SpatialQualityFlags, which reach 0x4000, and 0 reads as good geometry, so "not computed" needs a bit
-# of its own.
-_GEO_NOT_COMPUTED_FLAG = np.uint16(1 << 15)
 # FrameGeometry field -> (product variable, dtype) for every field the geolocation path writes, in
 # FrameGeometry field order (the worker returns its blocks in this order).
 _FIELD_VARIABLES: dict[str, tuple[str, type]] = {
@@ -744,6 +773,7 @@ def _geometry_spice_body(config: GeolocationKernelConfig) -> str:
 def calculate_chunk_geometry(
     exposure_times: np.ndarray,
     exposure_index: np.ndarray | None,
+    pixel_mask: np.ndarray,
     config: GeolocationKernelConfig,
 ) -> tuple[np.ndarray, ...]:
     """
@@ -762,6 +792,9 @@ def calculate_chunk_geometry(
         ``K = 1``, the frame's ``camera_time``; the per-exposure epochs arrive with LIBSDC-816.
     exposure_index : np.ndarray or None
         ``(T, Y, X)`` integer index into each frame's ``K`` epochs, or None when ``K == 1``.
+    pixel_mask : np.ndarray
+        ``(T, Y, X)`` boolean, True for the pixels each frame's camera mask kept; only those
+        are geolocated.
     config : GeolocationKernelConfig
         Kernel sources to furnish; ``jpss_only`` selects the ``LIBERA_BASE`` body.
 
@@ -774,8 +807,9 @@ def calculate_chunk_geometry(
     Raises
     ------
     ValueError
-        If ``exposure_times`` is not 2-D, or ``exposure_index`` is given with a shape other than
-        ``(T, Y, X)``. The per-frame epoch, index and vector checks are :func:`geolocate_frame`'s.
+        If ``exposure_times`` is not 2-D, or ``exposure_index`` is given or ``pixel_mask`` is
+        shaped other than ``(T, Y, X)``. The per-frame epoch, index, mask and vector checks are
+        :func:`geolocate_frame`'s.
     """
     times = np.asarray(exposure_times)
     if times.ndim != 2:
@@ -784,6 +818,8 @@ def calculate_chunk_geometry(
     frame_shape = (PIXEL_COUNT_Y, PIXEL_COUNT_X)
     if exposure_index is not None and exposure_index.shape != (n_frames, *frame_shape):
         raise ValueError(f"exposure_index must be shaped {(n_frames, *frame_shape)}, got {exposure_index.shape}")
+    if pixel_mask.shape != (n_frames, *frame_shape):
+        raise ValueError(f"pixel_mask must be shaped {(n_frames, *frame_shape)}, got {pixel_mask.shape}")
 
     # Read through mmap on the worker rather than shipped from the client with every task.
     pointing_vectors = np.load(GROUND_CAL_PIXEL_MAPPING, mmap_mode="r").reshape(-1, 3)
@@ -803,6 +839,7 @@ def calculate_chunk_geometry(
                 spice_body,
                 pointing_vectors,
                 frame_shape=frame_shape,
+                pixel_mask=pixel_mask[i],
             )
             for output, values in zip(outputs, frame, strict=True):
                 output[i] = values
@@ -855,8 +892,10 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     """
     Lazily compute the per-pixel geometry of every frame and add it to the dataset.
 
-    Every pixel of every frame is geolocated at its own epoch through :func:`geolocate_frame`;
-    nothing is masked, subsampled or interpolated. The work is split into tasks of
+    Every pixel the camera kept, ``valid_pixel_mask`` True, is geolocated at its frame's epoch
+    through :func:`geolocate_frame`; nothing is subsampled or interpolated. The pixels the
+    onboard pixel mask removed are written as fill with bit 15 of the flag set, so the cost and
+    the stored volume follow the kept pixels. The work is split into tasks of
     ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames along ``camera_time``, independent of the
     decompression chunking; each task returns one ``(T, Y, X)`` block per field and the blocks
     are concatenated into lazy arrays under the product variable names. The kernels are
@@ -866,8 +905,8 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     Parameters
     ----------
     ds : xr.Dataset
-        Dataset with a ``camera_time`` coordinate (``datetime64[ns]``) and ``(camera_time, y, x)``
-        image dimensions.
+        Dataset with a ``camera_time`` coordinate (``datetime64[ns]``) and a boolean
+        ``valid_pixel_mask`` on ``(camera_time, y, x)``.
     config : GeolocationKernelConfig
         Kernel sources (required) and ``jpss_only`` (``LIBERA_BASE`` body: the camera vectors
         at zero azimuth, no azimuth CK).
@@ -882,8 +921,9 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     Raises
     ------
     ValueError
-        If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources,
-        ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1, or the kernels cover none of the frames.
+        If ``ds`` has no ``camera_time`` coordinate or no boolean ``valid_pixel_mask``,
+        ``config`` names no kernel sources, ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1, or the
+        kernels cover none of the frames.
 
     Notes
     -----
@@ -893,6 +933,8 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
+    if "valid_pixel_mask" not in ds or ds["valid_pixel_mask"].dtype != np.bool_:
+        raise ValueError("Dataset must have a boolean 'valid_pixel_mask' selecting the pixels to geolocate.")
     if not config.dynamic_kernel_sources:
         raise ValueError("SPICE kernel sources are required for per-pixel geolocation")
     chunk_size = _geometry_chunk_size()
@@ -903,11 +945,14 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     n_frames = timestamps.size
     exposure_times = timestamps[:, None]
     frame_shape = (PIXEL_COUNT_Y, PIXEL_COUNT_X)
+    # One mask block per geometry task, so a task receives only its own frames' mask.
+    mask = ds["valid_pixel_mask"].transpose("camera_time", "y", "x").data
+    mask_blocks = da.asarray(mask).rechunk((chunk_size, -1, -1)).to_delayed().ravel()
     chunk_geometry = delayed(calculate_chunk_geometry, nout=len(_FIELD_VARIABLES), pure=False)
     blocks: dict[str, list[da.Array]] = {name: [] for name in _FIELD_VARIABLES}
-    for start in range(0, n_frames, chunk_size):
+    for block, start in enumerate(range(0, n_frames, chunk_size)):
         stop = min(start + chunk_size, n_frames)
-        outputs = chunk_geometry(exposure_times[start:stop], None, config)
+        outputs = chunk_geometry(exposure_times[start:stop], None, mask_blocks[block], config)
         for (name, (_, dtype)), output in zip(_FIELD_VARIABLES.items(), outputs, strict=True):
             blocks[name].append(da.from_delayed(output, shape=(stop - start, *frame_shape), dtype=dtype))
     for name, (variable, _) in _FIELD_VARIABLES.items():

@@ -14,6 +14,7 @@ from libera_utils.libera_spice.kernel_manager import KernelManager
 from libera_cam.constants import GROUND_CAL_PIXEL_MAPPING
 from libera_cam.geolocation import (
     _FIELD_VARIABLES,
+    _GEO_NOT_COMPUTED_FLAG,
     GeolocationKernelConfig,
     add_geolocation_to_dataset,
     geolocate_frame,
@@ -44,18 +45,24 @@ def test_add_geolocation_to_dataset_reproduces_geolocate_frame(test_data_path, t
         assert ds_geo[variable].dtype == dtype, variable
         assert ds_geo[variable].data.chunks[0] == (2, 1), variable
 
-    # The last frame sits alone in the second task.
+    # The last frame sits alone in the second task, with its own kept-pixel mask.
     computed = ds_geo[variables].isel(camera_time=2).compute(scheduler="synchronous")
+    kept = ds["valid_pixel_mask"].isel(camera_time=2).values
     with KernelManager() as km:
         km.load_libera_dynamic_kernels(sources, needs_naif_kernels=True, needs_static_kernels=True)
         ugps = np.asarray(spicetime.adapt(pd.DatetimeIndex(ds.camera_time.values[2:3]), "iso"))
         vectors = np.load(GROUND_CAL_PIXEL_MAPPING, mmap_mode="r").reshape(-1, 3)
-        expected = geolocate_frame(ugps, None, "LIBERA_WFOV_CAM", vectors)
+        expected = geolocate_frame(ugps, None, "LIBERA_WFOV_CAM", vectors, pixel_mask=kept)
+        unmasked = geolocate_frame(ugps, None, "LIBERA_WFOV_CAM", vectors)
 
     for name, (variable, _) in _FIELD_VARIABLES.items():
         np.testing.assert_array_equal(computed[variable].values, getattr(expected, name), err_msg=variable)
-    on_earth = computed["Geolocation_Quality_Flag"].values == 0
-    assert 0.70 < on_earth.mean() < 0.85
+        # Kept pixels carry exactly the geometry the full-frame computation gives them.
+        np.testing.assert_array_equal(computed[variable].values[kept], getattr(unmasked, name)[kept], err_msg=variable)
+    flags = computed["Geolocation_Quality_Flag"].values
+    assert 0.0 < kept.mean() < 0.2, "DITL_3min frame 2 is a masked frame"
+    np.testing.assert_array_equal(flags[~kept], _GEO_NOT_COMPUTED_FLAG)
+    assert (flags[kept] == 0).any()
 
 
 def test_add_geolocation_rejects_a_granule_the_kernels_do_not_cover(test_data_path, test_ditl_l1a_file_path):

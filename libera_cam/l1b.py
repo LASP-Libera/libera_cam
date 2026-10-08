@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import dask
+import numpy as np
 import xarray as xr
 from cloudpathlib import AnyPath, S3Path
 from dask.distributed import Client
@@ -38,6 +39,8 @@ from libera_cam.version import version as libera_cam_version
 logger = logging.getLogger(__name__)
 
 _ALLOWED_DASK_SCHEDULERS = frozenset({"synchronous", "distributed"})
+# Radiance's product _FillValue, written where the camera's onboard pixel mask removed the pixel.
+_RADIANCE_FILL = np.float32(-999.0)
 _USE_DASK_DASHBOARD = False  # Set to True to enable Dask dashboard for debugging; requires distributed scheduler
 _DASK_DASHBOARD_SESSION_TOKEN_EXPIRATION_MS = 3_600_000
 _DEFAULT_DASK_NUM_WORKERS = 1
@@ -337,7 +340,8 @@ def process_l1a_to_l1b(
 
     This function coordinates the core L1A to L1B camera processing steps:
     - Parse the input L1A camera data into a working dataset
-    - Convert DN to radiance (lazy when backed by Dask arrays)
+    - Convert DN to radiance (lazy when backed by Dask arrays), written as fill where the
+      camera's onboard pixel mask removed the pixel
     - Add the per-pixel geolocation and surface angles (lazy Dask tasks of
       ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames), JPSS-only LIBERA_BASE geolocation, or
       placeholders when ``use_geo`` is false
@@ -391,6 +395,7 @@ def process_l1a_to_l1b(
     cam_dataset = read_l1a_cam_data(l1a_cam_data)
 
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
+    calibrated_images = calibrated_images.where(cam_dataset.valid_pixel_mask, _RADIANCE_FILL)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
 
     # Apply Geolocation (Lazy), the spacecraft-level geometry and the motor azimuth (eager, one

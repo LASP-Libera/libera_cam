@@ -55,6 +55,10 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     3. Create and assign placeholder variables for fields not yet computed.
     4. Enforce data types (float32, uint8, etc.).
 
+    ``valid_pixel_mask``, the pixels the camera's onboard pixel mask kept, is written as
+    ``Camera_Mask`` (1 kept, 0 removed); ``Radiance`` and the geolocation fields are fill where
+    it is 0.
+
     Parameters
     ----------
     dataset : xr.Dataset
@@ -68,9 +72,9 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     Raises
     ------
     ValueError
-        If the dataset lacks the FSW header ``azimuth_angle`` that ``read_l1a_cam_data`` always
-        provides, lacks ``Radiance``, or a placeholder variable is missing from the product
-        definition or declares no ``_FillValue``.
+        If the dataset lacks the FSW header ``azimuth_angle`` or the ``valid_pixel_mask`` that
+        ``read_l1a_cam_data`` always provides, lacks ``Radiance``, or a placeholder variable is
+        missing from the product definition or declares no ``_FillValue``.
     """
     logger.info("Packaging L1B product for conformance.")
 
@@ -98,6 +102,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     # ``Azimuth_FSW_Metadata``.
     if "azimuth_angle" not in dataset:
         raise ValueError("Dataset must contain the FSW header 'azimuth_angle' variable from read_l1a_cam_data.")
+    if "valid_pixel_mask" not in dataset:
+        raise ValueError("Dataset must contain the 'valid_pixel_mask' variable from read_l1a_cam_data.")
 
     # 1. Rename variables/dims to match Product Definition.
     rename_map = {
@@ -112,11 +118,14 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "image_data": "Pixel_Counts",
         "integration_mask": "Integration_Time_Flag",
         "good_image_flag": "Quality_Flag",
+        "valid_pixel_mask": "Camera_Mask",
         "camera_time": "CAMERA_TIME",
         "x": "CAMERA_PIXEL_COUNT_X",
         "y": "CAMERA_PIXEL_COUNT_Y",
     }
     dataset = dataset.rename({src: dst for src, dst in rename_map.items() if src in dataset})
+    # The ingest attributes describe valid_pixel_mask; the writer applies Camera_Mask's own.
+    dataset["Camera_Mask"].attrs = {}
 
     # 2. Reorder dimensions to match product definition: (Time, X, Y)
     # Remaining dimensions (EUCLIDEAN_DIM on the spacecraft state vectors) keep their trailing position.
@@ -136,7 +145,6 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         )
     for name, fill in _placeholder_fill_values(_UNIMPLEMENTED_PIXEL_VARIABLES).items():
         dataset[name] = (dims_3d, da.full_like(radiance, fill, dtype=np.float32))
-    dataset["Camera_Mask"] = (dims_3d, da.zeros_like(radiance, dtype=np.uint8))
 
     # 4. Ensure Types (Cast if necessary)
     # Using explicit casting to float32/uint types. The geolocation variables arrive typed from
@@ -152,6 +160,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         "Exposure_Delta": np.float32,
         "Pixel_Counts": np.uint16,
         "Integration_Time_Flag": np.uint8,
+        "Camera_Mask": np.uint8,
         "Quality_Flag": np.uint32,
     }
 
