@@ -1,6 +1,6 @@
 [project]
 name = "libera_cam"
-version = "0.3.0"
+version = "0.3.1"
 description = "Libera wide field of view camera L1b algorithm"
 authors = [  # Alphabetical
     { name = "Caleb Kumar" },
@@ -40,6 +40,10 @@ classifiers = [
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
     "libera-utils >= 5.10.5,<6.0.0",
+    # Imported directly by geolocation.py. 0.5.3 adds `GeometryData.get_geometry(require_coverage=)`,
+    # which the spacecraft-level geometry query relies on to fail on a missing attitude or
+    # ephemeris kernel.
+    "lasp-curryer>=0.5.3,<1.0",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
     "pillow-jpls", # Needed for decompressing JPLS images
