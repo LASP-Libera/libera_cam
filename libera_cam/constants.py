@@ -54,9 +54,10 @@ class IntegrationTime(IntEnum):
     LONG = 20
 
 
-# Default number of images per JPEG-LS decompression task (``LIBERA_CAM_CHUNK_SIZE``). 50 images
-# hold ~800 MB of int32 image data plus the uint8 integration masks.
-DEFAULT_TIME_CHUNK_SIZE = 50
+# Default number of images per JPEG-LS decompression task (``LIBERA_CAM_CHUNK_SIZE``). 20 images
+# hold ~320 MB of int32 image data plus the uint8 integration masks; at 50, the decompression spike
+# early in a run restarted 9 GB workers on a 695-frame granule.
+DEFAULT_TIME_CHUNK_SIZE = 20
 
 # FPGA clock period used to convert raw register counts to microseconds (then ms).
 # Shared by actual-exposure and DELTA_EXP conversions; see L1A product definition.
@@ -65,4 +66,5 @@ WFOV_DEFAULT_CLK_PER_VALUE = 0.15625
 # Default number of frames per per-pixel geometry task (``LIBERA_CAM_GEO_CHUNK_SIZE``), independent
 # of the decompression chunk. One frame's geometry is 143 MB (eight float32 fields and uint16 flags)
 # and curryer works in ~1.5 GB of transients per frame, so a task peaks near 1.5 GB + 143 MB * size.
-DEFAULT_GEO_CHUNK_SIZE = 10
+# On a 695-frame granule, 5 against 10 cut the run's peak from 9.0 to 5.1 GB at the same wall time.
+DEFAULT_GEO_CHUNK_SIZE = 5
