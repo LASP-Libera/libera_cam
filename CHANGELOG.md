@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Dependencies**: Replaced `pillow-jpls` with `pyjpegls>=1.5.1` for JPEG-LS decompression. `pillow-jpls` publishes wheels only through cp312, so Python 3.13 installs built it from source through Conan and CMake and failed outright on gcc 14 hosts. `pyjpegls` binds the same CharLS codec and ships wheels for cp39–cp313 on manylinux x86_64 and aarch64, macOS, and Windows, so no interpreter in the supported range needs a compiler. Decoded sample values are unchanged.
+
 ## [0.3.0] - 2026-10-06
 
 ### Added
