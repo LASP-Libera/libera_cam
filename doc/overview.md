@@ -4,7 +4,7 @@ Operator and developer guide for running the WFOV camera L1B pipeline.
 
 **Related documentation**
 
-- [changelog.md](changelog.md) — shipped changes by version
+- [CHANGELOG.md](../CHANGELOG.md) — shipped changes by version
 - [roadmap.md](roadmap.md) — forward-looking L1B plans
 - [wfov_fsw_header_reference.md](wfov_fsw_header_reference.md) — FSW metadata and L1A time coordinates
 

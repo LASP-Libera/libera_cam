@@ -113,3 +113,4 @@ This will install the project dependencies and activate the virtual environment 
 ## Further Documentation
 
 - [L1B overview and Dask parallelization](doc/overview.md)
+- [Changelog](CHANGELOG.md)

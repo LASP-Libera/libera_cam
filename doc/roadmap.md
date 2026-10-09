@@ -8,7 +8,7 @@ dependencies, open design questions, and forward-looking engineering priorities.
 - [overview.md](overview.md) — L1B pipeline usage, manifest configuration, and Dask parallelization
 - [wfov_fsw_header_reference.md](wfov_fsw_header_reference.md) — FSW metadata, `img_mode`, VIDEO
   pairing, and duplicate-timestamp guidance
-- [changelog.md](changelog.md) — shipped changes by version
+- [CHANGELOG.md](../CHANGELOG.md) — shipped changes by version
 
 ---
 
