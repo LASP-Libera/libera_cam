@@ -142,17 +142,57 @@ def decompress_batch(payloads_batch: list[bytes]) -> tuple[np.ndarray, np.ndarra
     return np.stack(images, axis=0), np.stack(masks, axis=0)
 
 
+def _read_payloads(source: str, row_indices: list[int]) -> list[bytes]:
+    """Open the L1A file via smart_open and slice the compressed image blobs for ``row_indices``."""
+    with smart_open(source) as fh:
+        with h5py.File(fh, "r") as f:
+            blob = f[WFOV_COMPRESSED_IMAGE_VAR]
+            lengths = f[WFOV_COMPRESSED_IMAGE_LENGTH_VAR]
+            return [blob[r, : int(lengths[r])].tobytes() for r in row_indices]
+
+
 def _decompress_batch_from_source(
     source: str,
     row_indices: list[int],
 ) -> tuple[np.ndarray, np.ndarray]:
     """Worker task: open file via smart_open, slice byte blobs for row_indices, decompress."""
-    with smart_open(source) as fh:
-        with h5py.File(fh, "r") as f:
-            blob = f[WFOV_COMPRESSED_IMAGE_VAR]
-            lengths = f[WFOV_COMPRESSED_IMAGE_LENGTH_VAR]
-            payloads = [blob[r, : int(lengths[r])].tobytes() for r in row_indices]
-    return decompress_batch(payloads)
+    return decompress_batch(_read_payloads(source, row_indices))
+
+
+def kept_pixels(image_data: np.ndarray | da.Array) -> np.ndarray | da.Array:
+    """True where the camera returned the pixel: a non-zero count. The onboard pixel mask zeroes the rest.
+
+    Elementwise, so it keeps the array type: NumPy on a worker, Dask for the lazy ``valid_pixel_mask``.
+    """
+    return image_data > 0
+
+
+def kept_pixels_from_source(source: str, row_indices: list[int]) -> np.ndarray:
+    """The :func:`kept_pixels` mask of the L1A rows ``row_indices``, decompressing one frame at a time.
+
+    For a worker task that needs the mask without depending on the ``image_data`` tasks: about
+    0.025 s per frame, and only one decompressed frame is held at a time.
+
+    Parameters
+    ----------
+    source : str
+        Path of the L1A file, ``l1a_row.attrs["source"]`` of :func:`read_l1a_cam_data`'s output.
+    row_indices : list[int]
+        L1A ``CAMERA_TIME`` rows, values of that dataset's ``l1a_row``.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean ``(len(row_indices), Y, X)``.
+
+    Raises
+    ------
+    IndexError
+        If a row lies outside the file's ``CAMERA_TIME`` dimension (raised by h5py).
+    """
+    return np.stack(
+        [kept_pixels(l1a_parser.decompress_image(payload)[0]) for payload in _read_payloads(source, row_indices)]
+    )
 
 
 def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
@@ -172,9 +212,10 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     -------
     xr.Dataset
         Lazy dataset with ``image_data``, ``integration_mask``, per-frame metadata
-        on ``camera_time``, and derived flags ``good_image_flag`` and
-        ``valid_pixel_mask``. Returns an empty dataset when no complete images
-        are found.
+        on ``camera_time``, derived flags ``good_image_flag`` and
+        ``valid_pixel_mask``, and ``l1a_row``, each frame's L1A row with the file
+        in its ``source`` attribute. Returns an empty dataset when no complete
+        images are found.
     """
     _require_image_centric_l1a(cam_dataset)
 
@@ -271,7 +312,11 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     ds["good_image_flag"] = ds["image_data"].max(dim=["y", "x"]) > 0
 
     # Add 'valid_pixel_mask' (Lazy): any pixel with a non-zero count.
-    ds["valid_pixel_mask"] = ds["image_data"] > 0
+    ds["valid_pixel_mask"] = (("camera_time", "y", "x"), kept_pixels(ds["image_data"].data))
+    # The L1A row of each frame, so a worker can rebuild a frame's mask from the file without
+    # depending on the image_data tasks (kept_pixels_from_source).
+    ds["l1a_row"] = (("camera_time",), np.asarray(surviving_indices, dtype=np.int64))
+    ds["l1a_row"].attrs = {"source": source, "description": "CAMERA_TIME row of the frame in the L1A file"}
     ds["valid_pixel_mask"].attrs = {
         "long_name": "Valid Pixel Mask",
         "description": "True where image_data > 0, False otherwise.",

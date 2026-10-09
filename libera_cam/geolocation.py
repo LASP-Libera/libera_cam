@@ -35,6 +35,7 @@ from libera_cam.constants import (
     PIXEL_COUNT_Y,
     SPACECRAFT_OBSERVERS,
 )
+from libera_cam.image_parsing.read_l1a_cam_data import kept_pixels_from_source
 
 logger = logging.getLogger(__name__)
 
@@ -846,6 +847,47 @@ def calculate_chunk_geometry(
     return outputs
 
 
+def calculate_chunk_geometry_from_l1a(
+    exposure_times: np.ndarray,
+    l1a_source: str,
+    l1a_rows: list[int],
+    config: GeolocationKernelConfig,
+) -> tuple[np.ndarray, ...]:
+    """
+    Worker task: :func:`calculate_chunk_geometry` on the pixels each frame's camera mask kept.
+
+    The mask is rebuilt here from the L1A rows (:func:`kept_pixels_from_source`, about 0.025 s
+    per frame) so the task takes no Dask inputs. distributed holds input-free tasks back until a
+    worker has a free thread, which keeps geometry from running ahead of the single-threaded
+    NetCDF write. A geometry task fed by the ``image_data`` or mask tasks gets no such
+    throttling, and its 143 MB per frame of output piles up in worker memory and spill.
+
+    Parameters
+    ----------
+    exposure_times : np.ndarray
+        ``(T, 1)`` exposure epochs as ``datetime64[ns]``.
+    l1a_source : str
+        The L1A file, ``l1a_row.attrs["source"]``.
+    l1a_rows : list[int]
+        The ``T`` frames' L1A rows, values of ``l1a_row``.
+    config : GeolocationKernelConfig
+        Kernel sources to furnish.
+
+    Returns
+    -------
+    tuple of np.ndarray
+        As :func:`calculate_chunk_geometry`.
+
+    Raises
+    ------
+    IndexError
+        If an L1A row lies outside the file (:func:`kept_pixels_from_source`).
+    ValueError
+        As :func:`calculate_chunk_geometry`.
+    """
+    return calculate_chunk_geometry(exposure_times, None, kept_pixels_from_source(l1a_source, l1a_rows), config)
+
+
 def _require_frame_coverage(config: GeolocationKernelConfig, timestamps: np.ndarray, spice_body: str) -> None:
     """
     Furnish the kernels once on the client and reject a granule of which no frame is covered.
@@ -892,12 +934,14 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     """
     Lazily compute the per-pixel geometry of every frame and add it to the dataset.
 
-    Every pixel the camera kept, ``valid_pixel_mask`` True, is geolocated at its frame's epoch
-    through :func:`geolocate_frame`; nothing is subsampled or interpolated. The pixels the
-    onboard pixel mask removed are written as fill with bit 15 of the flag set, so the cost and
-    the stored volume follow the kept pixels. The work is split into tasks of
+    Every pixel the camera kept, the
+    :func:`~libera_cam.image_parsing.read_l1a_cam_data.kept_pixels` of its frame, is geolocated
+    at its frame's epoch through :func:`geolocate_frame`; nothing is subsampled or interpolated. The
+    pixels the onboard pixel mask removed are written as fill with bit 15 of the flag set, so
+    the cost and the stored volume follow the kept pixels. The work is split into tasks of
     ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames along ``camera_time``, independent of the
-    decompression chunking; each task returns one ``(T, Y, X)`` block per field and the blocks
+    decompression chunking; each task rebuilds its frames' masks from the L1A file
+    (:func:`calculate_chunk_geometry_from_l1a`), returns one ``(T, Y, X)`` block per field and the blocks
     are concatenated into lazy arrays under the product variable names. The kernels are
     furnished once on the client first, which populates the kernel cache ahead of the workers
     and rejects a granule the kernels do not cover at all.
@@ -905,8 +949,9 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     Parameters
     ----------
     ds : xr.Dataset
-        Dataset with a ``camera_time`` coordinate (``datetime64[ns]``) and a boolean
-        ``valid_pixel_mask`` on ``(camera_time, y, x)``.
+        Dataset with a ``camera_time`` coordinate (``datetime64[ns]``) and the integer
+        ``l1a_row`` on ``camera_time`` with the L1A file in its ``source`` attribute, as
+        :func:`~libera_cam.image_parsing.read_l1a_cam_data.read_l1a_cam_data` returns it.
     config : GeolocationKernelConfig
         Kernel sources (required) and ``jpss_only`` (``LIBERA_BASE`` body: the camera vectors
         at zero azimuth, no azimuth CK).
@@ -921,8 +966,8 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     Raises
     ------
     ValueError
-        If ``ds`` has no ``camera_time`` coordinate or no boolean ``valid_pixel_mask``,
-        ``config`` names no kernel sources, ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1, or the
+        If ``ds`` has no ``camera_time`` coordinate, no integer ``l1a_row`` with a ``source``
+        attribute, ``config`` names no kernel sources, ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1, or the
         kernels cover none of the frames.
 
     Notes
@@ -933,8 +978,12 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
-    if "valid_pixel_mask" not in ds or ds["valid_pixel_mask"].dtype != np.bool_:
-        raise ValueError("Dataset must have a boolean 'valid_pixel_mask' selecting the pixels to geolocate.")
+    if (
+        "l1a_row" not in ds
+        or not np.issubdtype(ds["l1a_row"].dtype, np.integer)
+        or not isinstance(ds["l1a_row"].attrs.get("source"), str)
+    ):
+        raise ValueError("Dataset must have the integer 'l1a_row' with a 'source' attribute, from read_l1a_cam_data.")
     if not config.dynamic_kernel_sources:
         raise ValueError("SPICE kernel sources are required for per-pixel geolocation")
     chunk_size = _geometry_chunk_size()
@@ -945,14 +994,13 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     n_frames = timestamps.size
     exposure_times = timestamps[:, None]
     frame_shape = (PIXEL_COUNT_Y, PIXEL_COUNT_X)
-    # One mask block per geometry task, so a task receives only its own frames' mask.
-    mask = ds["valid_pixel_mask"].transpose("camera_time", "y", "x").data
-    mask_blocks = da.asarray(mask).rechunk((chunk_size, -1, -1)).to_delayed().ravel()
-    chunk_geometry = delayed(calculate_chunk_geometry, nout=len(_FIELD_VARIABLES), pure=False)
+    l1a_source = ds["l1a_row"].attrs["source"]
+    l1a_rows = ds["l1a_row"].values
+    chunk_geometry = delayed(calculate_chunk_geometry_from_l1a, nout=len(_FIELD_VARIABLES), pure=False)
     blocks: dict[str, list[da.Array]] = {name: [] for name in _FIELD_VARIABLES}
-    for block, start in enumerate(range(0, n_frames, chunk_size)):
+    for start in range(0, n_frames, chunk_size):
         stop = min(start + chunk_size, n_frames)
-        outputs = chunk_geometry(exposure_times[start:stop], None, mask_blocks[block], config)
+        outputs = chunk_geometry(exposure_times[start:stop], l1a_source, l1a_rows[start:stop].tolist(), config)
         for (name, (_, dtype)), output in zip(_FIELD_VARIABLES.items(), outputs, strict=True):
             blocks[name].append(da.from_delayed(output, shape=(stop - start, *frame_shape), dtype=dtype))
     for name, (variable, _) in _FIELD_VARIABLES.items():

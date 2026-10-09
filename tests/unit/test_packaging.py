@@ -24,6 +24,7 @@ def _processing_dataset() -> xr.Dataset:
                 ("camera_time", "y", "x"),
                 da.from_array(np.arange(n_times * n_y * n_x).reshape(n_times, n_y, n_x) % 4 == 0),
             ),
+            "l1a_row": (("camera_time",), np.arange(n_times), {"source": "l1a.nc"}),
             "rad_obs_id": (("camera_time",), np.zeros(n_times, dtype=np.uint16)),
             "cam_obs_id": (("camera_time",), np.zeros(n_times, dtype=np.uint16)),
             "good_image_flag": (("camera_time",), np.zeros(n_times, dtype=np.uint32)),
@@ -82,11 +83,13 @@ def test_camera_mask_is_the_kept_pixel_mask():
     assert packaged["Camera_Mask"].dtype == np.uint8
     np.testing.assert_array_equal(packaged["Camera_Mask"].values, kept.transpose(0, 2, 1).astype(np.uint8))
     assert "valid_pixel_mask" not in packaged
+    assert "l1a_row" not in packaged
 
 
-def test_package_requires_the_kept_pixel_mask():
-    with pytest.raises(ValueError, match="valid_pixel_mask"):
-        package_l1b_product(_processing_dataset().drop_vars("valid_pixel_mask"))
+@pytest.mark.parametrize("name", ["valid_pixel_mask", "l1a_row"])
+def test_package_requires_the_reader_outputs_it_consumes(name):
+    with pytest.raises(ValueError, match=name):
+        package_l1b_product(_processing_dataset().drop_vars(name))
 
 
 def test_packaging_rejects_a_placeholder_variable_that_already_has_data():
