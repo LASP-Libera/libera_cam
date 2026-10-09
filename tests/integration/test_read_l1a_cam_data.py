@@ -10,6 +10,25 @@ from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 # TODO[LIBSDC-844]: This needs to be updated/confirmed and documented
 _DUAL_EXPOSURE_LAG_MS = (111.0, 350.0)
 
+# Reference values from decoding the DITL fixture's three WFOV_COMPRESSED_IMAGE payloads with
+# pillow-jpls, the decoder libera_cam used before pyjpegls: pillow-jpls 1.3.2 built from its sdist
+# (CharLS 2.4.2 via Conan 2.0.17), Pillow 12.3.0, Python 3.13, decoded as
+# np.array(Image.open(payload), dtype=np.int32) and split into 12-bit DN and bit-12 mask.
+# The PyPI cp312 wheel of pillow-jpls 1.3.2 decodes the same payloads to identical arrays, and both
+# matched jpeg_ls.jlsread pixel for pixel. pillow-jpls is deliberately not a test dependency.
+_PILLOW_JPLS_FRAME_SUMS = [  # (image_data sum, integration_mask sum) per camera_time row
+    (244_254_807, 302_923),
+    (2_068_130_237, 4_194_304),
+    (250_540_867, 310_474),
+]
+_PILLOW_JPLS_FRAME1_PIXELS = [  # (y, x, image_data, integration_mask); frames 0 and 2 are mostly zero
+    (0, 0, 192, 1),
+    (512, 1536, 756, 1),
+    (1024, 1024, 333, 1),
+    (1536, 512, 380, 1),
+    (2047, 2047, 200, 1),
+]
+
 
 @pytest.mark.integration
 def test_read_ditl_l1a_cam_data(test_ditl_l1a_file_path):
@@ -33,6 +52,18 @@ def test_read_ditl_l1a_cam_data(test_ditl_l1a_file_path):
 
     expected_mask = img_slice > 0
     np.testing.assert_array_equal(mask_slice, expected_mask)
+
+    # Decoded values match the pillow-jpls decoder this package used before pyjpegls
+    image_data = image_dataset.image_data.values
+    integration_mask = image_dataset.integration_mask.values
+    frame_sums = [
+        (int(image_data[i].sum(dtype=np.int64)), int(integration_mask[i].sum(dtype=np.int64)))
+        for i in range(len(_PILLOW_JPLS_FRAME_SUMS))
+    ]
+    assert frame_sums == _PILLOW_JPLS_FRAME_SUMS
+    for y, x, dn, mask in _PILLOW_JPLS_FRAME1_PIXELS:
+        assert image_data[1, y, x] == dn
+        assert integration_mask[1, y, x] == mask
 
 
 @pytest.mark.integration
