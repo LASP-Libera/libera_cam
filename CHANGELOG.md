@@ -21,7 +21,7 @@
 ## 0.2.6
 
 - **Process Parallelism**: Tested with Dask schedulers; **`synchronous`** (default) and **`distributed`** work reliably. **`threads`** and **`processes`** are rejected at runtime because CSPICE/SPICE is not thread-safe within a worker process.
-- **Tuning & Ingestion**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments. Batch JPEG-LS decompression now builds pre-chunked Dask arrays at ingestion. Added operator configuration guide and tuning relationships in [doc/overview.md](overview.md).
+- **Tuning & Ingestion**: Exposed chunk size configuration via `LIBERA_CAM_CHUNK_SIZE` (default 50) to optimize for specific compute environments. Batch JPEG-LS decompression now builds pre-chunked Dask arrays at ingestion. Added operator configuration guide and tuning relationships in [doc/overview.md](doc/overview.md).
 - **Geolocation Memory Optimization**: Switched worker geolocation calculations to `float32` preallocated arrays in `libera_cam/geolocation.py`, eliminating duplicate array copies from `np.stack` and reducing worker live memory peak by ~4×.
 - **Dependencies**: Added `netCDF4>=1.6.0` and `distributed>=2026.1.1` to package dependencies for distributed execution and NetCDF file inspection.
 - Replace `no_geo` manifest key with `use_geo` (default true; `use_geo: false` for ground-calibration placeholder geolocation). Reject incompatible `use_geo: false` + `jpss_only: true` combinations. Align `use_geo: false` placeholder geolocation with product `_FillValue` (-999 lat/lon, -9999 alt) and Azimuth -999.
