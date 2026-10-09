@@ -8,7 +8,11 @@ import pytest
 import xarray as xr
 
 from libera_cam import constants
-from libera_cam.image_parsing.read_l1a_cam_data import _validate_execution_config, read_l1a_cam_data
+from libera_cam.image_parsing.read_l1a_cam_data import (
+    _validate_execution_config,
+    kept_pixels_from_source,
+    read_l1a_cam_data,
+)
 
 _PAYLOAD_LENGTH = 8
 
@@ -132,3 +136,31 @@ def test_validate_execution_config():
         _validate_execution_config(-5)
 
     _validate_execution_config(10)
+
+
+def _fake_decompress_with_removed_pixels(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
+    """A per-frame pattern of zero counts, shifted by the payload's marker byte, so frames differ."""
+    shape = (constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X)
+    image = np.full(shape, payload[0], dtype=np.int32)
+    image[:, (np.arange(shape[1]) + payload[0]) % 3 == 0] = 0
+    return image, np.zeros(shape, dtype=np.uint8)
+
+
+def test_kept_pixel_mask_rebuilt_from_l1a_rows_matches_valid_pixel_mask(tmp_path):
+    """valid_pixel_mask is image_data > 0; l1a_row names each frame's L1A row so a worker rebuilds the same mask."""
+    l1a = make_synthetic_l1a(tmp_path, n_images=4, valid=[True, False, True, True])
+
+    with patch(
+        "libera_cam.image_parsing.l1a_parser.decompress_image", side_effect=_fake_decompress_with_removed_pixels
+    ):
+        ds = read_l1a_cam_data(l1a)
+        image = ds["image_data"][:, 0, :8].compute().values
+        mask = ds["valid_pixel_mask"].compute().values
+        rebuilt = kept_pixels_from_source(ds["l1a_row"].attrs["source"], ds["l1a_row"].values.tolist())
+
+    assert ds["valid_pixel_mask"].dtype == np.bool_
+    np.testing.assert_array_equal(mask[:, 0, :8], image > 0)
+    # Rows 0, 2 and 3 survive, each with its own pattern.
+    np.testing.assert_array_equal(ds["l1a_row"].values, [0, 2, 3])
+    np.testing.assert_array_equal(mask[:, 0, 0], [True, False, True])
+    np.testing.assert_array_equal(rebuilt, mask)

@@ -11,6 +11,7 @@ from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
 from curryer.compute.constants import SpatialQualityFlags as SQF
 from curryer.compute.geometry_fields import PixelField
+from dask.utils import key_split
 
 from libera_cam import geolocation
 from libera_cam.config import product_config_path
@@ -54,6 +55,9 @@ def _frame(value: float, flag: int) -> FrameGeometry:
     return FrameGeometry(quality_flags=np.full(FRAME_SHAPE, flag, dtype=np.uint16), **fields)
 
 
+L1A_SOURCE = "s3://l1a/LIBERA_L1A_WFOV.nc"
+
+
 def _kept_pixels(n_times: int) -> np.ndarray:
     """A different kept-pixel pattern per frame, so a task handed another frame's mask shows."""
     return (np.arange(n_times)[:, None, None] + np.arange(np.prod(FRAME_SHAPE)).reshape(FRAME_SHAPE)) % 3 == 0
@@ -62,9 +66,12 @@ def _kept_pixels(n_times: int) -> np.ndarray:
 def _frame_dataset(n_times: int, time_chunk: int) -> xr.Dataset:
     times = pd.date_range("2025-01-01", periods=n_times, freq="5s")
     image_data = da.zeros((n_times, *FRAME_SHAPE), chunks=(time_chunk, *FRAME_SHAPE))
-    mask = da.from_array(_kept_pixels(n_times), chunks=(time_chunk, *FRAME_SHAPE))
     return xr.Dataset(
-        {"image_data": (("camera_time", "y", "x"), image_data), "valid_pixel_mask": (("camera_time", "y", "x"), mask)},
+        {
+            "image_data": (("camera_time", "y", "x"), image_data),
+            # L1A rows that are not frame positions, as after dropped headers.
+            "l1a_row": (("camera_time",), 2 * np.arange(n_times) + 1, {"source": L1A_SOURCE}),
+        },
         coords={"camera_time": times, "y": range(FRAME_SHAPE[0]), "x": range(FRAME_SHAPE[1])},
     )
 
@@ -250,9 +257,14 @@ def test_require_frame_coverage_tolerates_and_logs_individual_gaps(coverage_mock
 
 @pytest.fixture
 def orchestration_mocks(small_detector):
+    def fake_kept_pixels(source, rows):
+        assert source == L1A_SOURCE
+        return _kept_pixels(max(rows) + 1)[rows]  # the pattern follows the L1A row, not the position
+
     with (
         patch("libera_cam.geolocation._require_frame_coverage") as coverage,
         patch("libera_cam.geolocation.calculate_chunk_geometry") as chunk,
+        patch("libera_cam.geolocation.kept_pixels_from_source", side_effect=fake_kept_pixels),
     ):
 
         def fake_chunk(exposure_times, exposure_index, pixel_mask, config):
@@ -300,11 +312,17 @@ def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orches
         np.testing.assert_array_equal(computed[variable].values, i, err_msg=variable)
     passed_config = orchestration_mocks.chunk.call_args.args[3]
     assert passed_config is config
+    # Each geometry task takes no Dask inputs, so distributed throttles it like a root task and it
+    # cannot run ahead of the writer.
+    dependencies = result["Latitude"].data.__dask_graph__().get_all_dependencies()
+    geometry_keys = [key for key in dependencies if key_split(key) == "calculate_chunk_geometry_from_l1a"]
+    assert len(geometry_keys) == 3
+    assert all(dependencies[key] == set() for key in geometry_keys)
     # Each task receives the mask of exactly the frames whose epochs it receives.
-    frame_of = {time: i for i, time in enumerate(ds.camera_time.values)}
+    row_of = dict(zip(ds.camera_time.values, ds.l1a_row.values, strict=True))
     for call in orchestration_mocks.chunk.call_args_list:
-        frames = [frame_of[time] for time in call.args[0][:, 0]]
-        np.testing.assert_array_equal(call.args[2], _kept_pixels(5)[frames])
+        rows = [row_of[time] for time in call.args[0][:, 0]]
+        np.testing.assert_array_equal(call.args[2], _kept_pixels(max(rows) + 1)[rows])
 
 
 def test_add_jpss_only_geolocation_switches_the_body(orchestration_mocks):
@@ -325,16 +343,17 @@ def test_add_geolocation_requires_kernel_sources_and_camera_time(orchestration_m
     orchestration_mocks.coverage.assert_not_called()
 
 
-@pytest.mark.parametrize("mask", [None, np.uint8])
-def test_add_geolocation_requires_a_boolean_pixel_mask(orchestration_mocks, mask):
-    """Without the camera's kept-pixel mask there is no defined set of pixels to geolocate."""
+@pytest.mark.parametrize("breakage", ["missing", "float rows", "no source"])
+def test_add_geolocation_requires_the_l1a_rows(orchestration_mocks, breakage):
+    """Without each frame's L1A row and file there is no way to rebuild the kept-pixel masks."""
     ds = _frame_dataset(2, 2)
-    ds = (
-        ds.drop_vars("valid_pixel_mask")
-        if mask is None
-        else ds.assign(valid_pixel_mask=ds.valid_pixel_mask.astype(mask))
-    )
-    with pytest.raises(ValueError, match="boolean 'valid_pixel_mask'"):
+    if breakage == "missing":
+        ds = ds.drop_vars("l1a_row")
+    elif breakage == "float rows":
+        ds["l1a_row"] = ds["l1a_row"].astype(float)
+    else:
+        ds["l1a_row"].attrs = {}
+    with pytest.raises(ValueError, match="'l1a_row'"):
         add_geolocation_to_dataset(ds, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
     orchestration_mocks.coverage.assert_not_called()
 

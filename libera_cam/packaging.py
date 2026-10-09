@@ -72,9 +72,9 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     Raises
     ------
     ValueError
-        If the dataset lacks the FSW header ``azimuth_angle`` or the ``valid_pixel_mask`` that
-        ``read_l1a_cam_data`` always provides, lacks ``Radiance``, or a placeholder variable is
-        missing from the product definition or declares no ``_FillValue``.
+        If the dataset lacks the FSW header ``azimuth_angle``, the ``valid_pixel_mask`` or the
+        ``l1a_row`` that ``read_l1a_cam_data`` always provides, lacks ``Radiance``, or a
+        placeholder variable is missing from the product definition or declares no ``_FillValue``.
     """
     logger.info("Packaging L1B product for conformance.")
 
@@ -104,6 +104,10 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
         raise ValueError("Dataset must contain the FSW header 'azimuth_angle' variable from read_l1a_cam_data.")
     if "valid_pixel_mask" not in dataset:
         raise ValueError("Dataset must contain the 'valid_pixel_mask' variable from read_l1a_cam_data.")
+    if "l1a_row" not in dataset:
+        raise ValueError("Dataset must contain the 'l1a_row' variable from read_l1a_cam_data.")
+    # The frames' L1A rows serve the geometry tasks only; they are not a product variable.
+    dataset = dataset.drop_vars("l1a_row")
 
     # 1. Rename variables/dims to match Product Definition.
     rename_map = {
