@@ -7,7 +7,7 @@ from cloudpathlib import S3Path
 from libera_utils.libera_spice import spice_utils
 from libera_utils.libera_spice.kernel_manager import KernelManager
 
-from libera_cam.geolocation import GeolocationKernelConfig, prefetch_kernels
+from libera_cam.geolocation import GeolocationKernelConfig
 
 
 def _ditl_dynamic_kernel_files(test_data_path: Path, limit: int = 2) -> list[Path]:
@@ -48,8 +48,6 @@ def test_dynamic_kernel_s3_sources_materialize_into_cache(
         use_test_naif_url=False,
         cache_timeout_days=7,
     )
-    prefetch_kernels(config)
-
     km = KernelManager(cache_timeout_days=7)
     km.load_libera_dynamic_kernels(
         config.dynamic_kernel_sources,
