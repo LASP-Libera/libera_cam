@@ -223,6 +223,9 @@ variables:
       units: degrees
       valid_range: [0, 360]
       _FillValue: -999
+      comment: >-
+        Azimuth of the satellite as seen from the pixel's surface point, in degrees clockwise from
+        geodetic north.
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -234,6 +237,9 @@ variables:
       units: degrees
       valid_range: [0, 360]
       _FillValue: -999
+      comment: >-
+        Azimuth of the Sun as seen from the pixel's surface point, in degrees clockwise from
+        geodetic north.
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
