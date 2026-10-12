@@ -211,12 +211,13 @@ def test_uncovered_epoch_keeps_its_compound_flag_word():
             np.testing.assert_array_equal(getattr(frame, name)[exposure_index == 1], fill, err_msg=name)
 
 
-def test_geolocate_frame_rejects_flags_beyond_uint16():
+@pytest.mark.parametrize("flag", [1 << 15, 1 << 16])
+def test_geolocate_frame_rejects_flags_reaching_the_not_computed_bit(flag):
     result = _curryer_result(1)
-    result["quality_flags"][0, 0] = 1 << 16
+    result["quality_flags"][0, 0] = flag
     with (
         patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=result),
-        pytest.raises(RuntimeError, match="uint16"),
+        pytest.raises(RuntimeError, match="bits 0-14"),
     ):
         geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", VECTORS, frame_shape=GRID_SHAPE)
 
