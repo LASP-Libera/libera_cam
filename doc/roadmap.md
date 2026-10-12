@@ -110,9 +110,9 @@ What does degrade is write throughput: 2.96 s/frame at 160 frames against 5.14 s
 The leading explanation is HDF5 chunk misalignment — `h5py.guess_chunk` is shape-dependent, so
 the chunk depth changes with granule length (2, 5, then 16 frames) while Dask writes
 `LIBERA_CAM_GEO_CHUNK_SIZE`-frame blocks, and at production sizes the two stop dividing evenly.
-Confirming that needs the ability to pin `chunksizes` from the product definition, which is
-blocked upstream; that fix should come before any worker-write redesign, since it may remove
-most of the motivation for one.
+Pinning `chunksizes: [1, 512, 512]` in 0.3.2 confirmed it: the 1003-frame granule went from
+85.9 to 48.6 minutes. The write is still single-threaded and about 95% of wall time on AWS, so
+it remains the motivation for the target state below.
 
 ### Target state
 
