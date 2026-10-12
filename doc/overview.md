@@ -164,33 +164,28 @@ each.
 
 The setting is pinned on the two large non-geolocation fields as well, because the engines
 disagree on the default: netCDF4-python turns shuffle on whenever zlib is on, while h5py leaves
-it off. Left undeclared, `Radiance` was shuffled under the production engine and not under the
-default one, at 4.21 against 2.35 MB/frame, which is 16 GB over a 12 h granule for a filter that
+it off. Left undeclared, `Radiance` was shuffled under `netcdf4` and not under `h5netcdf`, the
+default, at 4.21 against 2.35 MB/frame, which is 16 GB over a 12 h granule for a filter that
 hurts it. `Radiance` is therefore declared `shuffle: false`, and `Pixel_Counts`, which the
 filter helps (1.88 to 1.60 MB/frame), `shuffle: true`. With both pinned the two engines agree to
 within 0.1 MB/frame on the same data. `Camera_Mask` and `Integration_Time_Flag` are `uint8`,
 where shuffling is a no-op.
 
-One engine difference remains that the product definition cannot pin. The engines choose
-different chunk shapes, and netCDF4-python's grow along time — `(12, 512, 512)` at 60 frames
-against h5py's `(2, 128, 128)` — which compresses the geometry fields worse: a 60-frame granule
-is 2929 MB under `netcdf4` against 2451 MB under `h5netcdf`, about 56 GB over a 12 h granule
-once the `Radiance` difference above is removed. Pinning `chunksizes` would settle it, which is
-what the `chunksizes` bug below blocks, so that upstream fix is worth considerably more than its
-3% direct gain.
-
-Two encoding knobs are not usable from the product definition. `complevel` is overwritten by
+Left to themselves the engines also choose different chunk shapes, and netCDF4-python's grow
+along time — `(12, 512, 512)` at 60 frames against h5py's `(2, 128, 128)` — which compresses the
+geometry fields worse: a 60-frame granule is 2929 MB under `netcdf4` against 2451 MB under
+`h5netcdf`. Every three-dimensional variable therefore declares `chunksizes: [1, 512, 512]`,
+which libera-utils 5.11.2 converts to the tuple h5py requires, so both engines write the same
+chunks. `complevel` is still not usable from the product definition: it is overwritten by
 `libera_utils.io.product_definition.DEFAULT_ENCODING` (gzip 4 is the SDC's setting; level 9
-would buy a further 4%), and `chunksizes` is rejected by the h5netcdf engine because YAML
-parses it to a list where h5py requires a tuple. Chunk shape is therefore left to the engine,
-which costs about 3% against 512x512 chunks.
+would buy a further 4%).
 
 ### Memory is bounded; write throughput is not
 
 Sizing a container needs the memory of the **whole process tree**, not the client: under
 `distributed` the workers are separate processes, and the client figure omits them entirely.
 Peak RSS sampled across the client and all descendants, scaled DITL fixtures and two real
-granules, at the default chunk of 10:
+granules, at a geometry chunk of 10:
 
 | Frames      | Pairing                    | Client only | Whole tree |
 | ----------- | -------------------------- | ----------- | ---------- |
@@ -241,10 +236,10 @@ during the 1003-frame run has `H5Z__filter_shuffle` as the dominant leaf, and th
 growing during those phases because rewriting an existing chunk in place adds no bytes. The
 spatial tile also shrinks to 64x64, giving 838,656 chunks across the 13 3-D variables.
 
-This has not been confirmed by re-running with a pinned chunk shape, because `chunksizes` cannot
-currently be set from the product definition (see the encoding note above). That upstream fix is
-worth considerably more than the 3% direct compression gain quoted there: it converts an
-unpredictable, granule-length-dependent write cost into a fixed one.
+Pinning the chunk shape to `[1, 512, 512]` (see the encoding note above) confirmed it: the
+1003-frame granule went from 85.9 to 48.6 minutes (1.77x) for 5.4% more file, and with four
+workers from 5.14 to 2.02 s/frame end to end (2.54x). A depth of one image divides any block
+size, so the write cost no longer depends on granule length.
 
 ### Examples
 
