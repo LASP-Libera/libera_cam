@@ -129,14 +129,16 @@ def test_subsatellite_colatitude_complements_latitude(l1b_product_dataset):
     np.testing.assert_allclose(colatitude, 90.0 - latitude, atol=1e-4)
 
 
-def test_geolocation_variables_are_byte_shuffled_on_disk(l1b_product_file_path):
-    """The shuffle filter declared in the product definition must reach the written file."""
+def test_three_dimensional_variables_carry_the_pinned_encoding_on_disk(l1b_product_file_path):
+    """The shuffle filter and chunk shape declared in the product definition must reach the written file."""
     with h5py.File(l1b_product_file_path, "r") as product:
         for name in ("Latitude", "Longitude", "Viewing_Zenith_Surface", "Geolocation_Quality_Flag"):
             assert product[name].shuffle is True, name
         # Pinned off, against the netcdf4 engine's default of on whenever zlib is on.
         assert product["Radiance"].shuffle is False
         assert product["Pixel_Counts"].shuffle is True
+        for name in ("Latitude", "Longitude", "Viewing_Zenith_Surface", "Geolocation_Quality_Flag", "Radiance"):
+            assert product[name].chunks == (1, 512, 512), name
 
 
 def test_per_pixel_geometry_is_computed_for_every_kept_pixel(l1b_product_dataset):
