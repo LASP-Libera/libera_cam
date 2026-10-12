@@ -653,8 +653,8 @@ def geolocate_frame(
         not integer, wrongly shaped or out of range, ``pointing_vectors`` is not
         ``(Y * X, 3)``, or ``pixel_mask`` is not a boolean array shaped ``frame_shape``.
     RuntimeError
-        If a curryer quality flag does not fit the uint16 word this function narrows the flags
-        to.
+        If a curryer quality flag reaches bit 15, which ``Geolocation_Quality_Flag`` reserves for
+        pixels whose geolocation was not run.
 
     Notes
     -----
@@ -726,9 +726,10 @@ def geolocate_frame(
             fields[name][selected] = values
 
         selected_flags = per_pixel(result["quality_flags"])
-        if selected_flags.max() > np.iinfo(np.uint16).max:
+        if selected_flags.max() >= _GEO_NOT_COMPUTED_FLAG:
             raise RuntimeError(
-                f"curryer quality flag {selected_flags.max():#x} does not fit the uint16 word FrameGeometry uses"
+                f"curryer quality flag {selected_flags.max():#x} does not fit bits 0-14 of "
+                "Geolocation_Quality_Flag; bit 15 means geolocation was not run"
             )
         flags[selected] = selected_flags
     return FrameGeometry(
