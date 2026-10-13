@@ -13,9 +13,7 @@ from libera_cam.image_parsing.read_l1a_cam_data import _validate_execution_confi
 _PAYLOAD_LENGTH = 8
 
 
-def make_synthetic_l1a(
-    tmp_path: Path, n_images: int = 3, valid: list[bool] | None = None, drop: tuple[str, ...] = ()
-) -> xr.Dataset:
+def make_synthetic_l1a(tmp_path: Path, n_images: int = 3, drop: tuple[str, ...] = ()) -> xr.Dataset:
     """Write a minimal image-centric L1A file (libera-utils >= 5.10.5 layout) and open it by path.
 
     Each image's payload bytes are filled with its own index + 1, so a decompressed image can be
@@ -27,12 +25,9 @@ def make_synthetic_l1a(
         Directory the NetCDF file is written to.
     n_images : int
         Number of CAMERA_TIME rows.
-    valid : list[bool] or None
-        Per-image ``WFOV_HEADER_PARSE_VALID``. Defaults to all True.
     drop : tuple[str, ...]
         Variable names to omit, for testing the missing-field errors.
     """
-    valid_flags = np.ones(n_images, dtype=bool) if valid is None else np.asarray(valid, dtype=bool)
     times = np.array(["2028-02-12T03:41:36"], dtype="datetime64[ns]") + np.arange(n_images) * np.timedelta64(1, "s")
 
     # BLOB_BYTE is padded past the valid length, as libera_utils writes it.
@@ -43,7 +38,6 @@ def make_synthetic_l1a(
     data_vars = {
         "WFOV_COMPRESSED_IMAGE": (("CAMERA_TIME", "BLOB_BYTE"), blob),
         "WFOV_COMPRESSED_IMAGE_LENGTH": (("CAMERA_TIME",), np.full(n_images, _PAYLOAD_LENGTH, dtype=np.uint32)),
-        "WFOV_HEADER_PARSE_VALID": (("CAMERA_TIME",), valid_flags),
         "WFOV_FSW_HEADER_AZIMUTH_ANGLE": (("CAMERA_TIME",), np.arange(n_images, dtype=np.float32)),
         "WFOV_FSW_HEADER_RAD_OBS_ID": (("CAMERA_TIME",), np.full(n_images, 132, dtype=np.uint16)),
         "WFOV_FSW_HEADER_CAM_OBS_ID": (("CAMERA_TIME",), np.full(n_images, 133, dtype=np.uint16)),
@@ -67,26 +61,18 @@ def _fake_decompress(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
     return np.full(shape, payload[0], dtype=np.int32), np.zeros(shape, dtype=np.uint8)
 
 
-def test_drops_invalid_header_rows_keeping_images_aligned_with_metadata(tmp_path):
-    """Rows flagged WFOV_HEADER_PARSE_VALID False are dropped from images and metadata together."""
-    l1a = make_synthetic_l1a(tmp_path, n_images=4, valid=[True, False, False, True])
+def test_images_stay_aligned_with_metadata_across_chunks(tmp_path, monkeypatch):
+    """Each decompressed image comes from the L1A row whose time and metadata it is paired with."""
+    monkeypatch.setenv("LIBERA_CAM_CHUNK_SIZE", "3")
+    l1a = make_synthetic_l1a(tmp_path, n_images=4)
 
     with patch("libera_cam.image_parsing.l1a_parser.decompress_image", side_effect=_fake_decompress):
         ds = read_l1a_cam_data(l1a)
         image_markers = ds["image_data"][:, 0, 0].compute().values
 
-    assert ds.sizes["camera_time"] == 2
-    # Rows 0 and 3 survive: their metadata, times, and image payloads must all still line up.
-    np.testing.assert_array_equal(ds["camera_packet_index"].values, [0, 3])
-    np.testing.assert_array_equal(ds["azimuth_angle"].values, [0.0, 3.0])
-    np.testing.assert_array_equal(ds["camera_time"].values, l1a["CAMERA_TIME"].values[[0, 3]])
-    np.testing.assert_array_equal(image_markers, [1, 4])
-
-
-def test_all_invalid_headers_raises(tmp_path):
-    """An L1A granule with no usable CAMERA_TIME fails loudly rather than producing an empty product."""
-    with pytest.raises(ValueError, match="WFOV_HEADER_PARSE_VALID"):
-        read_l1a_cam_data(make_synthetic_l1a(tmp_path, n_images=2, valid=[False, False]))
+    np.testing.assert_array_equal(ds["camera_packet_index"].values, [0, 1, 2, 3])
+    np.testing.assert_array_equal(ds["camera_time"].values, l1a["CAMERA_TIME"].values)
+    np.testing.assert_array_equal(image_markers, [1, 2, 3, 4])
 
 
 def test_missing_header_metadata_raises_naming_the_variable(tmp_path):
