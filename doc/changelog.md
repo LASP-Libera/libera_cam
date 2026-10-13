@@ -1,5 +1,9 @@
 # Version Changes
 
+## 0.3.1
+
+- **Metadata clean up:** Remove the WFOV_HEADER_PARSE_VALID from libera_cam as that field is never useful in L1A files
+
 ## 0.3.0
 
 - **L1A consumption:** Require image-centric WFOV L1A from libera-utils ≥ 5.10.5

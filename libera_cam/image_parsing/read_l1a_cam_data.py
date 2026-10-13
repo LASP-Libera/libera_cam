@@ -22,7 +22,6 @@ from libera_utils.l1a.wfov_image_metadata import (
     PACKET_COUNT_NOT_USED_IN_IMAGES_ATTR,
     WFOV_COMPRESSED_IMAGE_LENGTH_VAR,
     WFOV_COMPRESSED_IMAGE_VAR,
-    WFOV_HEADER_PARSE_VALID_VAR,
 )
 
 from libera_cam import constants
@@ -73,38 +72,6 @@ def _require_image_centric_l1a(cam_dataset: xr.Dataset) -> None:
             f"{missing}. libera_cam requires libera-utils >= 5.10.5 L1A products with "
             f"{CAMERA_TIME_COORD}, {WFOV_COMPRESSED_IMAGE_VAR}, and {WFOV_COMPRESSED_IMAGE_LENGTH_VAR}."
         )
-
-
-def _drop_unparsed_headers(cam_dataset: xr.Dataset) -> tuple[xr.Dataset, np.ndarray]:
-    """Drop CAMERA_TIME rows whose FSW/FPGA header failed to decode at L1A.
-
-    Rows flagged invalid carry a NaT ``CAMERA_TIME`` and zero-filled metadata, so they cannot be
-    geolocated or attributed to an acquisition instant. Returns the filtered dataset along with the
-    array of original HDF5 row indices for the surviving images. Raises if no row survives.
-    """
-    n_total = int(cam_dataset.sizes[CAMERA_TIME_COORD])
-    if WFOV_HEADER_PARSE_VALID_VAR not in cam_dataset:
-        return cam_dataset, np.arange(n_total)
-
-    valid = np.asarray(cam_dataset[WFOV_HEADER_PARSE_VALID_VAR].values, dtype=bool)
-    n_invalid = int((~valid).sum())
-    if n_invalid == 0:
-        return cam_dataset, np.arange(n_total)
-
-    if not valid.any():
-        raise ValueError(
-            f"All {valid.size} L1A images have {WFOV_HEADER_PARSE_VALID_VAR} False; "
-            "no image carries a usable CAMERA_TIME."
-        )
-
-    logger.warning(
-        "Dropping %d of %d L1A images with %s False (NaT CAMERA_TIME, zero-filled metadata)",
-        n_invalid,
-        valid.size,
-        WFOV_HEADER_PARSE_VALID_VAR,
-    )
-    surviving_indices = np.flatnonzero(valid)
-    return cam_dataset.isel({CAMERA_TIME_COORD: valid}), surviving_indices
 
 
 def _validate_execution_config(chunk_size: int) -> None:
@@ -196,8 +163,6 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
             "pass the dataset as opened, without slicing or concatenating it first."
         )
 
-    cam_dataset, surviving_indices = _drop_unparsed_headers(cam_dataset)
-
     chunk_size = int(os.getenv("LIBERA_CAM_CHUNK_SIZE", DEFAULT_TIME_CHUNK_SIZE))
     _validate_execution_config(chunk_size)
     logger.info("Using LIBERA_CAM_CHUNK_SIZE=%s", chunk_size)
@@ -214,7 +179,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
 
     delayed_image_chunks, delayed_mask_chunks = [], []
     for i in range(0, n_images, chunk_size):
-        chunk_indices = surviving_indices[i : min(n_images, i + chunk_size)].tolist()
+        chunk_indices = list(range(i, min(n_images, i + chunk_size)))
         actual_size = len(chunk_indices)
 
         out = delayed_decompress_source(source, chunk_indices)
