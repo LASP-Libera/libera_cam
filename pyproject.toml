@@ -39,10 +39,14 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    # 5.11.4 writes NetCDF through a path rather than an unpicklable file object, which is what
-    # lets `h5netcdf` run under the distributed scheduler, and coerces `chunksizes` to a tuple,
-    # which makes chunk shape settable from the product definition.
-    "libera-utils >=5.11.4,<6.0.0",
+    # Pinned to an immutable commit on LASP-Libera/libera_utils#102 so a push to that branch cannot
+    # change what CI resolves. Restore a release pin once a libera-utils release carries
+    # `worker_compressed_variables`. TODO[LIBSDC-808]
+    #
+    # Carries 5.11.4 (NetCDF written through a path rather than an unpicklable file object, which is
+    # what lets `h5netcdf` run under the distributed scheduler, and `chunksizes` coerced to a tuple)
+    # and `worker_compressed_variables`, which compresses chunks on the Dask workers.
+    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@7703cfd59f9724279802f294c8fa7bc36406651c",
     # Imported directly by geolocation.py. 0.5.3 adds `spatial.pixel_geometry`, the `PixelField`
     # registry it selects fields from, and `GeometryData.get_geometry(require_coverage=)`, which the
     # spacecraft-level geometry query relies on to fail on a missing kernel.

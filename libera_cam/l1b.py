@@ -170,10 +170,11 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
         # Steps 4: Store data with metadata and write to output folder
         logger.info("Step 4: Creating and writing data product")
-        # This is where the Dask compute happens. NetCDF writing funnels computed blocks through the client process.
+        # This is where the Dask compute happens. Under the distributed scheduler the workers compress the
+        # per-pixel variables' chunks and the client process stores them; otherwise HDF5 compresses as it writes.
         start = datetime.now()
         packaged_data = package_l1b_product(processed_data)
-        output_files = write_data_product(packaged_data, dropbox_path)
+        output_files = write_data_product(packaged_data, dropbox_path, compress_on_workers=client is not None)
         end = datetime.now()
         logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
 
@@ -434,6 +435,8 @@ def process_l1a_to_l1b(
 def write_data_product(
     processed_data: xr.Dataset,
     output_path: str,
+    *,
+    compress_on_workers: bool,
 ) -> LiberaDataProductFilename:
     """
     Takes a file named in the input manifest and generates the output nectdf4 file, with tags and correct output name
@@ -443,14 +446,34 @@ def write_data_product(
         The dataset to write
     output_path: str
         The path to write the output file to
+    compress_on_workers: bool
+        Whether the Dask workers of the active ``dask.distributed`` Client compress the chunks of every
+        Dask-backed three-dimensional data variable, which libera-utils then stores directly
 
     Returns
     -------
     data_product_filenames: LiberaDataProductFilename
         The valid filename of the written data product(s)
+
+    Raises
+    ------
+    ValueError
+        If `compress_on_workers` is True and the dataset has no Dask-backed three-dimensional data variable.
     """
     if not product_config_path.exists():
         raise FileNotFoundError(f"Product definition file not found: {product_config_path}")
+
+    worker_compressed_variables = ()
+    if compress_on_workers:
+        worker_compressed_variables = tuple(
+            str(name)
+            for name, variable in processed_data.data_vars.items()
+            if variable.ndim == 3 and variable.chunks is not None
+        )
+        if not worker_compressed_variables:
+            raise ValueError(
+                "compress_on_workers is set, but the dataset has no Dask-backed three-dimensional variable"
+            )
 
     processed_data.attrs["algorithm_version"] = libera_cam_version()
 
@@ -459,6 +482,7 @@ def write_data_product(
         data=processed_data,
         output_path=output_path,
         time_variable="CAMERA_TIME",
+        worker_compressed_variables=worker_compressed_variables,
     )
 
     return output_files
