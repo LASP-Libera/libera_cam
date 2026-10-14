@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
+import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
@@ -72,7 +73,7 @@ class TestL1b(unittest.TestCase):
         mock_read.assert_called_with(mock_manifest)
         mock_process.assert_called_with(mock_l1a_data, mock_dynamic_kernel_sources, use_geo=True, jpss_only_mode=False)
         mock_package.assert_called_once_with(mock_processed_ds)
-        mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox")
+        mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox", compress_on_workers=False)
 
         # Verify input configuration is propagated to the output manifest
         mock_out_man.configuration.update.assert_called_once_with({})
@@ -286,11 +287,39 @@ class TestL1b(unittest.TestCase):
         mock_filenames = (MagicMock(), MagicMock())
         mock_write_libera.return_value = mock_filenames
 
-        result = l1b.write_data_product(mock_ds, "/tmp/out")
+        result = l1b.write_data_product(mock_ds, "/tmp/out", compress_on_workers=False)
 
         assert result == mock_filenames
         assert mock_ds.attrs["algorithm_version"] == libera_cam_version()
         mock_write_libera.assert_called_once()
+        assert mock_write_libera.call_args.kwargs["worker_compressed_variables"] == ()
+
+    @patch("libera_cam.l1b.write_libera_data_product")
+    def test_write_data_product_names_the_dask_backed_three_dimensional_variables(self, mock_write_libera):
+        """compress_on_workers passes every Dask-backed 3-D data variable, and nothing else, to libera-utils"""
+        dims = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+        dataset = xr.Dataset(
+            {
+                "Radiance": (dims, da.zeros((2, 4, 4), chunks=1, dtype=np.float32)),
+                "Latitude": (dims, da.zeros((2, 4, 4), chunks=1, dtype=np.float32)),
+                "Eager_Image": (dims, np.zeros((2, 4, 4), dtype=np.float32)),
+                "Quality_Flag": (("CAMERA_TIME",), da.zeros(2, chunks=1, dtype=np.uint32)),
+            }
+        )
+
+        l1b.write_data_product(dataset, "/tmp/out", compress_on_workers=True)
+
+        assert mock_write_libera.call_args.kwargs["worker_compressed_variables"] == ("Radiance", "Latitude")
+
+    @patch("libera_cam.l1b.write_libera_data_product")
+    def test_write_data_product_with_no_dask_backed_three_dimensional_variable_raises(self, mock_write_libera):
+        """compress_on_workers with nothing to compress fails rather than quietly writing on one thread"""
+        dims = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+        dataset = xr.Dataset({"Radiance": (dims, np.zeros((2, 4, 4), dtype=np.float32))})
+
+        with pytest.raises(ValueError, match="no Dask-backed three-dimensional variable"):
+            l1b.write_data_product(dataset, "/tmp/out", compress_on_workers=True)
+        mock_write_libera.assert_not_called()
 
 
 class TestReadAllInputDataSpiceKernels:
