@@ -1,5 +1,6 @@
 """Tests for the l1b algorithm"""
 
+import logging
 from argparse import Namespace
 from pathlib import Path
 
@@ -197,3 +198,48 @@ def test_azimuth_is_covered_motor_encoder_angle(l1b_product_dataset):
     header = l1b_product_dataset["Azimuth_FSW_Metadata"].to_numpy().astype(np.float64)
     wrapped_difference = (values.astype(np.float64) - header + 180.0) % 360.0 - 180.0
     np.testing.assert_allclose(wrapped_difference, 0.0, atol=0.5)
+
+
+def _write_product(manifest_path: Path, output_dir: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run the L1B algorithm into ``output_dir`` and return the written NetCDF path."""
+    output_dir.mkdir()
+    monkeypatch.setenv("PROCESSING_PATH", str(output_dir))
+    output_manifest = Manifest.from_file(algorithm(Namespace(manifest=str(manifest_path))))
+    (nc_file,) = [file.filename for file in output_manifest.files if Path(file.filename).suffix == ".nc"]
+    return nc_file
+
+
+def _dataset_names(h5file: h5py.File) -> list[str]:
+    names = []
+    h5file.visititems(lambda name, obj: names.append(name) if isinstance(obj, h5py.Dataset) else None)
+    return sorted(names)
+
+
+@pytest.mark.parametrize("configuration", [{}, {"use_geo": False}], ids=["use_geo", "no_geo"])
+def test_distributed_product_matches_synchronous(generate_input_manifest, monkeypatch, tmp_path, caplog, configuration):
+    """The worker-compressed write under distributed stores the same bits, chunks and filters as synchronous.
+
+    Under distributed the workers shuffle and deflate every Dask-backed 3-D variable's chunks and the
+    client stores them with ``write_direct_chunk``; under synchronous HDF5 compresses as it writes.
+    """
+    manifest_path = generate_input_manifest(configuration)
+    synchronous_path = _write_product(manifest_path, tmp_path / "synchronous", monkeypatch)
+
+    monkeypatch.setenv("DASK_SCHEDULER", "distributed")
+    monkeypatch.setenv("DASK_NUM_WORKERS", "1")
+    monkeypatch.setenv("DASK_MEMORY_LIMIT", "6GB")
+    with caplog.at_level(logging.INFO, logger="libera_utils.io.netcdf"):
+        distributed_path = _write_product(manifest_path, tmp_path / "distributed", monkeypatch)
+    assert "worker-compressed chunks" in caplog.text
+
+    with h5py.File(synchronous_path, "r") as expected, h5py.File(distributed_path, "r") as actual:
+        names = _dataset_names(expected)
+        assert _dataset_names(actual) == names
+        for name in names:
+            want, got = expected[name], actual[name]
+            layout = ("dtype", "shape", "chunks", "compression", "compression_opts", "shuffle")
+            assert [getattr(got, key) for key in layout] == [getattr(want, key) for key in layout], name
+            assert np.asarray(got.fillvalue).tobytes() == np.asarray(want.fillvalue).tobytes(), name
+            want_values, got_values = np.asarray(want[()]), np.asarray(got[()])
+            bits = f"u{want_values.dtype.itemsize}"
+            np.testing.assert_array_equal(got_values.view(bits), want_values.view(bits), err_msg=name)
