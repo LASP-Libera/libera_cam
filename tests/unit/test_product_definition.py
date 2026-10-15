@@ -15,6 +15,35 @@ def test_product_definition_algorithm_version_is_dynamic():
     assert definition["attributes"]["algorithm_version"] is None
 
 
+def test_spacecraft_geometry_fields_are_declared_per_frame():
+    """The spacecraft-level fields are one value per camera frame, not per pixel."""
+    definition = yaml.safe_load(product_config_path.read_text())
+
+    # Dynamic attribute, injected at write time like algorithm_version.
+    assert definition["attributes"]["Earth_Sun_Distance_AU"] is None
+
+    per_frame = [
+        "Subsatellite_Latitude",
+        "Subsatellite_Longitude",
+        "Subsatellite_Colatitude",
+        "Subsolar_Latitude",
+        "Subsolar_Longitude",
+        "Subsolar_Colatitude",
+        "Radius_of_Satellite_from_Center_of_Earth",
+        "Satellite_Attitude_Q0",
+        "Satellite_Attitude_Q1",
+        "Satellite_Attitude_Q2",
+        "Satellite_Attitude_Q3",
+        "Azimuth",
+    ]
+    for name in per_frame:
+        assert definition["variables"][name]["dimensions"] == ["CAMERA_TIME"]
+
+    for name in ["Satellite_Position", "Satellite_Velocity"]:
+        assert definition["variables"][name]["dimensions"] == ["CAMERA_TIME", "EUCLIDEAN_DIM"]
+        assert definition["variables"][name]["dtype"] == "float64"
+
+
 def test_package_version_matches_pyproject():
     """The installed package version must match pyproject.toml."""
     pyproject_path = Path(__file__).parents[2] / "pyproject.toml"
