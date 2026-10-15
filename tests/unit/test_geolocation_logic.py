@@ -564,8 +564,8 @@ def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orches
         np.testing.assert_array_equal(computed[variable].values, i, err_msg=variable)
     passed_config = orchestration_mocks.chunk.call_args.args[3]
     assert passed_config is config
-    # Each geometry task takes no Dask inputs, so distributed throttles it like a root task and it
-    # cannot run ahead of the writer.
+    # Each geometry task takes no Dask inputs, so distributed holds it back until a worker thread is
+    # free of computing and compressing earlier blocks.
     dependencies = result["Latitude"].data.__dask_graph__().get_all_dependencies()
     geometry_keys = [key for key in dependencies if key_split(key) == "calculate_chunk_geometry_from_l1a"]
     assert len(geometry_keys) == 3

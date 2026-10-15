@@ -858,9 +858,10 @@ def calculate_chunk_geometry_from_l1a(
 
     The mask is rebuilt here from the L1A rows (:func:`kept_pixels_from_source`, about 0.025 s
     per frame) so the task takes no Dask inputs. distributed holds input-free tasks back until a
-    worker has a free thread, which keeps geometry from running ahead of the single-threaded
-    NetCDF write. A geometry task fed by the ``image_data`` or mask tasks gets no such
-    throttling, and its 143 MB per frame of output piles up in worker memory and spill.
+    worker has a free thread, and each worker's thread is busy computing and compressing the
+    blocks already started, so geometry output cannot pile up ahead of them. A geometry task fed
+    by the ``image_data`` or mask tasks gets no such throttling, and its 143 MB per frame of
+    output piles up in worker memory and spill.
 
     Parameters
     ----------
