@@ -128,16 +128,7 @@ radiometric calibration, JPEG-LS decompression, and SPICE geolocation.
 
 - Logging of distributed tasks on AWS. Are we getting enough information out to debug?
 - When using `distributed` mode does Dask emit a "large object detected in task graph" warning because of the 50 images passing in?
-- Confirm netcdf file writing in distributed mode on AWS with h5netcdf vs netcdf4 engine. Both
-  engines now write under `distributed` and to S3, and locally `h5netcdf` is faster and smaller
-  (176 s and 40.5 MB/frame against 217 s and 47.3 MB/frame at 60 frames); confirm that holds on
-  AWS hardware.
-- Investigate the `netcdf4` + `distributed` race: one run in three failed with
-  `KeyError('Viewing_Zenith_Surface')` inside `netCDF4_.get_array`, a worker having reopened the
-  output file before the client's variable definitions were visible to it. Not reproduced with
-  `h5netcdf`, and not reproduced on a 14-variable toy dataset (10/10 clean on both engines), so
-  it needs the full product to provoke. Worth a ticket in its own right: an intermittent failure
-  in the write path is worse than a deterministic one.
-- Multi-node `distributed` needs shared filesystem access to the output: `xarray` wraps the
-  output path in a `CachingFileManager` and each worker reopens the file itself. The single-node
-  `LocalCluster` built by `l1b.py` satisfies this automatically.
+- Multi-node `distributed` needs shared filesystem access to the L1A input: each worker reads
+  the L1A file by path (`_decompress_batch_from_source`, `kept_pixels_from_source`), while the
+  client process alone writes the output. The single-node `LocalCluster` built by `l1b.py`
+  satisfies this automatically.
