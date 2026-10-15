@@ -73,20 +73,20 @@ images sharing a single FSW timestamp; `Camera_Packet_Index` distinguishes them.
 L1B uses Dask for lazy L1A decompression, radiometry, and geolocation. Tune execution with
 environment variables before starting the pipeline:
 
-| Variable                    | Default       | Description                                                                                                                                                                                                         |
-| --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `XARRAY_NETCDF_ENGINE`      | `h5netcdf`    | NetCDF engine used by `libera_utils` to write the product. Both engines write to S3 and both work under `distributed`; `h5netcdf` is faster and produces smaller granules (see the tuning guide).                   |
-| `DASK_SCHEDULER`            | `synchronous` | Dask scheduler. **`synchronous`** (single-process, default) or **`distributed`** (local cluster with dashboard). **`threads`** and **`processes`** are not supported — CSPICE is not thread-safe within a worker.   |
-| `DASK_NUM_WORKERS`          | `3`           | Number of Dask workers when using `distributed`. Each worker computes and compresses its own blocks; three is the setting measured on a full day (see AWS sizing below).                                            |
-| `DASK_MEMORY_LIMIT`         | `9GB`         | Per-worker memory limit for `distributed`. It must cover one worker's worst moment, which the decompression chunk sets: at the default chunk of 20 a worker peaks at 4.3-7.2 GB. Dask pauses a worker at 80% of it. |
-| `LIBERA_CAM_CHUNK_SIZE`     | `20`          | Number of L1A images per Dask batch during JPEG-LS decompression in `read_l1a_cam_data`. Lower values reduce peak memory; higher values reduce scheduler overhead.                                                  |
-| `LIBERA_CAM_GEO_CHUNK_SIZE` | `5`           | Number of frames per per-pixel geometry task in `add_geolocation_to_dataset`, independent of the decompression chunk. Each task furnishes the kernels once and geolocates its frames one at a time.                 |
+| Variable                    | Default       | Description                                                                                                                                                                                                                                                                                        |
+| --------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `XARRAY_NETCDF_ENGINE`      | `h5netcdf`    | NetCDF engine used by `libera_utils` to write the product. Both engines write to S3. `distributed` writes through worker compression, which requires `h5netcdf`: libera-utils raises `ValueError` under `netcdf4`. `h5netcdf` is also faster and produces smaller granules (see the tuning guide). |
+| `DASK_SCHEDULER`            | `synchronous` | Dask scheduler. **`synchronous`** (single-process, default) or **`distributed`** (local cluster with dashboard). **`threads`** and **`processes`** are not supported — CSPICE is not thread-safe within a worker.                                                                                  |
+| `DASK_NUM_WORKERS`          | `3`           | Number of Dask workers when using `distributed`. Each worker computes and compresses its own blocks; three is the setting measured on a full day (see AWS sizing below).                                                                                                                           |
+| `DASK_MEMORY_LIMIT`         | `9GB`         | Per-worker memory limit for `distributed`. It must cover one worker's worst moment, which the decompression chunk sets: at the default chunk of 20 a worker peaked at 4.3-7.2 GB, measured with HDF5 compressing in the writing process. Dask pauses a worker at 80% of it.                        |
+| `LIBERA_CAM_CHUNK_SIZE`     | `20`          | Number of L1A images per Dask batch during JPEG-LS decompression in `read_l1a_cam_data`. Lower values reduce peak memory; higher values reduce scheduler overhead.                                                                                                                                 |
+| `LIBERA_CAM_GEO_CHUNK_SIZE` | `5`           | Number of frames per per-pixel geometry task in `add_geolocation_to_dataset`, independent of the decompression chunk. Each task furnishes the kernels once and geolocates its frames one at a time.                                                                                                |
 
 ### Operator Tuning Guide
 
 When sizing AWS Batch containers and configuring Dask execution, keep the following relationships in mind:
 
-1. **Production Scheduling**: `DASK_SCHEDULER=distributed` works with either engine, and `h5netcdf` is the better of the two: at 60 frames it ran in 176 s against 217 s for `netcdf4` and wrote 40.5 MB/frame against 47.3 MB/frame. Earlier releases required `netcdf4` under `distributed` because the `h5netcdf` branch of `libera_utils.io.netcdf.write_libera_data_product` handed `to_netcdf` an open file object, which the distributed scheduler cannot serialize to its workers (`TypeError: cannot pickle '_io.BufferedRandom' object`). `libera_utils` always passes a path from 5.11.4, staging cloud destinations on local disk and uploading them, so both engines write to S3 and both pickle. `xarray` wraps that path in a `CachingFileManager` and each worker reopens the file itself, which means every worker must see the same filesystem — automatic on the single-node `LocalCluster` built here, but a constraint on any multi-node cluster. Prefer `h5netcdf`: one `netcdf4` + `distributed` run in three failed with `KeyError` inside `netCDF4_.get_array`, a worker having reopened the output before the client's variable definitions were visible to it. Roadmap item 7 carries the comparison. Measured with dask/distributed 2026.8.0, xarray 2026.7.0, h5netcdf 1.8.1, netCDF4 1.7.2.
+1. **Production Scheduling**: `DASK_SCHEDULER=distributed` writes through worker compression (see AWS sizing below) and requires `h5netcdf`; libera-utils raises `ValueError` if `XARRAY_NETCDF_ENGINE` is `netcdf4`. `h5netcdf` was also the better engine with HDF5 compressing in the writing process: at 60 frames it ran in 176 s against 217 s for `netcdf4` and wrote 40.5 MB/frame against 47.3 MB/frame. Earlier releases required `netcdf4` under `distributed` because the `h5netcdf` branch of `libera_utils.io.netcdf.write_libera_data_product` handed `to_netcdf` an open file object, which the distributed scheduler cannot serialize to its workers (`TypeError: cannot pickle '_io.BufferedRandom' object`). `libera_utils` always passes a path from 5.11.4, staging cloud destinations on local disk and uploading them. The client process alone writes the output; each worker reads the L1A file by path (`_decompress_batch_from_source`, `kept_pixels_from_source`), which means every worker must see the client's filesystem — automatic on the single-node `LocalCluster` built here, but a constraint on any multi-node cluster. Measured with dask/distributed 2026.8.0, xarray 2026.7.0, h5netcdf 1.8.1, netCDF4 1.7.2.
 2. **Parallelism is Capped by Task Count**: Decompression runs in `ceil(N_images / LIBERA_CAM_CHUNK_SIZE)` tasks and per-pixel geometry in `ceil(N_images / LIBERA_CAM_GEO_CHUNK_SIZE)` tasks; inside a geometry task, frames are evaluated serially for SPICE thread-safety. The maximum number of useful workers for each stage is its task count:
    $$\text{max\_useful\_workers} = \left\lceil \frac{N_{\text{images}}}{\text{chunk size}} \right\rceil$$
    For example, a 500-image product with `LIBERA_CAM_GEO_CHUNK_SIZE=10` creates 50 geometry tasks and can utilize at most 50 workers on that stage. Smaller chunks add per-task kernel furnishing and scheduler overhead.
@@ -94,15 +94,16 @@ When sizing AWS Batch containers and configuring Dask execution, keep the follow
 
    $$\text{task peak RSS} \approx 2.2\,\text{GB} + 0.15\,\text{GB} \times N_{\text{frames in the task}}$$
 
-   Per-frame cost falls from 2.08 s at one frame to 1.00 s asymptotically, so the ~1.1 s of per-task kernel furnishing is 6% overhead at a chunk of 10 and 17% at the default of 5. The run is write-bound, so on AWS that overhead did not show in wall time (see AWS sizing below). A decompression task at `LIBERA_CAM_CHUNK_SIZE=50` holds ~800 MB of `image_data` and masks. This bounds one task, not one run: whole-run peak memory is set by the write path instead, and is the subject of "Memory is bounded; write throughput is not" below.
+   Per-frame cost falls from 2.08 s at one frame to 1.00 s asymptotically, so the ~1.1 s of per-task kernel furnishing is 6% overhead at a chunk of 10 and 17% at the default of 5. With HDF5 compressing in the writing process the run was write-bound, so on AWS that overhead did not show in wall time (see AWS sizing below). A decompression task at `LIBERA_CAM_CHUNK_SIZE=50` holds ~800 MB of `image_data` and masks. This bounds one task, not one run: whole-run peak memory is set by the write path instead, and is the subject of "Memory is bounded; write throughput is not" below.
 
-4. **Geometry Tasks Take No Dask Inputs**: `distributed` holds a task with no inputs back until a worker has a free thread, and with one thread per worker that thread is busy with the blocks already started: their computation and, under `distributed`, their compression. That back-pressure is what keeps the per-pixel geometry, 143 MB per frame of output, from running ahead of the write. Each geometry task therefore rebuilds its frames' kept-pixel masks from the L1A file itself (`kept_pixels_from_source`, 0.025 s/frame) instead of depending on the `image_data` or mask tasks. Fed from `image_data`, the full 695-frame DITL2 granule restarted workers and spilled 60-75 GB to disk on AWS; input-free, it ran in 18.6 min on three 12 GB workers with no restart and no spill, each worker holding one geometry block at a time. A change that gives the geometry tasks an input brings the backlog back.
-5. **Container Sizing Uses the Whole Process Tree**: Computed blocks accumulate for the length of a write, not the length of the granule, so peak memory plateaus rather than growing with frame count. Under `synchronous` that plateau sits in the client; under `distributed` the store tasks run on the workers, so a client-only measurement misses most of it. Size against the whole tree; see "Memory is bounded; write throughput is not" below.
+4. **Geometry Tasks Take No Dask Inputs**: `distributed` holds a task with no inputs back until a worker has a free thread, and with one thread per worker that thread is busy with the blocks already started: their computation and, under `distributed`, their compression. That back-pressure is what keeps the per-pixel geometry, 143 MB per frame of output, from piling up ahead of them. Each geometry task therefore rebuilds its frames' kept-pixel masks from the L1A file itself (`kept_pixels_from_source`, 0.025 s/frame) instead of depending on the `image_data` or mask tasks. Fed from `image_data`, the full 695-frame DITL2 granule restarted workers and spilled 60-75 GB to disk on AWS; input-free, it ran in 18.6 min on three 12 GB workers with no restart and no spill, each worker holding one geometry block at a time. A change that gives the geometry tasks an input brings the backlog back.
+5. **Container Sizing Uses the Whole Process Tree**: Computed blocks accumulate for the length of a write, not the length of the granule, so peak memory plateaus rather than growing with frame count (measured with HDF5 compressing in the writing process). Under `synchronous` that plateau sits in the client; under `distributed` the workers compute and compress the blocks and hold each result until the client stores it, so a client-only measurement misses most of it. Size against the whole tree; see "Memory is bounded; write throughput is not" below.
 
 ### AWS sizing
 
 Measured on the 695-frame DITL2 granule as AWS Batch Fargate Spot tasks, `h5netcdf` +
-`distributed`, with pinned chunks and input-free geometry tasks:
+`distributed`, with pinned chunks and input-free geometry tasks, and with HDF5 compressing in the
+writing process:
 
 | Task           | Workers x limit | Decomp chunk | Geo chunk | Wall           | Task peak   | Worker pauses / restarts |
 | -------------- | --------------- | ------------ | --------- | -------------- | ----------- | ------------------------ |
@@ -114,11 +115,11 @@ Measured on the 695-frame DITL2 granule as AWS Batch Fargate Spot tasks, `h5netc
 | 2 vCPU / 16 GB | 2 x 6 GB        | 10           | 5         | 22.9, 21.4 min | 3.6, 3.4 GB | 0 / 0                    |
 | 4 vCPU / 16 GB | 3 x 4.5 GB      | 20           | 10        | failed         | 6.7 GB      | 14 / 8, `KilledWorker`   |
 
-The defaults are the 4 vCPU / 30 GB row with chunks of 20 and 5. The smallest setting that ran
-cleanly is 2 vCPU / 16 GB with two 6 GB workers and a decompression chunk of 10; it also ran a full
-day of July 12 as four 6-hour granules of about 2,050 frames, each in 59-66 min at a 3.7-3.9 GB
-peak. In those runs HDF5 compressed every chunk in the single writing process, which was about 95%
-of wall time while CPU averaged 1.3-2.0 vCPU, so workers, memory and chunks set memory and
+The defaults are the 4 vCPU / 30 GB row with chunks of 20 and 5. With HDF5 compressing in the
+writing process, the smallest setting that ran cleanly was 2 vCPU / 16 GB with two 6 GB workers
+and a decompression chunk of 10; it also ran a full day of July 12 as four 6-hour granules of
+about 2,050 frames, each in 59-66 min at a 3.7-3.9 GB peak. In those runs HDF5 compressed every chunk in the single writing process, which was about 95%
+of wall time while CPU averaged 1.3-2.0 vCPU, so workers, memory and chunks changed memory and
 stability, not speed. Spot hosts varied wall time by about 40% on identical settings. Ephemeral
 disk peaks near the product size plus about 3-4 GB: 8-9 GB at 695 frames, 16-19 GB at about 2,050.
 
@@ -204,7 +205,7 @@ would buy a further 4%).
 Sizing a container needs the memory of the **whole process tree**, not the client: under
 `distributed` the workers are separate processes, and the client figure omits them entirely.
 Peak RSS sampled across the client and all descendants, scaled DITL fixtures and two real
-granules, at a geometry chunk of 10:
+granules, at a geometry chunk of 10, with HDF5 compressing in the writing process:
 
 | Frames      | Pairing                    | Client only | Whole tree |
 | ----------- | -------------------------- | ----------- | ---------- |
@@ -271,7 +272,8 @@ libera-cam /path/to/input_manifest.json
 ```
 
 Multi-worker local cluster at the defaults. Three workers at `9GB` may use up to 27 GB between
-them; on a 16 GB machine, use two workers at `6GB` with `LIBERA_CAM_CHUNK_SIZE=10`:
+them. On a 16 GB machine, two workers at `6GB` with `LIBERA_CAM_CHUNK_SIZE=10` ran cleanly
+with HDF5 compressing in the writing process (see AWS sizing):
 
 ```bash
 export PROCESSING_PATH=/path/to/output
