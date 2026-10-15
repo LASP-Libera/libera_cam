@@ -82,13 +82,13 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ### Optimization strategies
 
-| Approach                    | Notes                                                                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Sparse geometry**         | Restrict geometry calculations strictly to unmasked/active pixels (e.g. within stripes), skipping masked-off areas entirely |
-| **Reduce SPICE call count** | Batch by unique timestamps or integration groups before per-pixel expansion                                                 |
-| **Coarser geometry grid**   | Compute angles on a subsampled grid and interpolate (with science validation)                                               |
-| **Worker-local caching**    | Reuse Sun/spacecraft orientation for all pixels sharing a timestamp                                                         |
-| **Vectorized evaluation**   | Evaluate whether curryer vectorized paths or precomputed ephemeris tables help at full camera resolution (2048×2048)        |
+| Approach                    | Notes                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Sparse geometry**         | Done in 0.3.2: only the pixels the onboard mask kept are geolocated (9.1% of DITL2 pixels; geometry 0.95 to 0.095 s/frame) |
+| **Reduce SPICE call count** | Batch by unique timestamps or integration groups before per-pixel expansion                                                |
+| **Coarser geometry grid**   | Rejected: interpolating from a subsampled grid put errors of up to 1.7 degrees near the limb                               |
+| **Worker-local caching**    | Reuse Sun/spacecraft orientation for all pixels sharing a timestamp                                                        |
+| **Vectorized evaluation**   | Evaluate whether curryer vectorized paths or precomputed ephemeris tables help at full camera resolution (2048×2048)       |
 
 ---
 
