@@ -94,31 +94,21 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ## 4. Direct worker NetCDF chunk output
 
-### Problem today
+### Status
 
-Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_product`, which does
-not release computed Dask blocks as it writes them. Memory and I/O become a bottleneck on large
-multi-gigabyte datasets.
+Done for compression in 0.3.2. Under `distributed` the workers shuffle and deflate the chunks of
+every Dask-backed three-dimensional variable, and the writing process stores the compressed bytes
+with HDF5 `write_direct_chunk` (libera-utils `worker_compressed_variables`). Before, HDF5
+compressed every chunk in the single writing process, about 95% of wall time on AWS. The full
+July 12 day (8,205 frames) went from 6 h 17 min to 1 h 47 min through the l1b-cam step function,
+0.69 s/frame against 2.7, with the same values on read (see `overview.md`, AWS sizing).
 
-Measured on real granules (see `overview.md`, "Memory is bounded; write throughput is not"),
-peak RSS across the whole process tree does **not** grow with granule length: a 1003-frame
-granule peaks at 7.38 GB against 9.14 GB for 160 frames. Blocks are held for the length of a
-write, not the length of the granule. The memory cap earlier revisions of this item assumed does
-not exist, so this item is no longer a prerequisite for full-length granules.
+### Remaining
 
-What does degrade is write throughput: 2.96 s/frame at 160 frames against 5.14 s/frame at 1003.
-The leading explanation is HDF5 chunk misalignment — `h5py.guess_chunk` is shape-dependent, so
-the chunk depth changes with granule length (2, 5, then 16 frames) while Dask writes
-`LIBERA_CAM_GEO_CHUNK_SIZE`-frame blocks, and at production sizes the two stop dividing evenly.
-Pinning `chunksizes: [1, 512, 512]` in 0.3.2 confirmed it: the 1003-frame granule went from
-85.9 to 48.6 minutes. The write is still single-threaded and about 95% of wall time on AWS, so
-it remains the motivation for the target state below.
-
-### Target state
-
-Investigate and prototype direct worker-to-disk or worker-to-S3 NetCDF chunk writes (e.g., using
-region-based HDF5/NetCDF-4 writes or Zarr storage targets). This allows distributed workers to
-write their completed chunks independently without returning payload data to the client driver.
+The writing process still receives every compressed chunk and writes the file alone. Workers
+writing their chunks to disk or to S3 themselves (region writes, or a Zarr target) would remove
+that hand-off, but it is no longer the bottleneck. Still to measure on this path: peak memory
+(Container Insights was off for the full-day run) and how speed scales with the number of workers.
 
 ---
 
