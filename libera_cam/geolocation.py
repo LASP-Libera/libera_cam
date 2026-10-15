@@ -417,7 +417,6 @@ def add_placeholder_spacecraft_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset
 def calculate_azimuth(
     kernel_manager: KernelManager,
     timestamps: np.ndarray,
-    fill_value: float = _FILL_VALUE,
 ) -> np.ndarray:
     """
     Azimuth motor encoder angle at each camera frame, from the azimuth CK.
@@ -429,11 +428,11 @@ def calculate_azimuth(
     instrument base, not a pointing angle in the spacecraft or orbital frame. curryer's
     ``frame_to_frame_euler`` does the per-sample frame transform and factoring.
 
-    A per-sample CK coverage gap comes back as NaN under ``allow_nans`` and is written as
-    ``fill_value``. A granule with no covered frame at all means the azimuth CK or the Libera
-    frame kernel is not furnished, or does not cover the granule, and raises. The caller
-    furnishes the kernels (:func:`add_azimuth_to_dataset` loads the static set, which carries
-    the Libera frame kernel, alongside the CK).
+    A per-sample CK coverage gap comes back as NaN under ``allow_nans`` and is written as the
+    product ``_FillValue`` (-999). A granule with no covered frame at all means the azimuth
+    CK or the Libera frame kernel is not furnished, or does not cover the granule, and raises.
+    The caller furnishes the kernels (:func:`add_azimuth_to_dataset` loads the static set,
+    which carries the Libera frame kernel, alongside the CK).
 
     Parameters
     ----------
@@ -441,13 +440,12 @@ def calculate_azimuth(
         Kernel manager with the azimuth CK and the Libera frame kernel furnished.
     timestamps : np.ndarray
         Camera frame times on the L1B output time grid, as ``datetime64[ns]``.
-    fill_value : float
-        Product fill value for frames the CK does not cover.
 
     Returns
     -------
     np.ndarray
-        Azimuth in degrees, shape ``(N,)``, dtype float32, in ``[0, 360)`` or ``fill_value``.
+        Azimuth in degrees, shape ``(N,)``, dtype float32, in ``[0, 360)`` or -999 where the CK
+        does not cover the frame.
 
     Raises
     ------
@@ -467,10 +465,13 @@ def calculate_azimuth(
             "frame(s); check that the azimuth CK in the kernel manifest covers the granule and that the Libera "
             "frame kernel is furnished."
         )
-    return _apply_fill(azimuth, fill_value, np.float32)
+    azimuth = _apply_fill(azimuth, _FILL_VALUE, np.float32)
+    # The float32 cast rounds angles just below 360 up to 360.0, which is written as 0 to stay in [0, 360).
+    azimuth[azimuth == np.float32(360.0)] = 0.0
+    return azimuth
 
 
-def create_placeholder_azimuth(n_samples: int, fill_value: float = _FILL_VALUE) -> np.ndarray:
+def create_placeholder_azimuth(n_samples: int) -> np.ndarray:
     """
     Placeholder motor azimuth for ``use_geo`` false mode.
 
@@ -478,15 +479,13 @@ def create_placeholder_azimuth(n_samples: int, fill_value: float = _FILL_VALUE) 
     ----------
     n_samples : int
         Number of camera frames on the L1B output time grid.
-    fill_value : float
-        Product fill value for ``Azimuth``.
 
     Returns
     -------
     np.ndarray
-        Shape ``(N,)``, dtype float32, filled with ``fill_value``.
+        Shape ``(N,)``, dtype float32, filled with the product ``_FillValue`` (-999).
     """
-    return np.full(n_samples, fill_value, dtype=np.float32)
+    return np.full(n_samples, _FILL_VALUE, dtype=np.float32)
 
 
 def create_jpss_only_azimuth(n_samples: int) -> np.ndarray:

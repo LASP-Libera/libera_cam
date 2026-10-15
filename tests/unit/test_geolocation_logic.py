@@ -497,21 +497,27 @@ def _euler_frame(euler3: list[float]) -> pd.DataFrame:
 
 
 @patch("libera_cam.geolocation.spatial.frame_to_frame_euler")
-@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2, 3]))
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2, 3, 4]))
 def test_calculate_azimuth_uses_curryer_frame_euler(mock_adapt, mock_euler, mock_kernel_manager):
-    """Azimuth is the third 1-2-3 Euler angle of BASE -> AZ, wrapped to [0, 360); CK gaps become fill."""
-    mock_euler.return_value = _euler_frame([-10.0, 350.0, np.nan])
-    timestamps = np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02"], dtype="datetime64[ns]")
+    """Azimuth is the third 1-2-3 Euler angle of BASE -> AZ, wrapped to [0, 360); CK gaps become fill.
+
+    -1e-6 wraps to a float64 just below 360 that rounds to 360.0 in float32, and must be written as 0.
+    """
+    mock_euler.return_value = _euler_frame([-10.0, 350.0, -1e-6, np.nan])
+    timestamps = np.array(
+        ["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02", "2025-01-01T00:00:03"],
+        dtype="datetime64[ns]",
+    )
 
     azimuth = calculate_azimuth(mock_kernel_manager, timestamps)
 
     mock_kernel_manager.ensure_known_kernels_are_furnished.assert_called_once()
     call = mock_euler.call_args
     assert call.args[:2] == ("LIBERA_BASE_COORD", "LIBERA_AZ_COORD")
-    np.testing.assert_array_equal(call.args[2], [1, 2, 3])
+    np.testing.assert_array_equal(call.args[2], [1, 2, 3, 4])
     assert call.kwargs == {"sequence": (1, 2, 3), "allow_nans": True}
     assert azimuth.dtype == np.float32
-    np.testing.assert_allclose(azimuth, [350.0, 350.0, -999.0])
+    np.testing.assert_array_equal(azimuth, np.array([350.0, 350.0, 0.0, -999.0], dtype=np.float32))
 
 
 @patch("libera_cam.geolocation.spatial.frame_to_frame_euler")
