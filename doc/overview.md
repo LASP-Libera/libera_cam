@@ -73,14 +73,14 @@ images sharing a single FSW timestamp; `Camera_Packet_Index` distinguishes them.
 L1B uses Dask for lazy L1A decompression, radiometry, and geolocation. Tune execution with
 environment variables before starting the pipeline:
 
-| Variable                    | Default       | Description                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `XARRAY_NETCDF_ENGINE`      | `h5netcdf`    | NetCDF engine used by `libera_utils` to write the product. Both engines write to S3. `distributed` writes through worker compression, which requires `h5netcdf`: libera-utils raises `ValueError` under `netcdf4`. `h5netcdf` is also faster and produces smaller granules (see the tuning guide).                                                                   |
-| `DASK_SCHEDULER`            | `synchronous` | Dask scheduler. **`synchronous`** (single-process, default) or **`distributed`** (local cluster with dashboard). **`threads`** and **`processes`** are not supported — CSPICE is not thread-safe within a worker.                                                                                                                                                    |
-| `DASK_NUM_WORKERS`          | `3`           | Number of Dask workers when using `distributed`. Each worker computes and compresses its own blocks; three is the setting measured on a full day (see AWS sizing below).                                                                                                                                                                                             |
-| `DASK_MEMORY_LIMIT`         | `9GB`         | Per-worker memory limit for `distributed`. It must cover one worker's worst moment, which the decompression chunk sets: at the default chunk of 20 a worker peaked at 4.3-7.2 GB, measured with HDF5 compressing in the writing process. With the workers compressing, the full July 12 day peaked at 10.7 GB for the whole task. Dask pauses a worker at 80% of it. |
-| `LIBERA_CAM_CHUNK_SIZE`     | `20`          | Number of L1A images per Dask batch during JPEG-LS decompression in `read_l1a_cam_data`. Lower values reduce peak memory; higher values reduce scheduler overhead.                                                                                                                                                                                                   |
-| `LIBERA_CAM_GEO_CHUNK_SIZE` | `5`           | Number of frames per per-pixel geometry task in `add_geolocation_to_dataset`, independent of the decompression chunk. Each task furnishes the kernels once and geolocates its frames one at a time.                                                                                                                                                                  |
+| Variable                    | Default       | Description                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `XARRAY_NETCDF_ENGINE`      | `h5netcdf`    | NetCDF engine used by `libera_utils` to write the product. Both engines write to S3. `distributed` writes through worker compression, which requires `h5netcdf`: libera-utils raises `ValueError` under `netcdf4`. `h5netcdf` is also faster and produces smaller granules (see the tuning guide).                                                                                   |
+| `DASK_SCHEDULER`            | `synchronous` | Dask scheduler. **`synchronous`** (single-process, default) or **`distributed`** (local cluster with dashboard). **`threads`** and **`processes`** are not supported — CSPICE is not thread-safe within a worker.                                                                                                                                                                    |
+| `DASK_NUM_WORKERS`          | `7`           | Number of Dask workers when using `distributed`. Each worker computes and compresses its own blocks, so the write speeds up with workers until they fill the task's vCPUs; seven suits the 8 vCPU / 60 GB task (see AWS sizing below).                                                                                                                                               |
+| `DASK_MEMORY_LIMIT`         | `8GB`         | Per-worker memory limit for `distributed`. It must cover one worker's worst moment, which the decompression chunk sets: at the default chunk of 20 a worker peaked at 4.3-7.2 GB, measured with HDF5 compressing in the writing process. With the workers compressing, the full July 12 day peaked at 15.8 GB for the whole task at the defaults. Dask pauses a worker at 80% of it. |
+| `LIBERA_CAM_CHUNK_SIZE`     | `20`          | Number of L1A images per Dask batch during JPEG-LS decompression in `read_l1a_cam_data`. Lower values reduce peak memory; higher values reduce scheduler overhead.                                                                                                                                                                                                                   |
+| `LIBERA_CAM_GEO_CHUNK_SIZE` | `5`           | Number of frames per per-pixel geometry task in `add_geolocation_to_dataset`, independent of the decompression chunk. Each task furnishes the kernels once and geolocates its frames one at a time.                                                                                                                                                                                  |
 
 ### Operator Tuning Guide
 
@@ -115,7 +115,7 @@ writing process:
 | 2 vCPU / 16 GB | 2 x 6 GB        | 10           | 5         | 22.9, 21.4 min | 3.6, 3.4 GB | 0 / 0                    |
 | 4 vCPU / 16 GB | 3 x 4.5 GB      | 20           | 10        | failed         | 6.7 GB      | 14 / 8, `KilledWorker`   |
 
-The defaults are the 4 vCPU / 30 GB row with chunks of 20 and 5. With HDF5 compressing in the
+The default chunks, 20 and 5, come from the 4 vCPU / 30 GB rows. With HDF5 compressing in the
 writing process, the smallest setting that ran cleanly was 2 vCPU / 16 GB with two 6 GB workers
 and a decompression chunk of 10; it also ran a full day of July 12 as four 6-hour granules of
 about 2,050 frames, each in 59-66 min at a 3.7-3.9 GB peak. In those runs HDF5 compressed every chunk in the single writing process, which was about 95%
@@ -126,7 +126,7 @@ disk peaks near the product size plus about 3-4 GB: 8-9 GB at 695 frames, 16-19 
 Under `distributed` the workers now compress the chunks of every Dask-backed three-dimensional
 variable and the writing process only stores them (libera-utils `worker_compressed_variables`).
 The full July 12 day, 8,205 frames in one file, ran through the l1b-cam step function on on-demand
-Fargate at the defaults (4 vCPU / 30 GB, three 9 GB workers, chunks of 20 and 5):
+Fargate at 4 vCPU / 30 GB with three 9 GB workers and chunks of 20 and 5:
 
 | Write path                 | Write and upload | Per frame | Step function | Task peak    | Product  |
 | -------------------------- | ---------------- | --------- | ------------- | ------------ | -------- |
@@ -143,8 +143,30 @@ Fargate does not fix the host CPU model, so it most likely ran on a faster host.
 logged a worker pause, restart or spill. The product is 0.55 GB smaller because chunks that are fill throughout,
 most of them in the `Terrain_Corrected_*` placeholders, are not stored; HDF5 returns the fill
 value for them. Locally, on 150 frames of the same day, the two write paths produced
-bit-identical variables. How speed scales with the number of workers on
-this path is not yet measured.
+bit-identical variables.
+
+With the workers compressing, the write scales with vCPUs. On the DITL2 granule as on-demand
+Fargate tasks, with chunks of 20 and 5, two runs each:
+
+| Task             | Workers x limit | Write per frame | CPU average | Task peak |
+| ---------------- | --------------- | --------------- | ----------- | --------- |
+| 4 vCPU / 30 GB   | 3 x 9 GB        | 1.06, 1.07 s    | 2.9 vCPU    | 3.6 GB    |
+| 4 vCPU / 30 GB   | 4 x 6 GB        | 1.05, 1.02 s    | 3.6 vCPU    | 4.9 GB    |
+| 8 vCPU / 60 GB   | 6 x 9 GB        | 0.53, 0.62 s    | 5.5 vCPU    | 6.4 GB    |
+| 8 vCPU / 60 GB   | 7 x 8 GB        | 0.52, 0.51 s    | 6.0 vCPU    | 8.0 GB    |
+| 16 vCPU / 120 GB | 12 x 9 GB       | 0.30, 0.29 s    | 10.6 vCPU   | 12.2 GB   |
+
+The defaults are the 8 vCPU / 60 GB row with seven 8 GB workers: half the write time of 4 vCPU
+at the same Fargate cost per day, about $0.70 for a full day's write, and within a compute
+environment capped at 10 vCPU. At 4 vCPU a fourth worker gains 3%, because the CPU is already
+full. From 4 to 16 vCPU the write runs 3.6 times faster, so the single writing process is not yet
+the limit. The 3 x 9 GB rows match the full day's 1.09 s per frame. No run logged a worker pause,
+restart or spill.
+
+At the defaults, the full July 12 day wrote in 1 h 20 min against 2 h 28 min, 0.58 s/frame, as a
+direct Batch job of 1 h 29 min. It stored the same 1,607,052 chunks in the same 57.31 GB product,
+peaked at 15.8 GB of the task's 60 GB and 62.8 GB of disk, averaged 6.2 of 8 vCPU, and logged no
+worker pause, restart or spill.
 
 ### Data volume and throughput
 
@@ -277,16 +299,17 @@ export DASK_SCHEDULER=synchronous
 libera-cam /path/to/input_manifest.json
 ```
 
-Multi-worker local cluster at the defaults. Three workers at `9GB` may use up to 27 GB between
-them; the full July 12 day peaked at 10.7 GB with the workers compressing. On a 16 GB machine,
+Multi-worker local cluster at the defaults, which are sized for an 8 vCPU / 60 GB task. Seven
+workers at `8GB` may use up to 56 GB between them; the full July 12 day peaked at 15.8 GB with
+the workers compressing. On a smaller machine, use one worker per core. On a 16 GB machine,
 two workers at `6GB` with `LIBERA_CAM_CHUNK_SIZE=10` ran cleanly with HDF5 compressing in the
 writing process (see AWS sizing):
 
 ```bash
 export PROCESSING_PATH=/path/to/output
 export DASK_SCHEDULER=distributed
-export DASK_NUM_WORKERS=3
-export DASK_MEMORY_LIMIT=9GB
+export DASK_NUM_WORKERS=7
+export DASK_MEMORY_LIMIT=8GB
 export LIBERA_CAM_CHUNK_SIZE=20
 export LIBERA_CAM_GEO_CHUNK_SIZE=5
 libera-cam /path/to/input_manifest.json
