@@ -107,8 +107,10 @@ function, 1.09 s/frame against 2.7 (one of four runs took 1 h 47 min), at a 10.8
 
 The writing process still receives every compressed chunk and writes the file alone. Workers
 writing their chunks to disk or to S3 themselves (region writes, or a Zarr target) would remove
-that hand-off, but it is no longer the bottleneck. Still to measure on this path: how speed scales
-with the number of workers, since three 9 GB workers keep the CPU at about 2.8 of 4 vCPU.
+that hand-off, but it is no longer the bottleneck. The write scales with vCPUs up to at
+least 16 (0.29-0.30 s/frame on the DITL2 granule, against 1.06-1.07 at 4), so the defaults moved
+to seven 8 GB workers for an 8 vCPU / 60 GB task, which wrote the full July 12 day in 1 h 20 min
+at a 15.8 GB peak.
 
 ---
 
