@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import dask
+import numpy as np
 import xarray as xr
 from cloudpathlib import AnyPath, S3Path
 from dask.distributed import Client
@@ -38,9 +39,11 @@ from libera_cam.version import version as libera_cam_version
 logger = logging.getLogger(__name__)
 
 _ALLOWED_DASK_SCHEDULERS = frozenset({"synchronous", "distributed"})
+# Radiance's product _FillValue, written where the camera's onboard pixel mask removed the pixel.
+_RADIANCE_FILL = np.float32(-999.0)
 _USE_DASK_DASHBOARD = False  # Set to True to enable Dask dashboard for debugging; requires distributed scheduler
 _DASK_DASHBOARD_SESSION_TOKEN_EXPIRATION_MS = 3_600_000
-_DEFAULT_DASK_NUM_WORKERS = 1
+_DEFAULT_DASK_NUM_WORKERS = 7
 _DEFAULT_DASK_MEMORY_LIMIT = "8GB"
 
 # Required dynamic SPICE inputs keyed by Libera data product id (see libera_utils.constants).
@@ -92,7 +95,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     -----
     Manifest ``configuration.use_geo`` controls geolocation behavior. When
     ``use_geo`` is false, SPICE kernel files are skipped during input read and
-    placeholder lat/lon/alt values are written. Omitting the key defaults to
+    the per-pixel geolocation is written as fill values. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
     frame, ``Azimuth`` 0 degrees) and cannot be combined with ``use_geo: false``.
@@ -169,10 +172,11 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
 
         # Steps 4: Store data with metadata and write to output folder
         logger.info("Step 4: Creating and writing data product")
-        # This is where the Dask compute happens. NetCDF writing funnels computed blocks through the client process.
+        # This is where the Dask compute happens. Under the distributed scheduler the workers compress the
+        # per-pixel variables' chunks and the client process stores them; otherwise HDF5 compresses as it writes.
         start = datetime.now()
         packaged_data = package_l1b_product(processed_data)
-        output_files = write_data_product(packaged_data, dropbox_path)
+        output_files = write_data_product(packaged_data, dropbox_path, compress_on_workers=client is not None)
         end = datetime.now()
         logger.info(f"Wrote data product in {(end - start).total_seconds()} seconds")
 
@@ -337,9 +341,11 @@ def process_l1a_to_l1b(
 
     This function coordinates the core L1A to L1B camera processing steps:
     - Parse the input L1A camera data into a working dataset
-    - Convert DN to radiance (lazy when backed by Dask arrays)
-    - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
-      or placeholders when ``use_geo`` is false
+    - Convert DN to radiance (lazy when backed by Dask arrays), written as fill where the
+      camera's onboard pixel mask removed the pixel
+    - Add the per-pixel geolocation and surface angles (lazy Dask tasks of
+      ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames), JPSS-only LIBERA_BASE geolocation, or
+      placeholders when ``use_geo`` is false
     - Add the spacecraft-level geometry (sub-points, satellite radius, inertial position and
       velocity, attitude quaternion, Earth-Sun distance), or placeholders when ``use_geo`` is
       false
@@ -390,6 +396,7 @@ def process_l1a_to_l1b(
     cam_dataset = read_l1a_cam_data(l1a_cam_data)
 
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
+    calibrated_images = calibrated_images.where(cam_dataset.valid_pixel_mask, _RADIANCE_FILL)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
 
     # Apply Geolocation (Lazy), the spacecraft-level geometry and the motor azimuth (eager, one
@@ -407,9 +414,7 @@ def process_l1a_to_l1b(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
-        cam_dataset = add_jpss_only_geolocation_to_dataset(
-            cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask
-        )
+        cam_dataset = add_jpss_only_geolocation_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_jpss_only_azimuth_to_dataset(cam_dataset)
     else:
@@ -419,7 +424,7 @@ def process_l1a_to_l1b(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
-        cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
+        cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
         cam_dataset = add_azimuth_to_dataset(cam_dataset, geo_config)
 
@@ -429,6 +434,8 @@ def process_l1a_to_l1b(
 def write_data_product(
     processed_data: xr.Dataset,
     output_path: str,
+    *,
+    compress_on_workers: bool,
 ) -> LiberaDataProductFilename:
     """
     Takes a file named in the input manifest and generates the output nectdf4 file, with tags and correct output name
@@ -438,14 +445,34 @@ def write_data_product(
         The dataset to write
     output_path: str
         The path to write the output file to
+    compress_on_workers: bool
+        Whether the Dask workers of the active ``dask.distributed`` Client compress the chunks of every
+        Dask-backed three-dimensional data variable, which libera-utils then stores directly
 
     Returns
     -------
     data_product_filenames: LiberaDataProductFilename
         The valid filename of the written data product(s)
+
+    Raises
+    ------
+    ValueError
+        If `compress_on_workers` is True and the dataset has no Dask-backed three-dimensional data variable.
     """
     if not product_config_path.exists():
         raise FileNotFoundError(f"Product definition file not found: {product_config_path}")
+
+    worker_compressed_variables = ()
+    if compress_on_workers:
+        worker_compressed_variables = tuple(
+            str(name)
+            for name, variable in processed_data.data_vars.items()
+            if variable.ndim == 3 and variable.chunks is not None
+        )
+        if not worker_compressed_variables:
+            raise ValueError(
+                "compress_on_workers is set, but the dataset has no Dask-backed three-dimensional variable"
+            )
 
     processed_data.attrs["algorithm_version"] = libera_cam_version()
 
@@ -454,6 +481,7 @@ def write_data_product(
         data=processed_data,
         output_path=output_path,
         time_variable="CAMERA_TIME",
+        worker_compressed_variables=worker_compressed_variables,
     )
 
     return output_files
