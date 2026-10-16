@@ -126,19 +126,19 @@ variable and the writing process only stores them (libera-utils `worker_compress
 The full July 12 day, 8,205 frames in one file, ran through the l1b-cam step function on on-demand
 Fargate at the defaults (4 vCPU / 30 GB, three 9 GB workers, chunks of 20 and 5):
 
-| Write path              | Write and upload | Per frame | Step function | Task peak    | Product  |
-| ----------------------- | ---------------- | --------- | ------------- | ------------ | -------- |
-| HDF5 compresses         | about 6 h 11 min | 2.7 s     | 6 h 17 min    | not recorded | 57.86 GB |
-| Workers compress, run 1 | 1 h 37 min       | 0.69 s    | 1 h 47 min    | not recorded | 57.31 GB |
-| Workers compress, run 2 | 2 h 33 min       | 1.09 s    | 2 h 43 min    | 10.7 GB      | 57.31 GB |
+| Write path                 | Write and upload | Per frame | Step function | Task peak    | Product  |
+| -------------------------- | ---------------- | --------- | ------------- | ------------ | -------- |
+| HDF5 compresses            | about 6 h 11 min | 2.7 s     | 6 h 17 min    | not recorded | 57.86 GB |
+| Workers compress, run 1    | 1 h 37 min       | 0.69 s    | 1 h 47 min    | not recorded | 57.31 GB |
+| Workers compress, runs 2-4 | 2 h 32-33 min    | 1.09 s    | 2 h 42-43 min | 10.7-10.8 GB | 57.31 GB |
 
-Per frame is the write alone, without the upload of about 3.7 min. Run 2 had Container Insights
-on: memory peaked at 10.7 GB of the task's 30 GB and averaged 9.9 GB, ephemeral disk peaked at
-62.8 GB, and CPU averaged 2.9 of 4 vCPU. Neither worker run logged a worker pause, restart or
-spill. The two worker runs used the same image, the same L1A and kernels with identical segment
-data, and stored the same 1,607,052 chunks, yet the write in run 2 took 59% longer; the cause is
-not identified. Fargate does not fix the host CPU model, and Container Insights was the only
-setting that differed. The product is 0.55 GB smaller because chunks that are fill throughout,
+Per frame is the write alone, without the upload of about 3.7 min. Runs 2-4 are the typical
+time: their writes, over 18 hours, two with Container Insights on and one with it off, were
+within 32 s of each other. With Insights on, memory peaked at 10.7-10.8 GB of the task's 30 GB
+and averaged 9.8-9.9 GB, ephemeral disk peaked at 62.8 GB, and CPU averaged 2.8-2.9 of 4 vCPU.
+Run 1's write took 37% less time with the same image, L1A, kernels and 1,607,052 stored chunks;
+Fargate does not fix the host CPU model, so it most likely ran on a faster host. No worker run
+logged a worker pause, restart or spill. The product is 0.55 GB smaller because chunks that are fill throughout,
 most of them in the `Terrain_Corrected_*` placeholders, are not stored; HDF5 returns the fill
 value for them. Locally, on 150 frames of the same day, the two write paths produced
 bit-identical variables. How speed scales with the number of workers on

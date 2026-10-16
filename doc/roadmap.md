@@ -100,15 +100,15 @@ Done for compression in 0.3.2. Under `distributed` the workers shuffle and defla
 every Dask-backed three-dimensional variable, and the writing process stores the compressed bytes
 with HDF5 `write_direct_chunk` (libera-utils `worker_compressed_variables`). Before, HDF5
 compressed every chunk in the single writing process, about 95% of wall time on AWS. The full
-July 12 day (8,205 frames) went from 6 h 17 min to 1 h 47 min through the l1b-cam step function,
-0.69 s/frame against 2.7, at a 10.7 GB peak of the task's 30 GB, with the same values on read (see `overview.md`, AWS sizing).
+July 12 day (8,205 frames) went from 6 h 17 min to about 2 h 42 min through the l1b-cam step
+function, 1.09 s/frame against 2.7 (one of four runs took 1 h 47 min), at a 10.8 GB peak of the task's 30 GB, with the same values on read (see `overview.md`, AWS sizing).
 
 ### Remaining
 
 The writing process still receives every compressed chunk and writes the file alone. Workers
 writing their chunks to disk or to S3 themselves (region writes, or a Zarr target) would remove
-that hand-off, but it is no longer the bottleneck. Still to measure on this path: why a second
-identical full-day run took 2 h 43 min instead of 1 h 47 min, and how speed scales with the number of workers.
+that hand-off, but it is no longer the bottleneck. Still to measure on this path: how speed scales
+with the number of workers, since three 9 GB workers keep the CPU at about 2.8 of 4 vCPU.
 
 ---
 
