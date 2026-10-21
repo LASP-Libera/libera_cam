@@ -64,7 +64,7 @@ def make_synthetic_l1a(
 def _fake_decompress(payload: bytes) -> tuple[np.ndarray, np.ndarray]:
     """Stand in for JPEG-LS decode, returning an image filled with the payload's marker byte."""
     shape = (constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X)
-    return np.full(shape, payload[0], dtype=np.int32), np.zeros(shape, dtype=np.uint8)
+    return np.full(shape, payload[0], dtype=np.uint16), np.zeros(shape, dtype=np.uint8)
 
 
 def test_drops_invalid_header_rows_keeping_images_aligned_with_metadata(tmp_path):
@@ -76,6 +76,8 @@ def test_drops_invalid_header_rows_keeping_images_aligned_with_metadata(tmp_path
         image_markers = ds["image_data"][:, 0, 0].compute().values
 
     assert ds.sizes["camera_time"] == 2
+    # The dask array's declared dtype matches what the decode chunks compute.
+    assert ds["image_data"].dtype == image_markers.dtype == np.uint16
     # Rows 0 and 3 survive: their metadata, times, and image payloads must all still line up.
     np.testing.assert_array_equal(ds["camera_packet_index"].values, [0, 3])
     np.testing.assert_array_equal(ds["azimuth_angle"].values, [0.0, 3.0])

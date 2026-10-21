@@ -221,7 +221,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
 
         delayed_image_chunks.append(
             da.from_delayed(
-                out[0], shape=(actual_size, constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X), dtype=np.int32
+                out[0], shape=(actual_size, constants.PIXEL_COUNT_Y, constants.PIXEL_COUNT_X), dtype=np.uint16
             )
         )
         delayed_mask_chunks.append(

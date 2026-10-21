@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Dependencies**: Replaced `pillow-jpls` with `pyjpegls>=1.5.1` for JPEG-LS decompression. `pillow-jpls` publishes wheels only through cp312, so Python 3.13 installs built it from source through Conan and CMake and failed outright on gcc 14 hosts. `pyjpegls` binds the same CharLS codec and ships wheels for cp39–cp313 on manylinux x86_64 and aarch64, macOS, and Windows, so no interpreter in the supported range needs a compiler. Decoded sample values are unchanged.
+- **Image decoding**: `read_l1a_cam_data` returns `image_data` as `uint16` (was `int32`), the decoder's native sample type and the L1B `Pixel_Counts` dtype. Values and the L1B product are unchanged.
 
 ## [0.3.0] - 2026-10-06
 

@@ -16,6 +16,7 @@ def test_decompress_image(mock_jlsread):
     img_data, mask_data = l1a_parser.decompress_image(b"fake_jpls_bytes")
 
     mock_jlsread.assert_called_once_with(b"fake_jpls_bytes")
+    assert img_data.dtype == np.uint16
     assert img_data[0, 0] == 0xFFF
     assert mask_data[0, 0] == 1
     assert img_data[0, 1] == 0xABC

@@ -22,13 +22,13 @@ def decompress_image(jpeg_ls_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
     Returns
     -------
     image_data : ndarray
-        12-bit pixel values (int32), shape (PIXEL_COUNT_Y, PIXEL_COUNT_X).
+        12-bit pixel values (uint16), shape (PIXEL_COUNT_Y, PIXEL_COUNT_X).
     integration_mask : ndarray
-        1-bit exposure mask from bit 12 (uint8), same shape as ``image_data``.
+        1-bit exposure mask (uint8) from bit 12, zero-indexed (mask 0x1000), same shape as ``image_data``.
     """
     # jlsread returns a (rows, columns) array of the raw 13-bit sample values.
     try:
-        raw_image_data = jpeg_ls.jlsread(jpeg_ls_bytes).astype(np.int32)
+        raw_image_data = jpeg_ls.jlsread(jpeg_ls_bytes).astype(np.uint16)
     except Exception as e:
         logger.error("JPEG-LS Decompression failed: %s", e)
         raise
