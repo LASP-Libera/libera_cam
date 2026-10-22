@@ -10,6 +10,20 @@ from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 # TODO[LIBSDC-844]: This needs to be updated/confirmed and documented
 _DUAL_EXPOSURE_LAG_MS = (111.0, 350.0)
 
+# Regression reference values for the DITL fixture's three decoded images.
+_REFERENCE_FRAME_SUMS = [  # (image_data sum, integration_mask sum) per camera_time row
+    (244_254_807, 302_923),
+    (2_068_130_237, 4_194_304),
+    (250_540_867, 310_474),
+]
+_REFERENCE_FRAME1_PIXELS = [  # (y, x, image_data, integration_mask); frames 0 and 2 are mostly zero
+    (0, 0, 192, 1),
+    (512, 1536, 756, 1),
+    (1024, 1024, 333, 1),
+    (1536, 512, 380, 1),
+    (2047, 2047, 200, 1),
+]
+
 
 @pytest.mark.integration
 def test_read_ditl_l1a_cam_data(test_ditl_l1a_file_path):
@@ -33,6 +47,18 @@ def test_read_ditl_l1a_cam_data(test_ditl_l1a_file_path):
 
     expected_mask = img_slice > 0
     np.testing.assert_array_equal(mask_slice, expected_mask)
+
+    # Decoded values match the regression reference values
+    image_data = image_dataset.image_data.values
+    integration_mask = image_dataset.integration_mask.values
+    frame_sums = [
+        (int(image_data[i].sum(dtype=np.int64)), int(integration_mask[i].sum(dtype=np.int64)))
+        for i in range(len(_REFERENCE_FRAME_SUMS))
+    ]
+    assert frame_sums == _REFERENCE_FRAME_SUMS
+    for y, x, dn, mask in _REFERENCE_FRAME1_PIXELS:
+        assert image_data[1, y, x] == dn
+        assert integration_mask[1, y, x] == mask
 
 
 @pytest.mark.integration

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import io
 import logging
 
+import jpeg_ls
 import numpy as np
-import pillow_jpls  # noqa: F401 - Register JPEG-LS plugin
-from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +22,16 @@ def decompress_image(jpeg_ls_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
     Returns
     -------
     image_data : ndarray
-        12-bit pixel values (int32), shape (PIXEL_COUNT_Y, PIXEL_COUNT_X).
+        12-bit pixel values (uint16), shape (PIXEL_COUNT_Y, PIXEL_COUNT_X).
     integration_mask : ndarray
-        1-bit exposure mask from bit 12 (uint8), same shape as ``image_data``.
+        1-bit exposure mask (uint8) from bit 12, zero-indexed (mask 0x1000), same shape as ``image_data``.
     """
-    with io.BytesIO(jpeg_ls_bytes) as bytes_io:
-        try:
-            with Image.open(bytes_io) as img:
-                raw_image_data = np.array(img, dtype=np.int32)
-        except Exception as e:
-            logger.error("JPEG-LS Decompression failed: %s", e)
-            raise
+    # jlsread returns a (rows, columns) array of the raw 13-bit sample values.
+    try:
+        raw_image_data = jpeg_ls.jlsread(jpeg_ls_bytes).astype(np.uint16)
+    except Exception as e:
+        logger.error("JPEG-LS Decompression failed: %s", e)
+        raise
 
     image_12bit = raw_image_data & 0x0FFF
     integration_mask = (raw_image_data >> 12) & 0x0001
