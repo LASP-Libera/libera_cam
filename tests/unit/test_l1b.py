@@ -4,12 +4,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
+import dask.array as da
+import numpy as np
 import pytest
 import xarray as xr
+import yaml
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.manifest import Manifest
 
 from libera_cam import l1b
+from libera_cam.config import product_config_path
 from libera_cam.version import version as libera_cam_version
 
 WFOV_L1A_FILENAME = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
@@ -69,7 +73,7 @@ class TestL1b(unittest.TestCase):
         mock_read.assert_called_with(mock_manifest)
         mock_process.assert_called_with(mock_l1a_data, mock_dynamic_kernel_sources, use_geo=True, jpss_only_mode=False)
         mock_package.assert_called_once_with(mock_processed_ds)
-        mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox")
+        mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox", compress_on_workers=False)
 
         # Verify input configuration is propagated to the output manifest
         mock_out_man.configuration.update.assert_called_once_with({})
@@ -181,13 +185,17 @@ class TestL1b(unittest.TestCase):
         l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, use_geo=True)
 
         mock_geo.assert_called_once()
-        call_kwargs = mock_geo.call_args
-        assert call_kwargs.args[1].dynamic_kernel_sources == dynamic_kernel_sources
-        assert call_kwargs.kwargs["pixel_mask"] is mock_lazy_ds.valid_pixel_mask
+        geo_config = mock_geo.call_args.args[1]
+        # The kept-pixel mask travels in the dataset as valid_pixel_mask, not as an argument.
+        assert mock_geo.call_args.kwargs == {}
+        # Radiance is fill wherever the onboard pixel mask removed the pixel.
+        mock_radiance.where.assert_called_once_with(mock_lazy_ds.valid_pixel_mask, l1b._RADIANCE_FILL)
+        assert mock_geo.call_args.args[0] is mock_lazy_ds
+        assert geo_config.dynamic_kernel_sources == dynamic_kernel_sources
 
         # The spacecraft-level fields and the motor azimuth share the geolocation kernel config.
-        mock_spacecraft_geo.assert_called_once_with(mock_lazy_ds, call_kwargs.args[1])
-        mock_azimuth.assert_called_once_with(mock_lazy_ds, call_kwargs.args[1])
+        mock_spacecraft_geo.assert_called_once_with(mock_lazy_ds, geo_config)
+        mock_azimuth.assert_called_once_with(mock_lazy_ds, geo_config)
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
@@ -220,6 +228,9 @@ class TestL1b(unittest.TestCase):
         result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, jpss_only_mode=True)
 
         mock_jpss_geo.assert_called_once()
+        assert mock_jpss_geo.call_args.kwargs == {}
+        assert mock_jpss_geo.call_args.args[0] is mock_lazy_ds
+        assert mock_jpss_geo.call_args.args[1].dynamic_kernel_sources == dynamic_kernel_sources
         # The spacecraft fields need no instrument frame, so jpss_only takes the same path.
         mock_spacecraft_geo.assert_called_once()
         mock_jpss_azimuth.assert_called_once_with(mock_lazy_ds)
@@ -240,6 +251,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
         mock_lazy_ds.integration_mask = MagicMock()
+        mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.sizes = {"camera_time": 2}
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
         mock_read_l1a.return_value = mock_lazy_ds
@@ -267,6 +279,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
         mock_lazy_ds.integration_mask = MagicMock()
+        mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
         mock_read_l1a.return_value = mock_lazy_ds
         mock_convert.return_value = MagicMock()
@@ -283,11 +296,39 @@ class TestL1b(unittest.TestCase):
         mock_filenames = (MagicMock(), MagicMock())
         mock_write_libera.return_value = mock_filenames
 
-        result = l1b.write_data_product(mock_ds, "/tmp/out")
+        result = l1b.write_data_product(mock_ds, "/tmp/out", compress_on_workers=False)
 
         assert result == mock_filenames
         assert mock_ds.attrs["algorithm_version"] == libera_cam_version()
         mock_write_libera.assert_called_once()
+        assert mock_write_libera.call_args.kwargs["worker_compressed_variables"] == ()
+
+    @patch("libera_cam.l1b.write_libera_data_product")
+    def test_write_data_product_names_the_dask_backed_three_dimensional_variables(self, mock_write_libera):
+        """compress_on_workers passes every Dask-backed 3-D data variable, and nothing else, to libera-utils"""
+        dims = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+        dataset = xr.Dataset(
+            {
+                "Radiance": (dims, da.zeros((2, 4, 4), chunks=1, dtype=np.float32)),
+                "Latitude": (dims, da.zeros((2, 4, 4), chunks=1, dtype=np.float32)),
+                "Eager_Image": (dims, np.zeros((2, 4, 4), dtype=np.float32)),
+                "Quality_Flag": (("CAMERA_TIME",), da.zeros(2, chunks=1, dtype=np.uint32)),
+            }
+        )
+
+        l1b.write_data_product(dataset, "/tmp/out", compress_on_workers=True)
+
+        assert mock_write_libera.call_args.kwargs["worker_compressed_variables"] == ("Radiance", "Latitude")
+
+    @patch("libera_cam.l1b.write_libera_data_product")
+    def test_write_data_product_with_no_dask_backed_three_dimensional_variable_raises(self, mock_write_libera):
+        """compress_on_workers with nothing to compress fails rather than quietly writing on one thread"""
+        dims = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+        dataset = xr.Dataset({"Radiance": (dims, np.zeros((2, 4, 4), dtype=np.float32))})
+
+        with pytest.raises(ValueError, match="no Dask-backed three-dimensional variable"):
+            l1b.write_data_product(dataset, "/tmp/out", compress_on_workers=True)
+        mock_write_libera.assert_not_called()
 
 
 class TestReadAllInputDataSpiceKernels:
@@ -474,3 +515,9 @@ class TestAlgorithmUseGeoConfiguration:
             mock_from_file.return_value = Mock(files=[], configuration={})
             with pytest.raises(ValueError, match="PROCESSING_PATH environment variable is not set"):
                 l1b.algorithm(argparse.Namespace(manifest="input.json"))
+
+
+def test_radiance_fill_is_the_product_fill_value():
+    radiance = yaml.safe_load(product_config_path.read_text())["variables"]["Radiance"]
+    assert l1b._RADIANCE_FILL == np.float32(radiance["attributes"]["_FillValue"])
+    assert l1b._RADIANCE_FILL.dtype == np.dtype(radiance["dtype"])
