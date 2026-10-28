@@ -39,7 +39,9 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    "libera-utils >= 5.10.5,<6.0.0",
+    # 5.14.0 names data products with a microsecond timestamp revision (R + YYYYMMDDTHHMMSSffffff)
+    # and rejects the earlier R + YYDDDHHMMSS form.
+    "libera-utils >= 5.14.0,<6.0.0",
     # Imported directly by geolocation.py. 0.5.3 adds `GeometryData.get_geometry(require_coverage=)`,
     # which the spacecraft-level geometry query relies on to fail on a missing attitude or
     # ephemeris kernel.

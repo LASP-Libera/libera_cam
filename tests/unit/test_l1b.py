@@ -12,7 +12,7 @@ from libera_utils.io.manifest import Manifest
 from libera_cam import l1b
 from libera_cam.version import version as libera_cam_version
 
-WFOV_L1A_FILENAME = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+WFOV_L1A_FILENAME = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
 
 
 class TestL1b(unittest.TestCase):
@@ -89,11 +89,11 @@ class TestL1b(unittest.TestCase):
         mock_file_info = MagicMock()
         mock_file_info.filename = "test_l1a.nc"
         az_file = MagicMock()
-        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R26021234221.bc"
+        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
         jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
         jpss_ck = MagicMock()
-        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc"
+        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
         mock_manifest = MagicMock()
         mock_manifest.files = [mock_file_info, az_file, jpss_spk, jpss_ck]
         mock_manifest.configuration = {}
@@ -209,8 +209,8 @@ class TestL1b(unittest.TestCase):
         mock_frame_geo.return_value = mock_lazy_ds
 
         dynamic_kernel_sources = [
-            "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp",
-            "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc",
+            "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp",
+            "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc",
         ]
         result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, jpss_only_mode=True)
 
@@ -294,13 +294,15 @@ class TestReadAllInputDataSpiceKernels:
         import logging
 
         nc_file = MagicMock()
-        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        nc_file.filename = (
+            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        )
         az_file = MagicMock()
-        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R26021234221.bc"
+        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
         jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
         jpss_ck = MagicMock()
-        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc"
+        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, az_file, jpss_spk, jpss_ck]
@@ -320,13 +322,15 @@ class TestReadAllInputDataSpiceKernels:
     def test_read_all_input_data_production_collects_required_kernels(self, mock_open_ds):
         """Production mode collects AZROT + JPSS kernels in furnish order."""
         nc_file = MagicMock()
-        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        nc_file.filename = (
+            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        )
         az_file = MagicMock()
-        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R26021234221.bc"
+        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
         jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
         jpss_ck = MagicMock()
-        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R26006200700.bc"
+        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, jpss_ck, az_file, jpss_spk]
@@ -342,11 +346,13 @@ class TestReadAllInputDataSpiceKernels:
     def test_read_all_input_data_duplicate_spice_raises(self, mock_open_ds):
         """Duplicate SPICE data product IDs in the manifest raise ValueError."""
         nc_file = MagicMock()
-        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        nc_file.filename = (
+            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        )
         jpss_spk_a = MagicMock()
-        jpss_spk_a.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_spk_a.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
         jpss_spk_b = MagicMock()
-        jpss_spk_b.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T235900_R26006200657.bsp"
+        jpss_spk_b.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T235900_R20260106T200657000000.bsp"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, jpss_spk_a, jpss_spk_b]
@@ -361,9 +367,11 @@ class TestReadAllInputDataSpiceKernels:
     def test_read_all_input_data_missing_required_spice_raises(self, mock_open_ds):
         """Missing required SPICE kernels raise ValueError."""
         nc_file = MagicMock()
-        nc_file.filename = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R26021133743.nc"
+        nc_file.filename = (
+            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        )
         jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R26006200656.bsp"
+        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, jpss_spk]

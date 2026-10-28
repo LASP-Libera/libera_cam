@@ -229,7 +229,7 @@ def ditl_frame_geometry(test_data_path):
     l1a_path = (
         test_data_path
         / "DITL_3min"
-        / "LIBERA_L1A_WFOV-SCI-DECODED_V5-10-6_20280212T034136_20280212T034141_R26247171104.nc"
+        / "LIBERA_L1A_WFOV-SCI-DECODED_V5-10-6_20280212T034136_20280212T034141_R20260904T171104000000.nc"
     )
     with xr.open_dataset(l1a_path) as l1a_ds:
         ds = read_l1a_cam_data(l1a_ds)
