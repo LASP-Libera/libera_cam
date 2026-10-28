@@ -58,15 +58,15 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     ):
         dataset.attrs.pop(attr_name, None)
 
-    # ``Azimuth`` is the motor encoder angle from the SPICE CK, set during processing. The FSW
+    # ``Azimuth_Motor_Position_SPICE`` is the motor encoder angle from the SPICE CK, set during processing. The FSW
     # image-header ``azimuth_angle`` is a different quantity and passes through as
-    # ``Azimuth_FSW_Metadata``.
+    # ``Azimuth_Motor_Position_FSW_Metadata``.
     if "azimuth_angle" not in dataset:
         raise ValueError("Dataset must contain the FSW header 'azimuth_angle' variable from read_l1a_cam_data.")
 
     # 1. Rename variables/dims to match Product Definition.
     rename_map = {
-        "azimuth_angle": "Azimuth_FSW_Metadata",
+        "azimuth_angle": "Azimuth_Motor_Position_FSW_Metadata",
         "rad_obs_id": "Radiometer_Observation_ID",
         "cam_obs_id": "Camera_Observation_ID",
         "img_mode": "Image_Mode",
@@ -109,7 +109,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
 
     # 4. Ensure Types (Cast if necessary)
     type_map = {
-        "Azimuth_FSW_Metadata": np.float32,
+        "Azimuth_Motor_Position_FSW_Metadata": np.float32,
         "Radiometer_Observation_ID": np.uint16,
         "Camera_Observation_ID": np.uint16,
         "Image_Mode": np.uint8,

@@ -24,7 +24,7 @@ def _processing_dataset() -> xr.Dataset:
             # FSW image-header azimuth (degrees); not a product variable.
             "azimuth_angle": (("camera_time",), np.array([0.1, 0.2], dtype=np.float32)),
             # Motor azimuth from the SPICE CK (degrees), set during processing.
-            "Azimuth": (("camera_time",), np.array([12.5, 13.0], dtype=np.float32)),
+            "Azimuth_Motor_Position_SPICE": (("camera_time",), np.array([12.5, 13.0], dtype=np.float32)),
             "Satellite_Position": (("camera_time", "EUCLIDEAN_DIM"), np.ones((n_times, 3))),
         },
         coords={"camera_time": times, "y": np.arange(n_y), "x": np.arange(n_x)},
@@ -40,13 +40,20 @@ def test_package_transposes_images_and_keeps_state_vector_dimension():
 
 
 def test_package_keeps_ck_and_header_azimuths_separate():
-    """``Azimuth`` is the CK motor angle; the header ``azimuth_angle`` becomes ``Azimuth_FSW_Metadata``."""
+    """``Azimuth_Motor_Position_SPICE`` is the CK motor angle.
+
+    The header ``azimuth_angle`` becomes ``Azimuth_Motor_Position_FSW_Metadata``.
+    """
     packaged = package_l1b_product(_processing_dataset())
 
-    np.testing.assert_array_equal(packaged["Azimuth"].values, np.array([12.5, 13.0], dtype=np.float32))
-    assert packaged["Azimuth"].dtype == np.float32
-    np.testing.assert_array_equal(packaged["Azimuth_FSW_Metadata"].values, np.array([0.1, 0.2], dtype=np.float32))
-    assert packaged["Azimuth_FSW_Metadata"].dtype == np.float32
+    np.testing.assert_array_equal(
+        packaged["Azimuth_Motor_Position_SPICE"].values, np.array([12.5, 13.0], dtype=np.float32)
+    )
+    assert packaged["Azimuth_Motor_Position_SPICE"].dtype == np.float32
+    np.testing.assert_array_equal(
+        packaged["Azimuth_Motor_Position_FSW_Metadata"].values, np.array([0.1, 0.2], dtype=np.float32)
+    )
+    assert packaged["Azimuth_Motor_Position_FSW_Metadata"].dtype == np.float32
     assert "azimuth_angle" not in packaged
 
 

@@ -75,7 +75,7 @@ _VECTOR_VARIABLES: dict[geometry.GeometryField, tuple[str, type]] = {
     geometry.GeometryField.SC_VELOCITY_INERTIAL: ("Satellite_Velocity", np.float64),
 }
 _EARTH_SUN_DISTANCE_ATTRIBUTE = "Earth_Sun_Distance_AU"
-_AZIMUTH_VARIABLE = "Azimuth"
+_AZIMUTH_VARIABLE = "Azimuth_Motor_Position_SPICE"
 
 
 @dataclass
@@ -455,7 +455,7 @@ def create_jpss_only_azimuth(n_samples: int) -> np.ndarray:
 
 def add_azimuth_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
     """
-    Compute the motor azimuth from the azimuth CK and add it to the dataset as ``Azimuth``.
+    Compute the motor azimuth from the azimuth CK and add it to the dataset as ``Azimuth_Motor_Position_SPICE``.
 
     One value per camera frame, computed eagerly on the client like the spacecraft geometry.
     Kernels are furnished and unloaded within this call.
@@ -470,7 +470,7 @@ def add_azimuth_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> x
     Returns
     -------
     xr.Dataset
-        The dataset with the ``Azimuth`` variable added.
+        The dataset with the ``Azimuth_Motor_Position_SPICE`` variable added.
 
     Raises
     ------
@@ -496,13 +496,13 @@ def add_azimuth_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> x
 
 
 def add_placeholder_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
-    """Add a NaN ``Azimuth`` for ``use_geo`` false mode."""
+    """Add a NaN ``Azimuth_Motor_Position_SPICE`` for ``use_geo`` false mode."""
     ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_placeholder_azimuth(ds.sizes["camera_time"]))
     return ds
 
 
 def add_jpss_only_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
-    """Add the zero-degree reference ``Azimuth`` for ``jpss_only`` mode."""
+    """Add the zero-degree reference ``Azimuth_Motor_Position_SPICE`` for ``jpss_only`` mode."""
     ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_jpss_only_azimuth(ds.sizes["camera_time"]))
     return ds
 

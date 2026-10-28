@@ -95,7 +95,7 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     placeholder lat/lon/alt values are written. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
-    frame, ``Azimuth`` 0 degrees) and cannot be combined with ``use_geo: false``.
+    frame, ``Azimuth_Motor_Position_SPICE`` 0 degrees) and cannot be combined with ``use_geo: false``.
     """
     dask_scheduler = os.getenv("DASK_SCHEDULER", "synchronous")
     if dask_scheduler not in _ALLOWED_DASK_SCHEDULERS:
@@ -343,7 +343,7 @@ def process_l1a_to_l1b(
     - Add the spacecraft-level geometry (sub-points, satellite radius, inertial position and
       velocity, attitude quaternion, Earth-Sun distance), or placeholders when ``use_geo`` is
       false
-    - Add the motor ``Azimuth`` from the azimuth CK, 0 degrees in ``jpss_only`` mode, or
+    - Add the motor ``Azimuth_Motor_Position_SPICE`` from the azimuth CK, 0 degrees in ``jpss_only`` mode, or
       NaN when ``use_geo`` is false
 
     Parameters
@@ -363,7 +363,7 @@ def process_l1a_to_l1b(
         ``configuration.use_geo``; omitting the key is equivalent to True.
     jpss_only_mode : bool, optional
         When True, uses per-pixel geolocation with ``LIBERA_BASE`` (zero-azimuth
-        approximation) and sets ``Azimuth`` to 0 degrees. Requires ``use_geo`` True and
+        approximation) and sets ``Azimuth_Motor_Position_SPICE`` to 0 degrees. Requires ``use_geo`` True and
         JPSS-only SPICE kernels in the manifest.
 
     Returns

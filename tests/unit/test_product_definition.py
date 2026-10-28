@@ -35,7 +35,7 @@ def test_spacecraft_geometry_fields_are_declared_per_frame():
         "Satellite_Attitude_Q1",
         "Satellite_Attitude_Q2",
         "Satellite_Attitude_Q3",
-        "Azimuth",
+        "Azimuth_Motor_Position_SPICE",
     ]
     for name in per_frame:
         assert definition["variables"][name]["dimensions"] == ["CAMERA_TIME"]
@@ -61,8 +61,8 @@ def test_spacecraft_geometry_fields_are_declared_per_frame():
         "Satellite_Attitude_Q1",
         "Satellite_Attitude_Q2",
         "Satellite_Attitude_Q3",
-        "Azimuth_FSW_Metadata",
-        "Azimuth",
+        "Azimuth_Motor_Position_FSW_Metadata",
+        "Azimuth_Motor_Position_SPICE",
         "Radiance",
     ],
 )

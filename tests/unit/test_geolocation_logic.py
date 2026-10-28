@@ -515,9 +515,9 @@ def test_add_azimuth_to_dataset(mock_adapt, mock_euler, mock_km_cls, camera_data
 
     result = add_azimuth_to_dataset(camera_dataset, config)
 
-    assert result["Azimuth"].dims == ("camera_time",)
-    assert result["Azimuth"].dtype == np.float32
-    np.testing.assert_allclose(result["Azimuth"].values, [12.5, np.nan])
+    assert result["Azimuth_Motor_Position_SPICE"].dims == ("camera_time",)
+    assert result["Azimuth_Motor_Position_SPICE"].dtype == np.float32
+    np.testing.assert_allclose(result["Azimuth_Motor_Position_SPICE"].values, [12.5, np.nan])
     mock_km.load_libera_dynamic_kernels.assert_called_once_with(
         ["azrot.bc"], needs_naif_kernels=True, needs_static_kernels=True
     )
@@ -537,13 +537,13 @@ def test_add_azimuth_requires_camera_time():
 def test_add_placeholder_azimuth(camera_dataset):
     result = add_placeholder_azimuth_to_dataset(camera_dataset)
 
-    assert result["Azimuth"].dims == ("camera_time",)
-    assert result["Azimuth"].dtype == np.float32
-    assert np.isnan(result["Azimuth"].values).all()
+    assert result["Azimuth_Motor_Position_SPICE"].dims == ("camera_time",)
+    assert result["Azimuth_Motor_Position_SPICE"].dtype == np.float32
+    assert np.isnan(result["Azimuth_Motor_Position_SPICE"].values).all()
 
 
 def test_add_jpss_only_azimuth(camera_dataset):
     result = add_jpss_only_azimuth_to_dataset(camera_dataset)
 
-    assert result["Azimuth"].dtype == np.float32
-    assert np.all(result["Azimuth"].values == 0)
+    assert result["Azimuth_Motor_Position_SPICE"].dtype == np.float32
+    assert np.all(result["Azimuth_Motor_Position_SPICE"].values == 0)

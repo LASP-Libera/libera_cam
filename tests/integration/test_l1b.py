@@ -128,12 +128,12 @@ def test_subsatellite_colatitude_complements_latitude(l1b_product_dataset):
 def test_azimuth_is_covered_motor_encoder_angle(l1b_product_dataset):
     """Azimuth is one covered float32 per frame from the AZROT-CK, in [0, 360), tracking the FSW header.
 
-    The FSW header ``Azimuth_FSW_Metadata`` records the same encoder angle, signed in degrees: on the
+    The FSW header ``Azimuth_Motor_Position_FSW_Metadata`` records the same encoder angle, signed in degrees: on the
     DITL_3min frames it reads 356.05 and 353.54 degrees (wrapped) against the CK's 356.15 and 353.63.
     Agreement within 0.5 degrees pins the CK sign, frame order and Euler component; reversing any of
     them moves the difference to several degrees.
     """
-    azimuth = l1b_product_dataset["Azimuth"]
+    azimuth = l1b_product_dataset["Azimuth_Motor_Position_SPICE"]
     assert azimuth.dims == ("CAMERA_TIME",)
     assert azimuth.dtype == np.float32
 
@@ -141,6 +141,6 @@ def test_azimuth_is_covered_motor_encoder_angle(l1b_product_dataset):
     assert np.isfinite(values).all(), "Azimuth contains NaN; AZROT-CK coverage was expected"
     assert np.all((values >= 0.0) & (values < 360.0))
 
-    header = l1b_product_dataset["Azimuth_FSW_Metadata"].to_numpy().astype(np.float64)
+    header = l1b_product_dataset["Azimuth_Motor_Position_FSW_Metadata"].to_numpy().astype(np.float64)
     wrapped_difference = (values.astype(np.float64) - header + 180.0) % 360.0 - 180.0
     np.testing.assert_allclose(wrapped_difference, 0.0, atol=0.5)

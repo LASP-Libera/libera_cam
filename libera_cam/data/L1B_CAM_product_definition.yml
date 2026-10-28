@@ -187,7 +187,7 @@ variables:
       units: degrees
       valid_range: [0, 180]
       _FillValue: -999
-  Azimuth_FSW_Metadata:
+  Azimuth_Motor_Position_FSW_Metadata:
     dtype: float32
     dimensions: ["CAMERA_TIME"]
     attributes:
@@ -196,7 +196,7 @@ variables:
       comment: >-
         FSW-reported commanded instrument azimuth, passed through from L1A
         WFOV_FSW_HEADER_AZIMUTH_ANGLE. Reported as a signed integer in degrees.
-  Azimuth:
+  Azimuth_Motor_Position_SPICE:
     dtype: float32
     dimensions: ["CAMERA_TIME"]
     attributes:
