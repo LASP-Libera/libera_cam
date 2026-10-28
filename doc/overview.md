@@ -171,7 +171,7 @@ worker pause, restart or spill.
 ### Data volume and throughput
 
 Only the pixels the camera's onboard pixel mask kept are geolocated; the rest of each frame is
-written as fill, which compresses to almost nothing. Measured on 50 consecutive DITL2 frames
+written as NaN, which compresses to almost nothing. Measured on 50 consecutive DITL2 frames
 (9.1% of pixels kept), single core, with the product encoding:
 
 | Quantity                                  | Every pixel | Kept pixels only |
@@ -207,7 +207,7 @@ the product definition: byte shuffling ahead of the mandatory gzip level 4 makes
 1.6x smaller and the run 1.4x faster (225 MB and 16.3 s become 144 MB and 11.9 s on
 `DITL_3min`), and every one of the nine reads back bit-identical. The three
 `Terrain_Corrected_*` fields carry it too, so each pair is encoded alike once `LIBSDC-814` gives
-them real values; they hold constant fill today, where the filter costs about 0.03 MB/frame
+them real values; they are NaN throughout today, where the filter costs about 0.03 MB/frame
 each.
 
 The setting is pinned on the two large non-geolocation fields as well, because the engines
