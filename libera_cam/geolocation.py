@@ -605,7 +605,7 @@ def geolocate_frame(
     whatever the mask. Size worker chunks from these.
     """
     if spice_body not in _CAMERA_BODIES:
-        raise ValueError(f"Unsupported camera body {spice_body!r}; expected one of {', '.join(_CAMERA_BODIES)}.")
+        raise ValueError(f"Unsupported camera observer {spice_body!r}; expected one of {', '.join(_CAMERA_BODIES)}.")
     epochs = np.asarray(exposure_ugps)
     if epochs.ndim != 1 or epochs.size == 0:
         raise ValueError(f"exposure_ugps must be a non-empty 1-D array of epochs, got shape {epochs.shape}")
