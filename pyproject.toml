@@ -43,10 +43,10 @@ dependencies = [
     # change what CI resolves. Restore a release pin once a libera-utils release carries
     # `worker_compressed_variables`. TODO[LIBSDC-808]
     #
-    # Carries 5.11.4 (NetCDF written through a path rather than an unpicklable file object, which is
-    # what lets `h5netcdf` run under the distributed scheduler, and `chunksizes` coerced to a tuple)
-    # and `worker_compressed_variables`, which compresses chunks on the Dask workers.
-    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@af5df67faf70c9f288260e4e61b87dd7e1596f91",
+    # Carries 5.14.0 (the microsecond timestamp filename revision), LASP-Libera/libera_utils#106
+    # (manifests list path strings, without checksums) and `worker_compressed_variables`, which
+    # compresses chunks on the Dask workers.
+    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@36004e02bcaf4dfc117882d60849fd4b3a7f4c19",
     # Imported directly by geolocation.py. 0.5.3 adds `spatial.pixel_geometry`, the `PixelField`
     # registry it selects fields from, and `GeometryData.get_geometry(require_coverage=)`, which the
     # spacecraft-level geometry query relies on to fail on a missing kernel.
