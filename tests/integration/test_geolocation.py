@@ -11,9 +11,8 @@ from libera_utils.libera_spice.kernel_manager import KernelManager
 
 from libera_cam.geolocation import (
     GeolocationKernelConfig,
-    add_azimuth_to_dataset,
+    add_frame_geometry_to_dataset,
     add_geolocation_to_dataset,
-    add_spacecraft_geometry_to_dataset,
     calculate_all_pixel_lat_lon_altitude,
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
@@ -206,17 +205,19 @@ def test_dynamic_kernel_sequence_materializes_into_cache(monkeypatch, tmp_path, 
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    ("add_geometry", "match"),
+    ("shift", "match"),
     [
-        (add_spacecraft_geometry_to_dataset, "returned all-NaN"),
-        (add_azimuth_to_dataset, "has no coverage over any of the"),
+        # Outside every DITL kernel: the spacecraft geometry query raises first.
+        (np.timedelta64(30, "D"), "returned all-NaN"),
+        # Inside the day-long JPSS SPK and CK, outside the AZROT-CK (03:31 to 04:00).
+        (np.timedelta64(2, "h"), "has no coverage over any of the"),
     ],
 )
-def test_granule_outside_kernel_coverage_raises(test_data_path, test_ditl_l1a_file_path, add_geometry, match):
-    """A granule the kernels cover at no frame stops the run rather than writing an all-fill product."""
+def test_granule_outside_kernel_coverage_raises(test_data_path, test_ditl_l1a_file_path, shift, match):
+    """A granule the kernels cover at no frame stops the run rather than writing an all-NaN product."""
     ds = read_l1a_cam_data(xr.open_dataset(test_ditl_l1a_file_path))
-    ds = ds.assign_coords(camera_time=ds.camera_time + np.timedelta64(30, "D"))
+    ds = ds.assign_coords(camera_time=ds.camera_time + shift)
     config = GeolocationKernelConfig(dynamic_kernel_sources=_ditl_dynamic_kernel_sources(test_data_path))
 
     with pytest.raises(ValueError, match=match):
-        add_geometry(ds, config)
+        add_frame_geometry_to_dataset(ds, config)

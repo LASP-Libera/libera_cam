@@ -75,7 +75,12 @@ _VECTOR_VARIABLES: dict[geometry.GeometryField, tuple[str, type]] = {
     geometry.GeometryField.SC_VELOCITY_INERTIAL: ("Satellite_Velocity", np.float64),
 }
 _EARTH_SUN_DISTANCE_ATTRIBUTE = "Earth_Sun_Distance_AU"
-_AZIMUTH_VARIABLE = "Azimuth_Motor_Position_SPICE"
+# Motor azimuth variables: the CK at ``camera_time`` (the first integration), and the CK at the
+# second integration, ``_INT_TIME_2_OFFSET`` later.
+_AZIMUTH_CAMERA_TIME_VARIABLES = ("Azimuth_Motor_Position_SPICE", "Azimuth_Motor_Position_SPICE_Int_Time_1")
+_AZIMUTH_INT_TIME_2_VARIABLE = "Azimuth_Motor_Position_SPICE_Int_Time_2"
+# TODO[LIBSDC-816]: replace the fixed offset with the measured second-integration timing.
+_INT_TIME_2_OFFSET = np.timedelta64(350, "ms")
 
 
 @dataclass
@@ -92,6 +97,9 @@ class GeolocationKernelConfig:
         Each entry is materialized through libera_utils ``KernelFileCache`` inside
         :meth:`libera_utils.libera_spice.kernel_manager.KernelManager.load_libera_dynamic_kernels`.
         Use ``None`` when geolocation kernels are not required.
+    jpss_only : bool
+        True for JPSS-only kernels with no azimuth CK: the per-pixel geolocation intersects
+        against ``LIBERA_BASE`` and the motor azimuth is 0 degrees.
     """
 
     temp_dir_base: str | Path | None = None
@@ -291,80 +299,12 @@ def _assign_spacecraft_geometry(ds: xr.Dataset, geometry_data: pd.DataFrame) -> 
     return ds
 
 
-def add_spacecraft_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
-    """
-    Compute the spacecraft-level geometry fields and add them to the dataset.
-
-    Unlike the per-pixel geolocation, these fields are one value per camera frame, so they
-    are computed eagerly on the client rather than through Dask ``map_blocks``: the arrays
-    are (N,) or (N, 3), and a map_blocks round-trip would cost more than the calculation.
-    Kernels are furnished and unloaded within this call so the SPICE pool is left as it was
-    found.
-
-    Parameters
-    ----------
-    ds : xr.Dataset
-        The input dataset containing a ``camera_time`` coordinate.
-    config : GeolocationKernelConfig
-        Configuration for SPICE kernel management. ``config.jpss_only`` is irrelevant here:
-        no field in this set resolves through the instrument frame.
-
-    Returns
-    -------
-    xr.Dataset
-        The dataset with the sub-point, satellite radius, inertial position and velocity, and
-        attitude quaternion variables added, and the granule-level ``Earth_Sun_Distance_AU``
-        attribute set.
-
-    Raises
-    ------
-    ValueError
-        If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources, or the
-        kernels do not cover the granule at all (see :func:`calculate_spacecraft_geometry`).
-    RuntimeError
-        If the curryer SPICE query fails (see :func:`calculate_spacecraft_geometry`).
-    """
-    if "camera_time" not in ds.coords:
-        raise ValueError("Dataset must have 'camera_time' coordinate.")
-    if not config.dynamic_kernel_sources:
-        raise ValueError("SPICE kernel sources are required to compute spacecraft geometry")
-
-    with _kernel_manager_from_config(config) as km:
-        km.load_libera_dynamic_kernels(
-            config.dynamic_kernel_sources,
-            needs_naif_kernels=True,
-            needs_static_kernels=True,
-        )
-        geometry_data = calculate_spacecraft_geometry(km, ds.camera_time.values)
-
-    ds = _assign_spacecraft_geometry(ds, geometry_data)
-    (earth_sun_distance,) = geometry.GeometryField.EARTH_SUN_DISTANCE.columns
-    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = granule_earth_sun_distance(geometry_data[earth_sun_distance].to_numpy())
-    return ds
-
-
-def add_placeholder_spacecraft_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset:
-    """
-    Add NaN placeholder spacecraft geometry to the dataset.
-
-    Used in ground-data mode, where no SPICE kernels are available. The product definition
-    declares these variables and the ``Earth_Sun_Distance_AU`` attribute, and the writer
-    rejects a dataset that omits a declared field, so they must be present even unfilled.
-    """
-    ds = _assign_spacecraft_geometry(ds, create_placeholder_spacecraft_geometry(ds.sizes["camera_time"]))
-    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = np.nan
-
-    logger.info("use_geo is false: using placeholder spacecraft geometry.")
-
-    return ds
-
-
 def calculate_azimuth(
     kernel_manager: KernelManager,
     timestamps: np.ndarray,
 ) -> np.ndarray:
     """
-    Azimuth motor encoder angle at each camera frame, from the azimuth CK.
+    Azimuth motor encoder angle at each time, from the azimuth CK.
 
     The angle is the third 1-2-3 Euler angle of the ``LIBERA_BASE_COORD -> LIBERA_AZ_COORD``
     rotation (:data:`AZIMUTH_ENCODER_FRAMES`), wrapped to ``[0, 360)`` -- the convention
@@ -376,26 +316,27 @@ def calculate_azimuth(
     A per-sample CK coverage gap comes back as NaN under ``allow_nans`` and stays NaN. A granule
     with no covered frame at all means the azimuth CK or the Libera frame kernel is not
     furnished, or does not cover the granule, and raises.
-    The caller furnishes the kernels (:func:`add_azimuth_to_dataset` loads the static set,
-    which carries the Libera frame kernel, alongside the CK).
+    The caller furnishes the kernels (:func:`add_frame_geometry_to_dataset` loads the static
+    set, which carries the Libera frame kernel, alongside the CK).
 
     Parameters
     ----------
     kernel_manager : KernelManager
         Kernel manager with the azimuth CK and the Libera frame kernel furnished.
     timestamps : np.ndarray
-        Camera frame times on the L1B output time grid, as ``datetime64[ns]``.
+        Query times, as ``datetime64[ns]``: the camera frame times, or those times shifted to
+        the second integration.
 
     Returns
     -------
     np.ndarray
         Azimuth in degrees, shape ``(N,)``, dtype float32, in ``[0, 360)`` or NaN where the CK
-        does not cover the frame.
+        does not cover the time.
 
     Raises
     ------
     ValueError
-        If no camera frame has a finite azimuth.
+        If no time has a finite azimuth.
     """
     kernel_manager.ensure_known_kernels_are_furnished()
 
@@ -453,57 +394,94 @@ def create_jpss_only_azimuth(n_samples: int) -> np.ndarray:
     return np.zeros(n_samples, dtype=np.float32)
 
 
-def add_azimuth_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
-    """
-    Compute the motor azimuth from the azimuth CK and add it to the dataset as ``Azimuth_Motor_Position_SPICE``.
+def _assign_azimuth(ds: xr.Dataset, at_camera_time: np.ndarray, at_int_time_2: np.ndarray) -> xr.Dataset:
+    """Write the motor azimuth at ``camera_time`` and at the second integration onto the product variables."""
+    for variable in _AZIMUTH_CAMERA_TIME_VARIABLES:
+        ds[variable] = (("camera_time",), at_camera_time.copy())
+    ds[_AZIMUTH_INT_TIME_2_VARIABLE] = (("camera_time",), at_int_time_2.copy())
+    return ds
 
-    One value per camera frame, computed eagerly on the client like the spacecraft geometry.
-    Kernels are furnished and unloaded within this call.
+
+def add_frame_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
+    """
+    Compute the per-frame spacecraft geometry and motor azimuth and add them to the dataset.
+
+    These fields are one value per camera frame, so they are computed eagerly on the client
+    rather than through Dask ``map_blocks``: the arrays are (N,) or (N, 3), and a map_blocks
+    round-trip would cost more than the calculation. One kernel manager furnishes the kernels
+    for both and unloads them within this call, so the SPICE pool is left as it was found.
+
+    The spacecraft geometry reads only the spacecraft ephemeris and attitude, so it is the same
+    in both SPICE modes. The motor azimuth is the azimuth CK at ``camera_time``, written to
+    ``Azimuth_Motor_Position_SPICE`` and ``Azimuth_Motor_Position_SPICE_Int_Time_1``, and at
+    ``camera_time`` plus 350 ms, written to ``Azimuth_Motor_Position_SPICE_Int_Time_2``. In
+    ``jpss_only`` mode, which has no azimuth CK, all three are 0 degrees
+    (:func:`create_jpss_only_azimuth`).
 
     Parameters
     ----------
     ds : xr.Dataset
         The input dataset containing a ``camera_time`` coordinate.
     config : GeolocationKernelConfig
-        Configuration for SPICE kernel management; its sources must include the azimuth CK.
+        Configuration for SPICE kernel management. ``config.jpss_only`` selects the 0 degree
+        azimuth in place of the azimuth CK.
 
     Returns
     -------
     xr.Dataset
-        The dataset with the ``Azimuth_Motor_Position_SPICE`` variable added.
+        The dataset with the sub-point, satellite radius, inertial position and velocity,
+        attitude quaternion and three ``Azimuth_Motor_Position_SPICE`` variables added, and the
+        granule-level ``Earth_Sun_Distance_AU`` attribute set.
 
     Raises
     ------
     ValueError
         If ``ds`` has no ``camera_time`` coordinate, ``config`` names no kernel sources, or the
-        azimuth CK covers no camera frame (see :func:`calculate_azimuth`).
+        kernels do not cover the granule at all (see :func:`calculate_spacecraft_geometry` and,
+        outside ``jpss_only`` mode, :func:`calculate_azimuth`).
+    RuntimeError
+        If the curryer SPICE query fails (see :func:`calculate_spacecraft_geometry`).
     """
     if "camera_time" not in ds.coords:
         raise ValueError("Dataset must have 'camera_time' coordinate.")
     if not config.dynamic_kernel_sources:
-        raise ValueError("SPICE kernel sources are required to compute the motor azimuth")
+        raise ValueError("SPICE kernel sources are required to compute the per-frame geometry")
 
+    times = ds.camera_time.values
     with _kernel_manager_from_config(config) as km:
         km.load_libera_dynamic_kernels(
             config.dynamic_kernel_sources,
             needs_naif_kernels=True,
             needs_static_kernels=True,
         )
-        azimuth = calculate_azimuth(km, ds.camera_time.values)
+        geometry_data = calculate_spacecraft_geometry(km, times)
+        if config.jpss_only:
+            azimuth = azimuth_int_time_2 = create_jpss_only_azimuth(times.size)
+        else:
+            azimuth = calculate_azimuth(km, times)
+            azimuth_int_time_2 = calculate_azimuth(km, times + _INT_TIME_2_OFFSET)
 
-    ds[_AZIMUTH_VARIABLE] = (("camera_time",), azimuth)
-    return ds
+    ds = _assign_spacecraft_geometry(ds, geometry_data)
+    (earth_sun_distance,) = geometry.GeometryField.EARTH_SUN_DISTANCE.columns
+    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = granule_earth_sun_distance(geometry_data[earth_sun_distance].to_numpy())
+    return _assign_azimuth(ds, azimuth, azimuth_int_time_2)
 
 
-def add_placeholder_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
-    """Add a NaN ``Azimuth_Motor_Position_SPICE`` for ``use_geo`` false mode."""
-    ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_placeholder_azimuth(ds.sizes["camera_time"]))
-    return ds
+def add_placeholder_frame_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset:
+    """
+    Add NaN placeholder spacecraft geometry and motor azimuth to the dataset.
 
+    Used in ground-data mode, where no SPICE kernels are available. The product definition
+    declares these variables and the ``Earth_Sun_Distance_AU`` attribute, and the writer
+    rejects a dataset that omits a declared field, so they must be present even unfilled.
+    """
+    n_samples = ds.sizes["camera_time"]
+    ds = _assign_spacecraft_geometry(ds, create_placeholder_spacecraft_geometry(n_samples))
+    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = np.nan
+    ds = _assign_azimuth(ds, create_placeholder_azimuth(n_samples), create_placeholder_azimuth(n_samples))
 
-def add_jpss_only_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
-    """Add the zero-degree reference ``Azimuth_Motor_Position_SPICE`` for ``jpss_only`` mode."""
-    ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_jpss_only_azimuth(ds.sizes["camera_time"]))
+    logger.info("use_geo is false: using placeholder spacecraft geometry and motor azimuth.")
+
     return ds
 
 

@@ -22,14 +22,11 @@ from libera_cam.camera import convert_dn_to_radiance
 from libera_cam.config import product_config_path
 from libera_cam.geolocation import (
     GeolocationKernelConfig,
-    add_azimuth_to_dataset,
+    add_frame_geometry_to_dataset,
     add_geolocation_to_dataset,
-    add_jpss_only_azimuth_to_dataset,
     add_jpss_only_geolocation_to_dataset,
-    add_placeholder_azimuth_to_dataset,
+    add_placeholder_frame_geometry_to_dataset,
     add_placeholder_geolocation_to_dataset,
-    add_placeholder_spacecraft_geometry_to_dataset,
-    add_spacecraft_geometry_to_dataset,
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
 from libera_cam.packaging import package_l1b_product
@@ -95,7 +92,8 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     placeholder lat/lon/alt values are written. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
-    frame, ``Azimuth_Motor_Position_SPICE`` 0 degrees) and cannot be combined with ``use_geo: false``.
+    frame, the ``Azimuth_Motor_Position_SPICE`` variables 0 degrees) and cannot be combined with
+    ``use_geo: false``.
     """
     dask_scheduler = os.getenv("DASK_SCHEDULER", "synchronous")
     if dask_scheduler not in _ALLOWED_DASK_SCHEDULERS:
@@ -340,11 +338,10 @@ def process_l1a_to_l1b(
     - Convert DN to radiance (lazy when backed by Dask arrays)
     - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
       or placeholders when ``use_geo`` is false
-    - Add the spacecraft-level geometry (sub-points, satellite radius, inertial position and
-      velocity, attitude quaternion, Earth-Sun distance), or placeholders when ``use_geo`` is
-      false
-    - Add the motor ``Azimuth_Motor_Position_SPICE`` from the azimuth CK, 0 degrees in ``jpss_only`` mode, or
-      NaN when ``use_geo`` is false
+    - Add the per-frame geometry under one kernel manager: the spacecraft-level fields (sub-points,
+      satellite radius, inertial position and velocity, attitude quaternion, Earth-Sun distance)
+      and the motor azimuth from the azimuth CK at the first and second integration, 0 degrees
+      in ``jpss_only`` mode; NaN placeholders when ``use_geo`` is false
 
     Parameters
     ----------
@@ -363,7 +360,8 @@ def process_l1a_to_l1b(
         ``configuration.use_geo``; omitting the key is equivalent to True.
     jpss_only_mode : bool, optional
         When True, uses per-pixel geolocation with ``LIBERA_BASE`` (zero-azimuth
-        approximation) and sets ``Azimuth_Motor_Position_SPICE`` to 0 degrees. Requires ``use_geo`` True and
+        approximation) and sets the ``Azimuth_Motor_Position_SPICE`` variables to 0 degrees.
+        Requires ``use_geo`` True and
         JPSS-only SPICE kernels in the manifest.
 
     Returns
@@ -392,26 +390,25 @@ def process_l1a_to_l1b(
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
 
-    # Apply Geolocation (Lazy), the spacecraft-level geometry and the motor azimuth (eager, one
-    # value per frame). The spacecraft geometry call is the same in both SPICE modes: its fields
-    # need only the spacecraft ephemeris and attitude, never the camera's instrument frame. The
-    # azimuth needs the azimuth CK, which only production mode furnishes.
+    # Apply Geolocation (Lazy) and the per-frame spacecraft geometry and motor azimuth (eager, one
+    # value per frame). The spacecraft geometry is the same in both SPICE modes: its fields need
+    # only the spacecraft ephemeris and attitude, never the camera's instrument frame. The azimuth
+    # needs the azimuth CK, which only production mode furnishes.
     if not use_geo:
         cam_dataset = add_placeholder_geolocation_to_dataset(cam_dataset)
-        cam_dataset = add_placeholder_spacecraft_geometry_to_dataset(cam_dataset)
-        cam_dataset = add_placeholder_azimuth_to_dataset(cam_dataset)
+        cam_dataset = add_placeholder_frame_geometry_to_dataset(cam_dataset)
     elif jpss_only_mode:
         if not dynamic_kernel_sources:
             raise ValueError("SPICE kernel sources are required for geolocation when jpss_only_mode is True")
         geo_config = GeolocationKernelConfig(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,
+            jpss_only=True,
         )
         cam_dataset = add_jpss_only_geolocation_to_dataset(
             cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask
         )
-        cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
-        cam_dataset = add_jpss_only_azimuth_to_dataset(cam_dataset)
+        cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
     else:
         if not dynamic_kernel_sources:
             raise ValueError("SPICE kernel sources are required for geolocation when use_geo is True")
@@ -420,8 +417,7 @@ def process_l1a_to_l1b(
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
         cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
-        cam_dataset = add_spacecraft_geometry_to_dataset(cam_dataset, geo_config)
-        cam_dataset = add_azimuth_to_dataset(cam_dataset, geo_config)
+        cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
 
     return cam_dataset
 

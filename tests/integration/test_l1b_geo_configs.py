@@ -13,6 +13,12 @@ from libera_cam.l1b import algorithm
 
 pytestmark = pytest.mark.integration
 
+_CK_AZIMUTH_VARIABLES = (
+    "Azimuth_Motor_Position_SPICE",
+    "Azimuth_Motor_Position_SPICE_Int_Time_1",
+    "Azimuth_Motor_Position_SPICE_Int_Time_2",
+)
+
 
 class TestL1bManifestUseGeoConfiguration:
     """Each manifest configuration case is a separate integration test."""
@@ -75,7 +81,8 @@ class TestL1bManifestUseGeoConfiguration:
             assert np.all(dataset["Latitude"].values == np.float32(-999))
             assert np.all(dataset["Longitude"].values == np.float32(-999))
             assert np.all(dataset["Altitude"].values == np.float32(-9999))
-            assert np.isnan(dataset["Azimuth_Motor_Position_SPICE"].values).all()
+            for variable in _CK_AZIMUTH_VARIABLES:
+                assert np.isnan(dataset[variable].values).all(), variable
             assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
             assert np.any(np.isfinite(dataset["Radiance"].values))
 
@@ -113,7 +120,8 @@ class TestL1bManifestUseGeoConfiguration:
                     f"Frame {t}: expected per-pixel geolocation variation across {n_valid} valid pixels"
                 )
 
-            assert np.all(dataset["Azimuth_Motor_Position_SPICE"].values == 0)
+            for variable in _CK_AZIMUTH_VARIABLES:
+                assert np.all(dataset[variable].values == 0), variable
             assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
             assert np.all(dataset["Solar_Zenith_Surface"].values == 0)
             assert np.all(dataset["Viewing_Zenith_Surface"].values == 0)
