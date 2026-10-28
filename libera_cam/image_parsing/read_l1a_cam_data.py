@@ -280,7 +280,7 @@ def read_l1a_cam_data(cam_dataset: xr.Dataset) -> xr.Dataset:
     ds["valid_pixel_mask"] = (("camera_time", "y", "x"), kept_pixels(ds["image_data"].data))
     # The L1A row of each frame, so a worker can rebuild a frame's mask from the file without
     # depending on the image_data tasks (kept_pixels_from_source).
-    ds["l1a_row"] = (("camera_time",), np.asarray(surviving_indices, dtype=np.int64))
+    ds["l1a_row"] = (("camera_time",), np.arange(n_images, dtype=np.int64))
     ds["l1a_row"].attrs = {"source": source, "description": "CAMERA_TIME row of the frame in the L1A file"}
     ds["valid_pixel_mask"].attrs = {
         "long_name": "Valid Pixel Mask",

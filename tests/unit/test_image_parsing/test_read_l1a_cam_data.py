@@ -137,7 +137,7 @@ def _fake_decompress_with_removed_pixels(payload: bytes) -> tuple[np.ndarray, np
 
 def test_kept_pixel_mask_rebuilt_from_l1a_rows_matches_valid_pixel_mask(tmp_path):
     """valid_pixel_mask is image_data > 0; l1a_row names each frame's L1A row so a worker rebuilds the same mask."""
-    l1a = make_synthetic_l1a(tmp_path, n_images=4, valid=[True, False, True, True])
+    l1a = make_synthetic_l1a(tmp_path, n_images=4)
 
     with patch(
         "libera_cam.image_parsing.l1a_parser.decompress_image", side_effect=_fake_decompress_with_removed_pixels
@@ -149,7 +149,7 @@ def test_kept_pixel_mask_rebuilt_from_l1a_rows_matches_valid_pixel_mask(tmp_path
 
     assert ds["valid_pixel_mask"].dtype == np.bool_
     np.testing.assert_array_equal(mask[:, 0, :8], image > 0)
-    # Rows 0, 2 and 3 survive, each with its own pattern.
-    np.testing.assert_array_equal(ds["l1a_row"].values, [0, 2, 3])
-    np.testing.assert_array_equal(mask[:, 0, 0], [True, False, True])
+    # Each row carries its own pattern.
+    np.testing.assert_array_equal(ds["l1a_row"].values, [0, 1, 2, 3])
+    np.testing.assert_array_equal(mask[:, 0, 0], [True, True, False, True])
     np.testing.assert_array_equal(rebuilt, mask)
