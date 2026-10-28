@@ -105,7 +105,7 @@ def test_single_epoch_selects_epoch_zero_and_writes_misses_as_nan():
     for name in FrameGeometry._fields:
         values = getattr(frame, name)
         assert values.shape == GRID_SHAPE
-        assert values.dtype == (np.uint16 if name == "quality_flags" else np.float32), name
+        assert values.dtype == (np.uint32 if name == "quality_flags" else np.float32), name
     np.testing.assert_array_equal(frame.quality_flags, np.where(expected == 5, SQF.CALC_ELLIPS_NO_INTERSECT, 0))
 
 
@@ -183,7 +183,7 @@ def test_jpss_only_body_is_accepted():
 
 
 def test_uncovered_epoch_keeps_its_compound_flag_word():
-    """A SPICE gap fills the whole epoch and the compound curryer flag survives the uint16 narrowing."""
+    """A SPICE gap fills the whole epoch and the compound curryer flag survives the uint32 narrowing."""
     result = _curryer_result(2)
     gap = int(SQF.SPICE_ERR_MISSING_ATTITUDE | SQF.CALC_ELLIPS_INSUFF_DATA)
     result["quality_flags"][1, :] = gap
@@ -205,13 +205,25 @@ def test_uncovered_epoch_keeps_its_compound_flag_word():
         assert np.isnan(getattr(frame, name)[exposure_index == 1]).all(), name
 
 
-@pytest.mark.parametrize("flag", [1 << 15, 1 << 16])
+@pytest.mark.parametrize("flag", [int(SQF.CALC_TERRAIN_OUTSIDE_DEM), 1 << 16, 1 << 30])
+def test_curryer_flags_below_the_not_computed_bit_pass_through(flag):
+    """curryer's bit 15 and any flag it adds below bit 31 reach the product unchanged and read as computed."""
+    result = _curryer_result(1)
+    result["quality_flags"][0, 0] = flag
+    with patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=result):
+        frame = geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", VECTORS, frame_shape=GRID_SHAPE)
+
+    assert frame.quality_flags[0, 0] == flag
+    assert not frame.quality_flags[0, 0] & _GEO_NOT_COMPUTED_FLAG
+
+
+@pytest.mark.parametrize("flag", [1 << 31, 1 << 32])
 def test_geolocate_frame_rejects_flags_reaching_the_not_computed_bit(flag):
     result = _curryer_result(1)
     result["quality_flags"][0, 0] = flag
     with (
         patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=result),
-        pytest.raises(RuntimeError, match="bits 0-14"),
+        pytest.raises(RuntimeError, match="bits 0-30"),
     ):
         geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", VECTORS, frame_shape=GRID_SHAPE)
 
@@ -233,7 +245,7 @@ def _curryer_by_pixel_id(epochs, spice_body, vectors, fields, allow_nans):
 
 
 def test_pixel_mask_geolocates_only_kept_pixels_and_writes_the_rest_as_nan():
-    """curryer sees only the kept pixels' vectors; dropped pixels are NaN with bit 15 alone."""
+    """curryer sees only the kept pixels' vectors; dropped pixels are NaN with bit 31 alone."""
     with patch("libera_cam.geolocation.spatial.pixel_geometry", side_effect=_curryer_by_pixel_id) as mock_geometry:
         masked = geolocate_frame(
             EPOCHS[:1], None, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=GRID_SHAPE, pixel_mask=KEPT
@@ -296,7 +308,7 @@ GEO_VARIABLES = [variable for variable, _ in _FIELD_VARIABLES.values()]
 
 def _frame(value: float, flag: int) -> FrameGeometry:
     fields = {name: np.full(FRAME_SHAPE, value, dtype=np.float32) for name in _PIXEL_VARIABLES}
-    return FrameGeometry(quality_flags=np.full(FRAME_SHAPE, flag, dtype=np.uint16), **fields)
+    return FrameGeometry(quality_flags=np.full(FRAME_SHAPE, flag, dtype=np.uint32), **fields)
 
 
 L1A_SOURCE = "s3://l1a/LIBERA_L1A_WFOV.nc"
@@ -358,7 +370,7 @@ def test_field_variables_follow_frame_geometry_and_the_product_definition():
         assert definition["dimensions"] == ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"], name
         assert np.dtype(definition["dtype"]) == np.dtype(dtype), name
     # "Not run" is a bit of its own above curryer's (the YAML side is pinned in test_product_definition).
-    assert _GEO_NOT_COMPUTED_FLAG == 0x8000
+    assert _GEO_NOT_COMPUTED_FLAG == 1 << 31
     assert max(int(f) for f in SQF) < _GEO_NOT_COMPUTED_FLAG
 
 
@@ -566,7 +578,7 @@ def test_add_placeholder_geolocation_to_dataset(small_detector):
         assert result[variable].data.chunks[0] == ds["image_data"].data.chunks[0], variable
     for variable, _ in _PIXEL_VARIABLES.values():
         assert np.isnan(result[variable].values).all(), variable
-    np.testing.assert_array_equal(result["Geolocation_Quality_Flag"].values, 0x8000)
+    np.testing.assert_array_equal(result["Geolocation_Quality_Flag"].values, 1 << 31)
 
 
 def test_add_placeholder_geolocation_requires_dask_image_data(small_detector):

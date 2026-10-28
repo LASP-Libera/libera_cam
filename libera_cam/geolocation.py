@@ -515,10 +515,10 @@ _PIXEL_VARIABLES: dict[str, tuple[str, type]] = {
     "relative_azimuth": ("Relative_Azimuth_Surface", np.float32),
 }
 _KM_TO_M = 1000.0
-# Bit 15 of Geolocation_Quality_Flag: geolocation was not run for the pixel, because use_geo is false
-# or the camera's onboard pixel mask removed it. Bits 0-14 are curryer's SpatialQualityFlags, which
-# reach 0x4000, and 0 reads as good geometry, so "not computed" needs a bit of its own.
-_GEO_NOT_COMPUTED_FLAG = np.uint16(1 << 15)
+# Bit 31 of Geolocation_Quality_Flag: geolocation was not run for the pixel, because use_geo is false
+# or the camera's onboard pixel mask removed it. curryer's SpatialQualityFlags fill bits 0-15 and grow
+# upward, and 0 reads as good geometry, so "not computed" takes the top bit of a uint32 word.
+_GEO_NOT_COMPUTED_FLAG = np.uint32(1 << 31)
 # Fields on [0, 360) that can land on exactly 360.0: a float64 value just under a full turn rounds
 # up when cast to float32, and curryer's own wrap of a tiny negative angle can return 360.0 itself.
 _AZIMUTH_FIELDS = ("solar_azimuth", "viewing_azimuth", "relative_azimuth")
@@ -578,7 +578,7 @@ def geolocate_frame(
         Float32 fields, NaN where a pixel misses the ellipsoid, its epoch is uncovered, or
         ``pixel_mask`` excludes it; altitude in meters; azimuths wrapped so the
         float32 rounding of a value just under 360 lands on 0, not 360; ``quality_flags`` as
-        uint16, 0 where good, bit 15 alone where ``pixel_mask`` excludes the pixel.
+        uint32, 0 where good, bit 31 alone where ``pixel_mask`` excludes the pixel.
 
     Raises
     ------
@@ -588,14 +588,14 @@ def geolocate_frame(
         not integer, wrongly shaped or out of range, ``pointing_vectors`` is not
         ``(Y * X, 3)``, or ``pixel_mask`` is not a boolean array shaped ``frame_shape``.
     RuntimeError
-        If a curryer quality flag reaches bit 15, which ``Geolocation_Quality_Flag`` reserves for
+        If a curryer quality flag reaches bit 31, which ``Geolocation_Quality_Flag`` reserves for
         pixels whose geolocation was not run.
 
     Notes
     -----
     Memory: for the full detector at one epoch curryer returns about 440 MB and works in about
     1.05 GB of transients (250 bytes per pixel), so a call peaks near 1.5 GB and scales with
-    ``K`` and with the selected pixels; the returned ``FrameGeometry`` is 143 MB per frame
+    ``K`` and with the selected pixels; the returned ``FrameGeometry`` is 151 MB per frame
     whatever the mask. Size worker chunks from these.
     """
     if spice_body not in _CAMERA_BODIES:
@@ -639,7 +639,7 @@ def geolocate_frame(
         selected = np.flatnonzero(mask)
 
     fields = {name: np.full(n_pixels, np.nan, dtype=dtype) for name, (_, dtype) in _PIXEL_VARIABLES.items()}
-    flags = np.full(n_pixels, _GEO_NOT_COMPUTED_FLAG, dtype=np.uint16)
+    flags = np.full(n_pixels, _GEO_NOT_COMPUTED_FLAG, dtype=np.uint32)
     if selected.size:
         # NaN-and-flag on a SPICE gap is this function's contract (a granule with no covered frame
         # is rejected upstream), so the choice is made here rather than left to curryer's default.
@@ -664,8 +664,8 @@ def geolocate_frame(
         selected_flags = per_pixel(result["quality_flags"])
         if selected_flags.max() >= _GEO_NOT_COMPUTED_FLAG:
             raise RuntimeError(
-                f"curryer quality flag {selected_flags.max():#x} does not fit bits 0-14 of "
-                "Geolocation_Quality_Flag; bit 15 means geolocation was not run"
+                f"curryer quality flag {selected_flags.max():#x} does not fit bits 0-30 of "
+                "Geolocation_Quality_Flag; bit 31 means geolocation was not run"
             )
         flags[selected] = selected_flags
     return FrameGeometry(
@@ -678,7 +678,7 @@ _GEOLOCATION_FLAG_VARIABLE = "Geolocation_Quality_Flag"
 # FrameGeometry field -> (product variable, dtype) for every field the geolocation path writes, in
 # FrameGeometry field order (the worker returns its blocks in this order).
 _FIELD_VARIABLES: dict[str, tuple[str, type]] = {
-    name: ((_GEOLOCATION_FLAG_VARIABLE, np.uint16) if name == "quality_flags" else _PIXEL_VARIABLES[name])
+    name: ((_GEOLOCATION_FLAG_VARIABLE, np.uint32) if name == "quality_flags" else _PIXEL_VARIABLES[name])
     for name in FrameGeometry._fields
 }
 
@@ -734,7 +734,7 @@ def calculate_chunk_geometry(
     -------
     tuple of np.ndarray
         One ``(T, Y, X)`` array per :class:`FrameGeometry` field, in field order: the float32
-        fields, then the uint16 ``quality_flags``.
+        fields, then the uint32 ``quality_flags``.
 
     Raises
     ------
@@ -791,7 +791,7 @@ def calculate_chunk_geometry_from_l1a(
     per frame) so the task takes no Dask inputs. distributed holds input-free tasks back until a
     worker has a free thread, and each worker's thread is busy computing and compressing the
     blocks already started, so geometry output cannot pile up ahead of them. A geometry task fed
-    by the ``image_data`` or mask tasks gets no such throttling, and its 143 MB per frame of
+    by the ``image_data`` or mask tasks gets no such throttling, and its 151 MB per frame of
     output piles up in worker memory and spill.
 
     Parameters
@@ -827,7 +827,7 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     Every pixel the camera kept, the
     :func:`~libera_cam.image_parsing.read_l1a_cam_data.kept_pixels` of its frame, is geolocated
     at its frame's epoch through :func:`geolocate_frame`; nothing is subsampled or interpolated. The
-    pixels the onboard pixel mask removed are NaN with bit 15 of the flag set, so the cost and
+    pixels the onboard pixel mask removed are NaN with bit 31 of the flag set, so the cost and
     the stored volume follow the kept pixels. The work is split into tasks of
     ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames along ``camera_time``, independent of the
     decompression chunking; each task rebuilds its frames' masks from the L1A file
@@ -854,7 +854,7 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     -------
     xr.Dataset
         The dataset with the eight float32 per-pixel fields (``Latitude``, ``Longitude``,
-        ``Altitude`` and the five surface angles) and the uint16 ``Geolocation_Quality_Flag``
+        ``Altitude`` and the five surface angles) and the uint32 ``Geolocation_Quality_Flag``
         added as lazy ``(camera_time, y, x)`` arrays.
 
     Raises
@@ -913,7 +913,7 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
 
     Ground-data processing has no SPICE kernels, but the writer rejects a dataset missing a
     declared variable, so every field of the geolocation path is written: the float fields as
-    NaN and ``Geolocation_Quality_Flag`` with bit 15 set (geolocation not run), since 0 would
+    NaN and ``Geolocation_Quality_Flag`` with bit 31 set (geolocation not run), since 0 would
     read as good geometry. The arrays are lazy and share
     ``image_data``'s time chunks.
 
@@ -925,7 +925,7 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     Returns
     -------
     xr.Dataset
-        The dataset with the eight float32 fields and the uint16 flag variable added.
+        The dataset with the eight float32 fields and the uint32 flag variable added.
 
     Raises
     ------
