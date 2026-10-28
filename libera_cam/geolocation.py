@@ -402,6 +402,18 @@ def _assign_azimuth(ds: xr.Dataset, at_camera_time: np.ndarray, at_int_time_2: n
     return ds
 
 
+def _warn_uncovered_frames(variable: str, values: np.ndarray) -> None:
+    """Log how many camera frames of a per-frame variable SPICE did not cover (non-finite)."""
+    uncovered = ~np.isfinite(values)
+    if uncovered.ndim > 1:
+        uncovered = uncovered.any(axis=tuple(range(1, uncovered.ndim)))
+    n_uncovered = int(uncovered.sum())
+    if n_uncovered:
+        logger.warning(
+            f"{variable} has no SPICE coverage at {n_uncovered} of {uncovered.size} camera frames; written as NaN."
+        )
+
+
 def add_frame_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
     """
     Compute the per-frame spacecraft geometry and motor azimuth and add them to the dataset.
@@ -416,7 +428,8 @@ def add_frame_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfi
     ``Azimuth_Motor_Position_SPICE`` and ``Azimuth_Motor_Position_SPICE_Int_Time_1``, and at
     ``camera_time`` plus 350 ms, written to ``Azimuth_Motor_Position_SPICE_Int_Time_2``. In
     ``jpss_only`` mode, which has no azimuth CK, all three are 0 degrees
-    (:func:`create_jpss_only_azimuth`).
+    (:func:`create_jpss_only_azimuth`). A frame the kernels do not cover is NaN, and a warning
+    gives the number of such frames for each variable.
 
     Parameters
     ----------
@@ -464,7 +477,11 @@ def add_frame_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfi
     ds = _assign_spacecraft_geometry(ds, geometry_data)
     (earth_sun_distance,) = geometry.GeometryField.EARTH_SUN_DISTANCE.columns
     ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = granule_earth_sun_distance(geometry_data[earth_sun_distance].to_numpy())
-    return _assign_azimuth(ds, azimuth, azimuth_int_time_2)
+    ds = _assign_azimuth(ds, azimuth, azimuth_int_time_2)
+    geometry_variables = [variable for variable, _ in (*_SCALAR_VARIABLES.values(), *_VECTOR_VARIABLES.values())]
+    for variable in (*geometry_variables, *_AZIMUTH_CAMERA_TIME_VARIABLES, _AZIMUTH_INT_TIME_2_VARIABLE):
+        _warn_uncovered_frames(variable, ds[variable].values)
+    return ds
 
 
 def add_placeholder_frame_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset:

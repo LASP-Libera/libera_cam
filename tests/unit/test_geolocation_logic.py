@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock, patch
 
 import dask.array as da
@@ -402,12 +403,22 @@ def frame_geometry_mocks(spacecraft_geometry_frame):
         yield mock_km_cls, mock_adapt, mock_euler
 
 
-def test_add_frame_geometry_maps_columns_and_keeps_gaps_nan(frame_geometry_mocks, camera_dataset):
-    """curryer columns map onto product variables; coverage gaps stay NaN."""
+def test_add_frame_geometry_maps_columns_and_keeps_gaps_nan(frame_geometry_mocks, camera_dataset, caplog):
+    """curryer columns map onto product variables; coverage gaps stay NaN and are counted in a warning."""
     mock_km_cls, _, _ = frame_geometry_mocks
     config = GeolocationKernelConfig(dynamic_kernel_sources=["some.bsp"])
 
-    result = add_frame_geometry_to_dataset(camera_dataset, config)
+    with caplog.at_level(logging.WARNING, logger="libera_cam.geolocation"):
+        result = add_frame_geometry_to_dataset(camera_dataset, config)
+
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert "Subsatellite_Latitude has no SPICE coverage at 1 of 2 camera frames; written as NaN." in warnings
+    assert "Satellite_Position has no SPICE coverage at 1 of 2 camera frames; written as NaN." in warnings
+    assert "Azimuth_Motor_Position_SPICE_Int_Time_1 has no SPICE coverage at 1 of 2 camera frames; written as NaN." in (
+        warnings
+    )
+    # The second-integration azimuth is covered at both frames.
+    assert not any(message.startswith("Azimuth_Motor_Position_SPICE_Int_Time_2") for message in warnings)
 
     assert result["Subsatellite_Latitude"].dims == ("camera_time",)
     np.testing.assert_allclose(result["Subsatellite_Latitude"].values, [10.0, np.nan])
@@ -496,8 +507,12 @@ def test_create_placeholder_spacecraft_geometry():
     assert np.isnan(result.to_numpy()).all()
 
 
-def test_add_placeholder_frame_geometry(camera_dataset):
-    result = add_placeholder_frame_geometry_to_dataset(camera_dataset)
+def test_add_placeholder_frame_geometry(camera_dataset, caplog):
+    with caplog.at_level(logging.WARNING, logger="libera_cam.geolocation"):
+        result = add_placeholder_frame_geometry_to_dataset(camera_dataset)
+
+    # Placeholders are NaN by design, not SPICE gaps.
+    assert not [record for record in caplog.records if record.levelno == logging.WARNING]
 
     for variable, dtype in [*geolocation._SCALAR_VARIABLES.values(), *geolocation._VECTOR_VARIABLES.values()]:
         assert result[variable].dtype == dtype, variable
