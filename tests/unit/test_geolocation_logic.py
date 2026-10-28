@@ -444,11 +444,6 @@ def test_granule_earth_sun_distance_ignores_gaps():
     assert granule_earth_sun_distance(np.array([np.nan, 0.98, 1.0])) == pytest.approx(0.99)
 
 
-def test_granule_earth_sun_distance_raises_without_coverage():
-    with pytest.raises(ValueError, match="Earth-Sun distance has no coverage"):
-        granule_earth_sun_distance(np.array([np.nan, np.nan]))
-
-
 def test_create_placeholder_spacecraft_geometry():
     result = create_placeholder_spacecraft_geometry(5)
 

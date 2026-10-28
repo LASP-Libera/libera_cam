@@ -269,21 +269,15 @@ def granule_earth_sun_distance(distances: np.ndarray) -> float:
     Parameters
     ----------
     distances : np.ndarray
-        Per-frame Earth-Sun distance in AU, NaN where SPICE had no coverage.
+        Per-frame Earth-Sun distance in AU, NaN where SPICE had no coverage. At least one frame
+        is finite: :func:`calculate_spacecraft_geometry` queries with ``require_coverage``, which
+        raises when the Sun ephemeris covers no frame.
 
     Returns
     -------
     float
         Median Earth-Sun distance over the covered frames, in AU.
-
-    Raises
-    ------
-    ValueError
-        If no frame has a finite distance. The Sun ephemeris comes from the generic NAIF
-        kernels, so this means they are not furnished rather than a per-frame gap.
     """
-    if not np.isfinite(distances).any():
-        raise ValueError("Earth-Sun distance has no coverage over the granule; check the generic NAIF kernels.")
     return float(np.nanmedian(distances))
 
 
