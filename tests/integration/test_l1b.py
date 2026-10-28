@@ -151,7 +151,7 @@ def _write_product(manifest_path: Path, output_dir: Path, monkeypatch: pytest.Mo
     output_dir.mkdir()
     monkeypatch.setenv("PROCESSING_PATH", str(output_dir))
     output_manifest = Manifest.from_file(algorithm(Namespace(manifest=str(manifest_path))))
-    (nc_file,) = [file.filename for file in output_manifest.files if Path(file.filename).suffix == ".nc"]
+    (nc_file,) = [file for file in output_manifest.files if Path(file).suffix == ".nc"]
     return nc_file
 
 
