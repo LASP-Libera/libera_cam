@@ -337,20 +337,16 @@ def two_timestamps():
 
 
 def test_spacecraft_field_mapping_matches_curryer_and_product_definition():
-    """The variable maps must name curryer columns and reproduce each product variable's fill and dtype."""
+    """The variable maps must name curryer columns and reproduce each product variable's dtype."""
     curryer_columns = {column for field in geolocation._SPACECRAFT_FIELDS for column in field.columns}
     product_variables = yaml.safe_load(product_config_path.read_text())["variables"]
 
     assert set(geolocation._SCALAR_VARIABLES) <= curryer_columns
     assert set(geolocation._VECTOR_VARIABLES) <= set(geolocation._SPACECRAFT_FIELDS)
-    for variable, fill, dtype in [*geolocation._SCALAR_VARIABLES.values(), *geolocation._VECTOR_VARIABLES.values()]:
-        definition = product_variables[variable]
-        assert fill == definition["attributes"]["_FillValue"], variable
-        assert np.dtype(dtype) == np.dtype(definition["dtype"]), variable
+    for variable, dtype in [*geolocation._SCALAR_VARIABLES.values(), *geolocation._VECTOR_VARIABLES.values()]:
+        assert np.dtype(dtype) == np.dtype(product_variables[variable]["dtype"]), variable
 
-    azimuth = product_variables[geolocation._AZIMUTH_VARIABLE]
-    assert geolocation._FILL_VALUE == azimuth["attributes"]["_FillValue"]
-    assert np.dtype(azimuth["dtype"]) == np.float32
+    assert np.dtype(product_variables[geolocation._AZIMUTH_VARIABLE]["dtype"]) == np.float32
 
 
 @patch("libera_cam.geolocation.geometry.GeometryData")
@@ -405,10 +401,10 @@ def test_calculate_spacecraft_geometry_raises_friendly_message_on_spice_error(
 @patch("libera_cam.geolocation.KernelManager")
 @patch("libera_cam.geolocation.geometry.GeometryData")
 @patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2]))
-def test_add_spacecraft_geometry_maps_columns_and_applies_fill(
+def test_add_spacecraft_geometry_maps_columns_and_keeps_gaps_nan(
     mock_adapt, mock_geometry_data, mock_km_cls, camera_dataset, spacecraft_geometry_frame
 ):
-    """curryer columns map onto product variables; coverage gaps become each variable's _FillValue."""
+    """curryer columns map onto product variables; coverage gaps stay NaN."""
     mock_geometry_data.return_value.get_geometry.return_value = spacecraft_geometry_frame
     mock_km = mock_km_cls.return_value
     mock_km.__enter__.return_value = mock_km
@@ -417,21 +413,21 @@ def test_add_spacecraft_geometry_maps_columns_and_applies_fill(
     result = add_spacecraft_geometry_to_dataset(camera_dataset, config)
 
     assert result["Subsatellite_Latitude"].dims == ("camera_time",)
-    np.testing.assert_allclose(result["Subsatellite_Latitude"].values, [10.0, -999.0])
-    np.testing.assert_allclose(result["Subsolar_Longitude"].values, [100.0, -999.0])
-    np.testing.assert_allclose(result["Subsatellite_Colatitude"].values, [80.0, -999.0])
-    np.testing.assert_allclose(result["Radius_of_Satellite_from_Center_of_Earth"].values, [7000.0, -9999.0])
+    np.testing.assert_allclose(result["Subsatellite_Latitude"].values, [10.0, np.nan])
+    np.testing.assert_allclose(result["Subsolar_Longitude"].values, [100.0, np.nan])
+    np.testing.assert_allclose(result["Subsatellite_Colatitude"].values, [80.0, np.nan])
+    np.testing.assert_allclose(result["Radius_of_Satellite_from_Center_of_Earth"].values, [7000.0, np.nan])
     assert result["Subsatellite_Latitude"].dtype == np.float32
     assert result["Radius_of_Satellite_from_Center_of_Earth"].dtype == np.float64
 
     assert result["Satellite_Position"].dims == ("camera_time", "EUCLIDEAN_DIM")
-    np.testing.assert_allclose(result["Satellite_Position"].values, [[5000.0, 4000.0, 1000.0], [-9999.0] * 3])
-    np.testing.assert_allclose(result["Satellite_Velocity"].values, [[-2.9, 3.5, 6.0], [-999.0] * 3])
+    np.testing.assert_allclose(result["Satellite_Position"].values, [[5000.0, 4000.0, 1000.0], [np.nan] * 3])
+    np.testing.assert_allclose(result["Satellite_Velocity"].values, [[-2.9, 3.5, 6.0], [np.nan] * 3])
     assert result["Satellite_Position"].dtype == np.float64
     assert result["Satellite_Velocity"].dtype == np.float64
 
-    np.testing.assert_allclose(result["Satellite_Attitude_Q0"].values, [1.0, -999.0])
-    np.testing.assert_allclose(result["Satellite_Attitude_Q3"].values, [0.0, -999.0])
+    np.testing.assert_allclose(result["Satellite_Attitude_Q0"].values, [1.0, np.nan])
+    np.testing.assert_allclose(result["Satellite_Attitude_Q3"].values, [0.0, np.nan])
     assert result["Satellite_Attitude_Q0"].dtype == np.float32
 
     # The granule attribute ignores the gap rather than averaging it in.
@@ -469,25 +465,18 @@ def test_create_placeholder_spacecraft_geometry():
     assert len(result) == 5
     expected_columns = [column for field in geolocation._SPACECRAFT_FIELDS for column in field.columns]
     assert list(result.columns) == expected_columns
-    assert np.all(result["subsatellite_latitude"].to_numpy() == np.float32(-999))
-    assert np.all(result["attitude_q0"].to_numpy() == np.float32(-999))
-    assert np.all(result["spacecraft_radius"].to_numpy() == np.float64(-9999))
-    assert np.all(result["spacecraft_position_inertial_x"].to_numpy() == np.float64(-9999))
-    assert np.all(result["spacecraft_velocity_inertial_x"].to_numpy() == np.float32(-999))
+    assert np.isnan(result.to_numpy()).all()
 
 
 def test_add_placeholder_spacecraft_geometry(camera_dataset):
     result = add_placeholder_spacecraft_geometry_to_dataset(camera_dataset)
 
-    assert np.all(result["Subsatellite_Latitude"].values == np.float32(-999))
-    assert np.all(result["Subsolar_Colatitude"].values == np.float32(-999))
-    assert np.all(result["Satellite_Attitude_Q2"].values == np.float32(-999))
-    assert np.all(result["Radius_of_Satellite_from_Center_of_Earth"].values == np.float64(-9999))
+    for variable, dtype in [*geolocation._SCALAR_VARIABLES.values(), *geolocation._VECTOR_VARIABLES.values()]:
+        assert result[variable].dtype == dtype, variable
+        assert np.isnan(result[variable].values).all(), variable
     assert result["Radius_of_Satellite_from_Center_of_Earth"].dims == ("camera_time",)
     assert result["Satellite_Position"].dims == ("camera_time", "EUCLIDEAN_DIM")
-    assert np.all(result["Satellite_Position"].values == np.float64(-9999))
-    assert np.all(result["Satellite_Velocity"].values == np.float64(-999))
-    assert result.attrs["Earth_Sun_Distance_AU"] == -999.0
+    assert np.isnan(result.attrs["Earth_Sun_Distance_AU"])
 
 
 def _euler_frame(euler3: list[float]) -> pd.DataFrame:
@@ -499,7 +488,7 @@ def _euler_frame(euler3: list[float]) -> pd.DataFrame:
 @patch("libera_cam.geolocation.spatial.frame_to_frame_euler")
 @patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2, 3, 4]))
 def test_calculate_azimuth_uses_curryer_frame_euler(mock_adapt, mock_euler, mock_kernel_manager):
-    """Azimuth is the third 1-2-3 Euler angle of BASE -> AZ, wrapped to [0, 360); CK gaps become fill.
+    """Azimuth is the third 1-2-3 Euler angle of BASE -> AZ, wrapped to [0, 360); CK gaps stay NaN.
 
     -1e-6 wraps to a float64 just below 360 that rounds to 360.0 in float32, and must be written as 0.
     """
@@ -517,7 +506,7 @@ def test_calculate_azimuth_uses_curryer_frame_euler(mock_adapt, mock_euler, mock
     np.testing.assert_array_equal(call.args[2], [1, 2, 3, 4])
     assert call.kwargs == {"sequence": (1, 2, 3), "allow_nans": True}
     assert azimuth.dtype == np.float32
-    np.testing.assert_array_equal(azimuth, np.array([350.0, 350.0, 0.0, -999.0], dtype=np.float32))
+    np.testing.assert_array_equal(azimuth, np.array([350.0, 350.0, 0.0, np.nan], dtype=np.float32))
 
 
 @patch("libera_cam.geolocation.spatial.frame_to_frame_euler")
@@ -543,7 +532,7 @@ def test_add_azimuth_to_dataset(mock_adapt, mock_euler, mock_km_cls, camera_data
 
     assert result["Azimuth"].dims == ("camera_time",)
     assert result["Azimuth"].dtype == np.float32
-    np.testing.assert_allclose(result["Azimuth"].values, [12.5, -999.0])
+    np.testing.assert_allclose(result["Azimuth"].values, [12.5, np.nan])
     mock_km.load_libera_dynamic_kernels.assert_called_once_with(
         ["azrot.bc"], needs_naif_kernels=True, needs_static_kernels=True
     )
@@ -565,7 +554,7 @@ def test_add_placeholder_azimuth(camera_dataset):
 
     assert result["Azimuth"].dims == ("camera_time",)
     assert result["Azimuth"].dtype == np.float32
-    assert np.all(result["Azimuth"].values == np.float32(-999))
+    assert np.isnan(result["Azimuth"].values).all()
 
 
 def test_add_jpss_only_azimuth(camera_dataset):

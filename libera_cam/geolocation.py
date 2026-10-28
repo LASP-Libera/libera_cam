@@ -32,12 +32,9 @@ from libera_cam.constants import (
 
 logger = logging.getLogger(__name__)
 
-# Product fill values (L1B_CAM_product_definition.yml)
+# Per-pixel product fill values (L1B_CAM_product_definition.yml)
 _GEO_FILL_LAT_LON = np.float32(-999.0)
 _GEO_FILL_ALT = np.float32(-9999.0)
-_FILL_VALUE = -999.0  # product default: angles, quaternion components, velocity
-_FILL_DISTANCE = -9999.0  # radius and position
-_FILL_EARTH_SUN_DISTANCE = -999.0
 
 _SPICE_BODY_PRODUCTION = "LIBERA_WFOV_CAM"
 _SPICE_BODY_JPSS_ONLY = "LIBERA_BASE"
@@ -57,26 +54,26 @@ _SPACECRAFT_FIELDS = (
     geometry.GeometryField.SATELLITE_ATTITUDE,
 )
 
-# curryer column -> (product variable, _FillValue, dtype) for the per-frame scalar fields, matching
-# the product definition.
-_SCALAR_VARIABLES: dict[str, tuple[str, float, type]] = {
-    "subsatellite_latitude": ("Subsatellite_Latitude", _FILL_VALUE, np.float32),
-    "subsatellite_longitude": ("Subsatellite_Longitude", _FILL_VALUE, np.float32),
-    "subsatellite_colatitude": ("Subsatellite_Colatitude", _FILL_VALUE, np.float32),
-    "subsolar_latitude": ("Subsolar_Latitude", _FILL_VALUE, np.float32),
-    "subsolar_longitude": ("Subsolar_Longitude", _FILL_VALUE, np.float32),
-    "subsolar_colatitude": ("Subsolar_Colatitude", _FILL_VALUE, np.float32),
-    "spacecraft_radius": ("Radius_of_Satellite_from_Center_of_Earth", _FILL_DISTANCE, np.float64),
-    "attitude_q0": ("Satellite_Attitude_Q0", _FILL_VALUE, np.float32),
-    "attitude_q1": ("Satellite_Attitude_Q1", _FILL_VALUE, np.float32),
-    "attitude_q2": ("Satellite_Attitude_Q2", _FILL_VALUE, np.float32),
-    "attitude_q3": ("Satellite_Attitude_Q3", _FILL_VALUE, np.float32),
+# curryer column -> (product variable, dtype) for the per-frame scalar fields, matching the product
+# definition.
+_SCALAR_VARIABLES: dict[str, tuple[str, type]] = {
+    "subsatellite_latitude": ("Subsatellite_Latitude", np.float32),
+    "subsatellite_longitude": ("Subsatellite_Longitude", np.float32),
+    "subsatellite_colatitude": ("Subsatellite_Colatitude", np.float32),
+    "subsolar_latitude": ("Subsolar_Latitude", np.float32),
+    "subsolar_longitude": ("Subsolar_Longitude", np.float32),
+    "subsolar_colatitude": ("Subsolar_Colatitude", np.float32),
+    "spacecraft_radius": ("Radius_of_Satellite_from_Center_of_Earth", np.float64),
+    "attitude_q0": ("Satellite_Attitude_Q0", np.float32),
+    "attitude_q1": ("Satellite_Attitude_Q1", np.float32),
+    "attitude_q2": ("Satellite_Attitude_Q2", np.float32),
+    "attitude_q3": ("Satellite_Attitude_Q3", np.float32),
 }
-# curryer vector field -> (product variable, _FillValue, dtype); the three columns stack on the
-# ``EUCLIDEAN_DIM`` dimension.
-_VECTOR_VARIABLES: dict[geometry.GeometryField, tuple[str, float, type]] = {
-    geometry.GeometryField.SC_POSITION_INERTIAL: ("Satellite_Position", _FILL_DISTANCE, np.float64),
-    geometry.GeometryField.SC_VELOCITY_INERTIAL: ("Satellite_Velocity", _FILL_VALUE, np.float64),
+# curryer vector field -> (product variable, dtype); the three columns stack on the ``EUCLIDEAN_DIM``
+# dimension.
+_VECTOR_VARIABLES: dict[geometry.GeometryField, tuple[str, type]] = {
+    geometry.GeometryField.SC_POSITION_INERTIAL: ("Satellite_Position", np.float64),
+    geometry.GeometryField.SC_VELOCITY_INERTIAL: ("Satellite_Velocity", np.float64),
 }
 _EARTH_SUN_DISTANCE_ATTRIBUTE = "Earth_Sun_Distance_AU"
 _AZIMUTH_VARIABLE = "Azimuth"
@@ -151,11 +148,6 @@ def _kernel_manager_from_config(config: GeolocationKernelConfig) -> KernelManage
         use_high_precision_earth=config.use_high_precision_earth,
         cache_timeout_days=config.cache_timeout_days,
     )
-
-
-def _apply_fill(values: np.ndarray, fill: float, dtype: type) -> np.ndarray:
-    """Replace SPICE coverage gaps (NaN) with the product ``_FillValue``."""
-    return np.where(np.isfinite(values), values, fill).astype(dtype)
 
 
 def _validate_observer(observer: str, allowed: tuple[str, ...], role: str) -> None:
@@ -279,9 +271,8 @@ def create_placeholder_spacecraft_geometry(n_samples: int) -> pd.DataFrame:
     """
     Placeholder spacecraft geometry for ``use_geo`` false mode.
 
-    Mirrors :func:`calculate_spacecraft_geometry`'s columns filled with the product fill values,
-    so the dataset assembly always reads a geometry DataFrame and never branches on ``None``.
-    Distance fields (radius, position) use -9999; everything else the product default -999.
+    Mirrors :func:`calculate_spacecraft_geometry`'s columns filled with NaN, so the dataset
+    assembly always reads a geometry DataFrame and never branches on ``None``.
 
     Parameters
     ----------
@@ -291,20 +282,11 @@ def create_placeholder_spacecraft_geometry(n_samples: int) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        One column per ``_SPACECRAFT_FIELDS`` output column, filled with the fill value.
+        One float64 column per ``_SPACECRAFT_FIELDS`` output column, all NaN.
     """
-    default_fill = np.full(n_samples, _FILL_VALUE, dtype=np.float32)
-    distance_fill = np.full(n_samples, _FILL_DISTANCE, dtype=np.float64)
-    distance_columns = {
-        geometry.GeometryField.SC_RADIUS.columns[0],
-        *geometry.GeometryField.SC_POSITION_INERTIAL.columns,
-    }
-    data = {
-        column: (distance_fill if column in distance_columns else default_fill)
-        for field in _SPACECRAFT_FIELDS
-        for column in field.columns
-    }
-    return pd.DataFrame(data)
+    return pd.DataFrame(
+        {column: np.full(n_samples, np.nan) for field in _SPACECRAFT_FIELDS for column in field.columns}
+    )
 
 
 def granule_earth_sun_distance(distances: np.ndarray) -> float:
@@ -337,12 +319,12 @@ def granule_earth_sun_distance(distances: np.ndarray) -> float:
 
 
 def _assign_spacecraft_geometry(ds: xr.Dataset, geometry_data: pd.DataFrame) -> xr.Dataset:
-    """Map the curryer geometry columns onto the product variables, filling coverage gaps."""
-    for column, (variable, fill, dtype) in _SCALAR_VARIABLES.items():
-        ds[variable] = (("camera_time",), _apply_fill(geometry_data[column].to_numpy(), fill, dtype))
-    for field, (variable, fill, dtype) in _VECTOR_VARIABLES.items():
+    """Map the curryer geometry columns onto the product variables; coverage gaps stay NaN."""
+    for column, (variable, dtype) in _SCALAR_VARIABLES.items():
+        ds[variable] = (("camera_time",), geometry_data[column].to_numpy().astype(dtype))
+    for field, (variable, dtype) in _VECTOR_VARIABLES.items():
         vector = geometry_data[list(field.columns)].to_numpy()
-        ds[variable] = (("camera_time", "EUCLIDEAN_DIM"), _apply_fill(vector, fill, dtype))
+        ds[variable] = (("camera_time", "EUCLIDEAN_DIM"), vector.astype(dtype))
     return ds
 
 
@@ -400,14 +382,14 @@ def add_spacecraft_geometry_to_dataset(ds: xr.Dataset, config: GeolocationKernel
 
 def add_placeholder_spacecraft_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     """
-    Add product fill-value placeholder spacecraft geometry to the dataset.
+    Add NaN placeholder spacecraft geometry to the dataset.
 
     Used in ground-data mode, where no SPICE kernels are available. The product definition
     declares these variables and the ``Earth_Sun_Distance_AU`` attribute, and the writer
     rejects a dataset that omits a declared field, so they must be present even unfilled.
     """
     ds = _assign_spacecraft_geometry(ds, create_placeholder_spacecraft_geometry(ds.sizes["camera_time"]))
-    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = _FILL_EARTH_SUN_DISTANCE
+    ds.attrs[_EARTH_SUN_DISTANCE_ATTRIBUTE] = np.nan
 
     logger.info("use_geo is false: using placeholder spacecraft geometry.")
 
@@ -428,9 +410,9 @@ def calculate_azimuth(
     instrument base, not a pointing angle in the spacecraft or orbital frame. curryer's
     ``frame_to_frame_euler`` does the per-sample frame transform and factoring.
 
-    A per-sample CK coverage gap comes back as NaN under ``allow_nans`` and is written as the
-    product ``_FillValue`` (-999). A granule with no covered frame at all means the azimuth
-    CK or the Libera frame kernel is not furnished, or does not cover the granule, and raises.
+    A per-sample CK coverage gap comes back as NaN under ``allow_nans`` and stays NaN. A granule
+    with no covered frame at all means the azimuth CK or the Libera frame kernel is not
+    furnished, or does not cover the granule, and raises.
     The caller furnishes the kernels (:func:`add_azimuth_to_dataset` loads the static set,
     which carries the Libera frame kernel, alongside the CK).
 
@@ -444,7 +426,7 @@ def calculate_azimuth(
     Returns
     -------
     np.ndarray
-        Azimuth in degrees, shape ``(N,)``, dtype float32, in ``[0, 360)`` or -999 where the CK
+        Azimuth in degrees, shape ``(N,)``, dtype float32, in ``[0, 360)`` or NaN where the CK
         does not cover the frame.
 
     Raises
@@ -465,7 +447,7 @@ def calculate_azimuth(
             "frame(s); check that the azimuth CK in the kernel manifest covers the granule and that the Libera "
             "frame kernel is furnished."
         )
-    azimuth = _apply_fill(azimuth, _FILL_VALUE, np.float32)
+    azimuth = azimuth.astype(np.float32)
     # The float32 cast rounds angles just below 360 up to 360.0, which is written as 0 to stay in [0, 360).
     azimuth[azimuth == np.float32(360.0)] = 0.0
     return azimuth
@@ -483,9 +465,9 @@ def create_placeholder_azimuth(n_samples: int) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Shape ``(N,)``, dtype float32, filled with the product ``_FillValue`` (-999).
+        Shape ``(N,)``, dtype float32, all NaN.
     """
-    return np.full(n_samples, _FILL_VALUE, dtype=np.float32)
+    return np.full(n_samples, np.nan, dtype=np.float32)
 
 
 def create_jpss_only_azimuth(n_samples: int) -> np.ndarray:
@@ -551,7 +533,7 @@ def add_azimuth_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> x
 
 
 def add_placeholder_azimuth_to_dataset(ds: xr.Dataset) -> xr.Dataset:
-    """Add the product fill-value ``Azimuth`` for ``use_geo`` false mode."""
+    """Add a NaN ``Azimuth`` for ``use_geo`` false mode."""
     ds[_AZIMUTH_VARIABLE] = (("camera_time",), create_placeholder_azimuth(ds.sizes["camera_time"]))
     return ds
 

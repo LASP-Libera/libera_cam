@@ -343,8 +343,8 @@ def process_l1a_to_l1b(
     - Add the spacecraft-level geometry (sub-points, satellite radius, inertial position and
       velocity, attitude quaternion, Earth-Sun distance), or placeholders when ``use_geo`` is
       false
-    - Add the motor ``Azimuth`` from the azimuth CK, 0 degrees in ``jpss_only`` mode, or the
-      fill value when ``use_geo`` is false
+    - Add the motor ``Azimuth`` from the azimuth CK, 0 degrees in ``jpss_only`` mode, or
+      NaN when ``use_geo`` is false
 
     Parameters
     ----------

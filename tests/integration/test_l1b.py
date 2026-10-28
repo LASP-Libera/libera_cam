@@ -84,15 +84,12 @@ def test_earth_sun_distance_plausible(l1b_product_dataset):
     ],
 )
 def test_spacecraft_geometry_is_computed_per_frame(l1b_product_dataset, variable, low, high):
-    """Each spacecraft-level field is one covered value per camera frame, inside its valid range.
-
-    xarray decodes the written ``_FillValue`` to NaN on read, so fill shows up as NaN here.
-    """
+    """Each spacecraft-level field is one covered value per camera frame, inside its valid range."""
     data_array = l1b_product_dataset[variable]
     assert data_array.dims == ("CAMERA_TIME",)
 
     values = data_array.to_numpy()
-    assert np.isfinite(values).all(), f"{variable} contains _FillValue; SPICE coverage was expected"
+    assert np.isfinite(values).all(), f"{variable} contains NaN; SPICE coverage was expected"
     assert values.min() >= low
     assert values.max() <= high
 
@@ -141,7 +138,7 @@ def test_azimuth_is_covered_motor_encoder_angle(l1b_product_dataset):
     assert azimuth.dtype == np.float32
 
     values = azimuth.to_numpy()
-    assert np.isfinite(values).all(), "Azimuth contains _FillValue; AZROT-CK coverage was expected"
+    assert np.isfinite(values).all(), "Azimuth contains NaN; AZROT-CK coverage was expected"
     assert np.all((values >= 0.0) & (values < 360.0))
 
     header = l1b_product_dataset["Azimuth_FSW_Metadata"].to_numpy().astype(np.float64)

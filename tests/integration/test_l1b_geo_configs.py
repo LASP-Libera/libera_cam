@@ -75,7 +75,7 @@ class TestL1bManifestUseGeoConfiguration:
             assert np.all(dataset["Latitude"].values == np.float32(-999))
             assert np.all(dataset["Longitude"].values == np.float32(-999))
             assert np.all(dataset["Altitude"].values == np.float32(-9999))
-            assert np.all(dataset["Azimuth"].values == np.float32(-999))
+            assert np.isnan(dataset["Azimuth"].values).all()
             assert np.all(dataset["Azimuth_FSW_Metadata"].values != np.float32(-999))
             assert np.any(np.isfinite(dataset["Radiance"].values))
 

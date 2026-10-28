@@ -3,6 +3,7 @@
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 from libera_cam.config import product_config_path
@@ -42,6 +43,33 @@ def test_spacecraft_geometry_fields_are_declared_per_frame():
     for name in ["Satellite_Position", "Satellite_Velocity"]:
         assert definition["variables"][name]["dimensions"] == ["CAMERA_TIME", "EUCLIDEAN_DIM"]
         assert definition["variables"][name]["dtype"] == "float64"
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "Subsatellite_Latitude",
+        "Subsatellite_Longitude",
+        "Subsatellite_Colatitude",
+        "Subsolar_Latitude",
+        "Subsolar_Longitude",
+        "Subsolar_Colatitude",
+        "Radius_of_Satellite_from_Center_of_Earth",
+        "Satellite_Position",
+        "Satellite_Velocity",
+        "Satellite_Attitude_Q0",
+        "Satellite_Attitude_Q1",
+        "Satellite_Attitude_Q2",
+        "Satellite_Attitude_Q3",
+        "Azimuth_FSW_Metadata",
+        "Azimuth",
+        "Radiance",
+    ],
+)
+def test_variable_declares_no_fill_value(variable):
+    """Missing values are written as NaN, so these variables declare no ``_FillValue``."""
+    definition = yaml.safe_load(product_config_path.read_text())
+    assert "_FillValue" not in definition["variables"][variable].get("attributes", {})
 
 
 def test_package_version_matches_pyproject():
