@@ -74,13 +74,13 @@ def test_surface_angles_are_declared_per_pixel_with_rad_conventions():
         assert variable["attributes"]["valid_range"] == valid_range
 
 
-def test_geolocation_quality_flag_is_a_per_pixel_uint16_bitmask():
-    """curryer's flags fill bits 0-14 and bit 15 marks not-run; no _FillValue, so readers keep the integer dtype."""
+def test_geolocation_quality_flag_is_a_per_pixel_uint32_bitmask():
+    """curryer's flags fill bits 0-30 and bit 31 marks not-run; no _FillValue, so readers keep the integer dtype."""
     variable = yaml.safe_load(product_config_path.read_text())["variables"]["Geolocation_Quality_Flag"]
     assert variable["dimensions"] == ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
-    assert variable["dtype"] == "uint16"
+    assert variable["dtype"] == "uint32"
     assert "_FillValue" not in variable["attributes"]
-    assert "[b15]" in variable["attributes"]["value_meaning"]
+    assert "[b31]" in variable["attributes"]["value_meaning"]
 
 
 def test_per_pixel_geolocation_variables_declare_shuffle():

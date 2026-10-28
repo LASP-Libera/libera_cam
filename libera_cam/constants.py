@@ -62,7 +62,7 @@ DEFAULT_TIME_CHUNK_SIZE = 20
 WFOV_DEFAULT_CLK_PER_VALUE = 0.15625
 
 # Default number of frames per per-pixel geometry task (``LIBERA_CAM_GEO_CHUNK_SIZE``), independent
-# of the decompression chunk. One frame's geometry is 143 MB (eight float32 fields and uint16 flags)
-# and curryer works in ~1.5 GB of transients per frame, so a task peaks near 1.5 GB + 143 MB * size.
+# of the decompression chunk. One frame's geometry is 151 MB (eight float32 fields and uint32 flags)
+# and curryer works in ~1.5 GB of transients per frame, so a task peaks near 1.5 GB + 151 MB * size.
 # On a 695-frame granule, 5 against 10 cut the run's peak from 9.0 to 5.1 GB at the same wall time.
 DEFAULT_GEO_CHUNK_SIZE = 5

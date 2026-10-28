@@ -116,12 +116,12 @@ def test_produced_geolocation_variables_pass_through_untouched():
     dataset = _processing_dataset()
     angles = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
     dataset["Solar_Zenith_Surface"] = (("camera_time", "y", "x"), da.from_array(angles))
-    dataset["Geolocation_Quality_Flag"] = (("camera_time", "y", "x"), da.full((2, 3, 4), 0x200, dtype=np.uint16))
+    dataset["Geolocation_Quality_Flag"] = (("camera_time", "y", "x"), da.full((2, 3, 4), 0x200, dtype=np.uint32))
 
     packaged = package_l1b_product(dataset)
 
     assert packaged["Solar_Zenith_Surface"].dims == ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
     np.testing.assert_array_equal(packaged["Solar_Zenith_Surface"].values, angles.transpose(0, 2, 1))
     assert packaged["Solar_Zenith_Surface"].attrs == {}
-    assert packaged["Geolocation_Quality_Flag"].dtype == np.uint16
+    assert packaged["Geolocation_Quality_Flag"].dtype == np.uint32
     np.testing.assert_array_equal(packaged["Geolocation_Quality_Flag"].values, 0x200)

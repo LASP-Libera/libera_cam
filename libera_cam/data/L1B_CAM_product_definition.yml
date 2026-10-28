@@ -242,17 +242,17 @@ variables:
         FSW-reported commanded instrument azimuth, passed through from L1A
         WFOV_FSW_HEADER_AZIMUTH_ANGLE. Reported as a signed integer in degrees.
   Geolocation_Quality_Flag:
-    dtype: uint16
+    dtype: uint32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     attributes:
       long_name: Bit flags from the per-pixel geolocation; 0 where the pixel geometry is good
       value_meaning: >-
-        Bits 0-14 are curryer SpatialQualityFlags from the ellipsoid intersection and the surface
-        angles. Those this product sets: [b8] no SPICE data for the frame epoch (every field NaN),
+        Bits 0-30 hold curryer SpatialQualityFlags from the ellipsoid intersection and the surface
+        angles (curryer 0.5.5 defines bits 0-15). Those this product sets: [b8] no SPICE data for the frame epoch (every field NaN),
         accompanied by the SPICE error class [b0] no result, [b1] ephemeris missing,
         [b2] attitude missing, [b3] invalid location or [b4] unclassified SPICE error; [b9] the pixel
         line of sight misses the ellipsoid (NaN); [b13] Sun position unavailable (solar angles
-        NaN); [b14] a surface angle was not finite (NaN). [b15] geolocation was not run (use_geo
+        NaN); [b14] a surface angle was not finite (NaN). [b31] geolocation was not run (use_geo
         false, or the onboard pixel mask removed the pixel; see Camera_Mask).
     encoding:
       chunksizes: [1, 512, 512]
@@ -380,7 +380,7 @@ variables:
       value_meaning: >-
         1 where the camera returned the pixel (non-zero count), 0 where the onboard pixel mask
         removed it. Where this is 0, Radiance and the geolocation fields are NaN,
-        Geolocation_Quality_Flag has bit 15 set, Pixel_Counts is 0 and Integration_Time_Flag
+        Geolocation_Quality_Flag has bit 31 set, Pixel_Counts is 0 and Integration_Time_Flag
         carries no meaning. Video mode applies no onboard mask, so a pixel is 0 there only if it
         read 0 DN.
     encoding:

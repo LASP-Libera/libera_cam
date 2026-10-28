@@ -110,14 +110,14 @@ def test_three_dimensional_variables_carry_the_pinned_encoding_on_disk(l1b_produ
 
 
 def test_per_pixel_geometry_is_computed_for_every_kept_pixel(l1b_product_dataset):
-    """Kept on-Earth pixels have finite geometry flagged 0; pixels the camera removed are NaN with bit 15.
+    """Kept on-Earth pixels have finite geometry flagged 0; pixels the camera removed are NaN with bit 31.
 
-    The flag variable keeps its uint16 dtype. DITL_3min mixes masked frames (about 8% kept) with an
+    The flag variable keeps its uint32 dtype. DITL_3min mixes masked frames (about 8% kept) with an
     unmasked one.
     """
     flags = l1b_product_dataset["Geolocation_Quality_Flag"]
     assert flags.dims == ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
-    assert flags.dtype == np.uint16
+    assert flags.dtype == np.uint32
     kept = l1b_product_dataset["Camera_Mask"].to_numpy() == 1
     assert "valid_pixel_mask" not in l1b_product_dataset
 
@@ -131,7 +131,7 @@ def test_per_pixel_geometry_is_computed_for_every_kept_pixel(l1b_product_dataset
     on_earth_fraction = on_earth[unmasked].mean(axis=(1, 2))
     assert np.all((on_earth_fraction > 0.70) & (on_earth_fraction < 0.85)), on_earth_fraction
     assert not on_earth[~kept].any()
-    np.testing.assert_array_equal(flag_values[~kept], 0x8000)
+    np.testing.assert_array_equal(flag_values[~kept], 1 << 31)
     assert np.isnan(l1b_product_dataset["Radiance"].to_numpy()[~kept]).all()
     for name in (
         "Latitude",

@@ -83,7 +83,7 @@ class TestL1bManifestUseGeoConfiguration:
             assert dataset.attrs["Geolocation_Mode"] == "use_geo_false"
             for name in ("Latitude", "Longitude", "Altitude", "Solar_Zenith_Surface"):
                 assert np.isnan(dataset[name].values).all(), name
-            assert np.all(dataset["Geolocation_Quality_Flag"].values == np.uint16(0x8000))
+            assert np.all(dataset["Geolocation_Quality_Flag"].values == np.uint32(1 << 31))
             for variable in _CK_AZIMUTH_VARIABLES:
                 assert np.isnan(dataset[variable].values).all(), variable
             assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
@@ -130,7 +130,7 @@ class TestL1bManifestUseGeoConfiguration:
             # The surface angles are produced with lat/lon: finite where the pixel hits the
             # ellipsoid, NaN elsewhere, and the flag word is 0 exactly there.
             flags = dataset["Geolocation_Quality_Flag"].values
-            assert flags.dtype == np.uint16
+            assert flags.dtype == np.uint32
             assert np.array_equal(flags == 0, valid)
             for name in (
                 "Solar_Zenith_Surface",
