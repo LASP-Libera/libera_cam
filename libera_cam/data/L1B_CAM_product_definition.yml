@@ -2,6 +2,7 @@ attributes:
   ProductID: CAM
   algorithm_version: null
   Earth_Sun_Distance_AU: null
+  Geolocation_Mode: null # production, jpss_only or use_geo_false
 
 coordinates:
   CAMERA_TIME: # TODO[LIBSDC-707]: Validate that time is unique for each image and can be used as a UID

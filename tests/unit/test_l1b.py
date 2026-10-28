@@ -165,6 +165,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds.integration_mask = MagicMock()
         mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
+        mock_lazy_ds.attrs = {}
         mock_read_l1a.return_value = mock_lazy_ds
 
         mock_radiance = MagicMock()
@@ -184,6 +185,7 @@ class TestL1b(unittest.TestCase):
         # The spacecraft-level fields and the CK azimuth share the geolocation kernel config.
         mock_frame_geo.assert_called_once_with(mock_lazy_ds, call_kwargs.args[1])
         assert call_kwargs.args[1].jpss_only is False
+        assert mock_lazy_ds.attrs["Geolocation_Mode"] == "production"
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
@@ -199,6 +201,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds.integration_mask = MagicMock()
         mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
+        mock_lazy_ds.attrs = {}
         mock_read_l1a.return_value = mock_lazy_ds
 
         mock_convert.return_value = MagicMock()
@@ -217,6 +220,7 @@ class TestL1b(unittest.TestCase):
         frame_config = mock_frame_geo.call_args.args[1]
         assert frame_config.jpss_only is True
         assert frame_config.dynamic_kernel_sources == dynamic_kernel_sources
+        assert mock_lazy_ds.attrs["Geolocation_Mode"] == "jpss_only"
         assert result is mock_lazy_ds
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
@@ -235,6 +239,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds.integration_mask = MagicMock()
         mock_lazy_ds.sizes = {"camera_time": 2}
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
+        mock_lazy_ds.attrs = {}
         mock_read_l1a.return_value = mock_lazy_ds
 
         mock_radiance = MagicMock()
@@ -246,6 +251,7 @@ class TestL1b(unittest.TestCase):
 
         mock_placeholder.assert_called_once_with(mock_lazy_ds)
         mock_placeholder_frame.assert_called_once_with(mock_lazy_ds)
+        assert mock_lazy_ds.attrs["Geolocation_Mode"] == "use_geo_false"
         assert result is mock_lazy_ds
 
     @patch("libera_cam.l1b.read_l1a_cam_data")

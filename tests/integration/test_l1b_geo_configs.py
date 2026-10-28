@@ -55,6 +55,7 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "production"
             assert "Latitude" in dataset
             assert "Longitude" in dataset
             assert "Altitude" in dataset
@@ -67,6 +68,7 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {"use_geo": True}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "production"
             assert "Latitude" in dataset
             assert "Longitude" in dataset
             assert "Altitude" in dataset
@@ -78,6 +80,7 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {"use_geo": False}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "use_geo_false"
             assert np.all(dataset["Latitude"].values == np.float32(-999))
             assert np.all(dataset["Longitude"].values == np.float32(-999))
             assert np.all(dataset["Altitude"].values == np.float32(-9999))
@@ -92,6 +95,7 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {"jpss_only": True}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "jpss_only"
             lat = dataset["Latitude"].values
             lon = dataset["Longitude"].values
             alt = dataset["Altitude"].values

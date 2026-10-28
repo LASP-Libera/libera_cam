@@ -361,13 +361,14 @@ def process_l1a_to_l1b(
     jpss_only_mode : bool, optional
         When True, uses per-pixel geolocation with ``LIBERA_BASE`` (zero-azimuth
         approximation) and sets the ``Azimuth_Motor_Position_SPICE`` variables to 0 degrees.
-        Requires ``use_geo`` True and
-        JPSS-only SPICE kernels in the manifest.
+        Requires ``use_geo`` True and JPSS-only SPICE kernels in the manifest.
 
     Returns
     -------
     xr.Dataset
-        L1B product dataset, with variables defined by the L1B product definition.
+        L1B product dataset, with variables defined by the L1B product definition. The global
+        ``Geolocation_Mode`` attribute names the mode: ``"production"``, ``"jpss_only"`` or
+        ``"use_geo_false"``.
 
     Raises
     ------
@@ -395,9 +396,11 @@ def process_l1a_to_l1b(
     # only the spacecraft ephemeris and attitude, never the camera's instrument frame. The azimuth
     # needs the azimuth CK, which only production mode furnishes.
     if not use_geo:
+        geolocation_mode = "use_geo_false"
         cam_dataset = add_placeholder_geolocation_to_dataset(cam_dataset)
         cam_dataset = add_placeholder_frame_geometry_to_dataset(cam_dataset)
     elif jpss_only_mode:
+        geolocation_mode = "jpss_only"
         if not dynamic_kernel_sources:
             raise ValueError("SPICE kernel sources are required for geolocation when jpss_only_mode is True")
         geo_config = GeolocationKernelConfig(
@@ -410,6 +413,7 @@ def process_l1a_to_l1b(
         )
         cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
     else:
+        geolocation_mode = "production"
         if not dynamic_kernel_sources:
             raise ValueError("SPICE kernel sources are required for geolocation when use_geo is True")
         geo_config = GeolocationKernelConfig(
@@ -419,6 +423,7 @@ def process_l1a_to_l1b(
         cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
         cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
 
+    cam_dataset.attrs["Geolocation_Mode"] = geolocation_mode
     return cam_dataset
 
 
