@@ -9,19 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Populate the spacecraft-level geometry fields from `curryer.compute.geometry.GeometryData`, following the `libera_rad` implementation: `Subsatellite_Latitude`/`_Longitude`/`_Colatitude`, `Subsolar_Latitude`/`_Longitude`/`_Colatitude`, `Radius_of_Satellite_from_Center_of_Earth`, and the granule attribute `Earth_Sun_Distance_AU`, plus the new `Satellite_Position` and `Satellite_Velocity` (J2000, on `EUCLIDEAN_DIM`) and `Satellite_Attitude_Q0..Q3` (ECEF). Fields are requested as `GeometryField` members with a single spacecraft-observer query that serves production and `jpss_only` alike; the observer is validated against the Libera FK (`SPACECRAFT_OBSERVERS`).
-- Add `Azimuth`, the motor encoder angle from the AZROT-CK (third 1-2-3 Euler angle of `LIBERA_BASE_COORD -> LIBERA_AZ_COORD`, degrees in `[0, 360)`) via `curryer.compute.spatial.frame_to_frame_euler`, matching `libera_rad`. `jpss_only` writes 0 degrees; `use_geo: false` writes `-999`. The FSW commanded azimuth stays in the product as `Azimuth_FSW_Metadata`, a pass-through in every mode. Elevation is not reported: the camera is mounted on the azimuth stage and ELSCAN-CK is not a camera L1B input. Per-frame CK gaps write `-999`; a granule the azimuth CK covers at no frame raises `ValueError` instead of writing an all-fill `Azimuth`.
+- Populate the spacecraft-level geometry fields from `curryer.compute.geometry.GeometryData`, following the `libera_rad` implementation: `Subsatellite_Latitude`/`_Longitude`/`_Colatitude`, `Subsolar_Latitude`/`_Longitude`/`_Colatitude`, `Radius_of_Satellite_from_Center_of_Earth`, and the granule attribute `Earth_Sun_Distance_AU`, plus the new `Satellite_Position` and `Satellite_Velocity` (J2000, on `EUCLIDEAN_DIM`) and `Satellite_Attitude_Q0..Q3` (ECEF). One `JPSS4_SC` query serves production and `jpss_only` alike. A failed curryer SPICE query raises a parsed, user-facing `RuntimeError`, and a SPICE input these fields read (spacecraft ephemeris, attitude, Sun ephemeris) that covers no frame of the granule raises `ValueError`, through curryer's `require_coverage`.
+- Add `Azimuth_Motor_Position_SPICE`, the motor encoder angle from the AZROT-CK (third 1-2-3 Euler angle of `LIBERA_BASE_COORD -> LIBERA_AZ_COORD`, degrees in `[0, 360)`) at `CAMERA_TIME`, via `curryer.compute.spatial.frame_to_frame_euler`, matching `libera_rad`, and the same angle at each integration: `Azimuth_Motor_Position_SPICE_Int_Time_1` at `CAMERA_TIME` and `Azimuth_Motor_Position_SPICE_Int_Time_2` at `CAMERA_TIME` + 350 ms. `jpss_only` writes 0 degrees and `use_geo: false` writes NaN. A granule the azimuth CK covers at no frame raises `ValueError`. Elevation is not reported: the camera is mounted on the azimuth stage and ELSCAN-CK is not a camera L1B input.
+- Frames the kernels do not cover are written as NaN in the per-frame variables, and a warning gives their count for each variable. With `use_geo: false` the per-frame variables and `Earth_Sun_Distance_AU` are NaN.
+- Add the global attribute `Geolocation_Mode`: `production`, `jpss_only` or `use_geo_false`.
 
 ### Changed
 
 - **Dependencies**: Replaced `pillow-jpls` with `pyjpegls>=1.5.1` for JPEG-LS decompression. `pillow-jpls` publishes wheels only through cp312, so Python 3.13 installs built it from source through Conan and CMake and failed outright on gcc 14 hosts. `pyjpegls` binds the same CharLS codec and ships wheels for cp39–cp313 on manylinux x86_64 and aarch64, macOS, and Windows, so no interpreter in the supported range needs a compiler. Decoded sample values are unchanged.
 - **Image decoding**: `read_l1a_cam_data` returns `image_data` as `uint16` (was `int32`), the decoder's native sample type and the L1B `Pixel_Counts` dtype. Values and the L1B product are unchanged.
 - Require `lasp-curryer >= 0.5.3` for `GeometryData.get_geometry(require_coverage=)`.
+- Rename `Azimuth_FSW_Metadata` to `Azimuth_Motor_Position_FSW_Metadata`. It passes the FSW header azimuth through in every mode; it was 0 in `jpss_only` and -999 with `use_geo: false`.
+- `Radiance` and `Azimuth_Motor_Position_FSW_Metadata` declare no `_FillValue`; missing values are NaN.
 
 ### Fixed
 
 - **Metadata clean up:** Remove the WFOV_HEADER_PARSE_VALID from libera_cam as that field is never useful in L1A files
-- Raise a parsed, user-facing `RuntimeError` when the curryer SPICE query fails, and a `ValueError` when any SPICE input the spacecraft fields read (spacecraft ephemeris, attitude, Sun ephemeris) covers no frame of the granule, through curryer's `require_coverage`, instead of writing a fully filled field. Per-frame coverage gaps map onto each variable's `_FillValue`; `use_geo: false` writes the fill values through `create_placeholder_spacecraft_geometry`.
 
 ## [0.3.0] - 2026-10-06
 

@@ -29,10 +29,12 @@ Manifest **`configuration`** keys (optional):
 
 `use_geo: false` and `jpss_only: true` cannot both be set.
 
-With `use_geo` true, a granule that the spacecraft SPK/CK, or (outside `jpss_only`) the
-AZROT-CK, covers at no camera frame stops the run with a `ValueError`; frames missing from
-a partly covered granule are written as `_FillValue`. `jpss_only` writes `Azimuth` as 0
-degrees.
+With `use_geo` true, the run raises `ValueError` if the spacecraft SPK/CK, or outside
+`jpss_only` the AZROT-CK, cover none of the granule's frames. Frames a partly covered
+granule misses are written as NaN, and a warning gives their count for each variable.
+`jpss_only` writes the three `Azimuth_Motor_Position_SPICE` variables as 0 degrees. The
+global attribute `Geolocation_Mode` names the mode: `production`, `jpss_only` or
+`use_geo_false`.
 
 ---
 
