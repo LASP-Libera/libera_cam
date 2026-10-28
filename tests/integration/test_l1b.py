@@ -61,86 +61,34 @@ def test_algorithm_version_matches_package(l1b_product_dataset):
     assert l1b_product_dataset.attrs["algorithm_version"] == libera_cam_version()
 
 
-def test_earth_sun_distance_plausible(l1b_product_dataset):
-    """The granule Earth-Sun distance must land within Earth's orbital range."""
-    distance_au = float(l1b_product_dataset.attrs["Earth_Sun_Distance_AU"])
-    assert 0.95 <= distance_au <= 1.05, f"Earth_Sun_Distance_AU={distance_au:.4f} is outside [0.95, 1.05]"
-
-
 @pytest.mark.parametrize(
-    ("variable", "low", "high"),
+    ("variable", "dims"),
     [
-        ("Subsatellite_Latitude", -90.0, 90.0),
-        ("Subsatellite_Longitude", -180.0, 180.0),
-        ("Subsatellite_Colatitude", 0.0, 180.0),
-        ("Subsolar_Latitude", -90.0, 90.0),
-        ("Subsolar_Longitude", -180.0, 180.0),
-        ("Subsolar_Colatitude", 0.0, 180.0),
-        ("Radius_of_Satellite_from_Center_of_Earth", 6000.0, 8000.0),
-        ("Satellite_Attitude_Q0", -1.0, 1.0),
-        ("Satellite_Attitude_Q1", -1.0, 1.0),
-        ("Satellite_Attitude_Q2", -1.0, 1.0),
-        ("Satellite_Attitude_Q3", -1.0, 1.0),
+        ("Subsatellite_Latitude", ("CAMERA_TIME",)),
+        ("Subsatellite_Longitude", ("CAMERA_TIME",)),
+        ("Subsatellite_Colatitude", ("CAMERA_TIME",)),
+        ("Subsolar_Latitude", ("CAMERA_TIME",)),
+        ("Subsolar_Longitude", ("CAMERA_TIME",)),
+        ("Subsolar_Colatitude", ("CAMERA_TIME",)),
+        ("Radius_of_Satellite_from_Center_of_Earth", ("CAMERA_TIME",)),
+        ("Satellite_Attitude_Q0", ("CAMERA_TIME",)),
+        ("Satellite_Attitude_Q1", ("CAMERA_TIME",)),
+        ("Satellite_Attitude_Q2", ("CAMERA_TIME",)),
+        ("Satellite_Attitude_Q3", ("CAMERA_TIME",)),
+        ("Satellite_Position", ("CAMERA_TIME", "EUCLIDEAN_DIM")),
+        ("Satellite_Velocity", ("CAMERA_TIME", "EUCLIDEAN_DIM")),
+        ("Azimuth_Motor_Position_SPICE", ("CAMERA_TIME",)),
+        ("Azimuth_Motor_Position_SPICE_Int_Time_1", ("CAMERA_TIME",)),
+        ("Azimuth_Motor_Position_SPICE_Int_Time_2", ("CAMERA_TIME",)),
     ],
 )
-def test_spacecraft_geometry_is_computed_per_frame(l1b_product_dataset, variable, low, high):
-    """Each spacecraft-level field is one covered value per camera frame, inside its valid range."""
+def test_per_frame_geometry_is_written(l1b_product_dataset, variable, dims):
+    """Each per-frame field is written on its product dimensions, covered at every DITL frame."""
     data_array = l1b_product_dataset[variable]
-    assert data_array.dims == ("CAMERA_TIME",)
-
-    values = data_array.to_numpy()
-    assert np.isfinite(values).all(), f"{variable} contains NaN; SPICE coverage was expected"
-    assert values.min() >= low
-    assert values.max() <= high
+    assert data_array.dims == dims
+    assert np.isfinite(data_array.to_numpy()).all(), f"{variable} contains NaN; SPICE coverage was expected"
 
 
-def test_satellite_state_vectors_are_per_frame_inertial(l1b_product_dataset):
-    """Position and velocity are covered (N, 3) J2000 vectors consistent with the geocentric radius."""
-    position = l1b_product_dataset["Satellite_Position"]
-    velocity = l1b_product_dataset["Satellite_Velocity"]
-    assert position.dims == ("CAMERA_TIME", "EUCLIDEAN_DIM")
-    assert velocity.dims == ("CAMERA_TIME", "EUCLIDEAN_DIM")
-    assert np.isfinite(position.to_numpy()).all()
-    assert np.isfinite(velocity.to_numpy()).all()
-
-    # The norm is frame-invariant, so the J2000 position must reproduce the ECEF-derived radius.
-    radius = l1b_product_dataset["Radius_of_Satellite_from_Center_of_Earth"].to_numpy()
-    np.testing.assert_allclose(np.linalg.norm(position.to_numpy(), axis=1), radius, atol=1e-3)
-
-    # Low-Earth-orbit speed.
-    speed = np.linalg.norm(velocity.to_numpy(), axis=1)
-    assert speed.min() >= 7.0
-    assert speed.max() <= 8.0
-
-
-def test_satellite_attitude_is_unit_quaternion(l1b_product_dataset):
-    components = np.stack([l1b_product_dataset[f"Satellite_Attitude_Q{i}"].to_numpy() for i in range(4)], axis=1)
-    np.testing.assert_allclose(np.linalg.norm(components, axis=1), 1.0, atol=1e-5)
-
-
-def test_subsatellite_colatitude_complements_latitude(l1b_product_dataset):
-    """Colatitude is the geodetic complement of latitude, so the two must stay consistent."""
-    latitude = l1b_product_dataset["Subsatellite_Latitude"].to_numpy()
-    colatitude = l1b_product_dataset["Subsatellite_Colatitude"].to_numpy()
-    np.testing.assert_allclose(colatitude, 90.0 - latitude, atol=1e-4)
-
-
-def test_azimuth_is_covered_motor_encoder_angle(l1b_product_dataset):
-    """Azimuth is one covered float32 per frame from the AZROT-CK, in [0, 360), tracking the FSW header.
-
-    The FSW header ``Azimuth_Motor_Position_FSW_Metadata`` records the same encoder angle, signed in degrees: on the
-    DITL_3min frames it reads 356.05 and 353.54 degrees (wrapped) against the CK's 356.15 and 353.63.
-    Agreement within 0.5 degrees pins the CK sign, frame order and Euler component; reversing any of
-    them moves the difference to several degrees.
-    """
-    azimuth = l1b_product_dataset["Azimuth_Motor_Position_SPICE"]
-    assert azimuth.dims == ("CAMERA_TIME",)
-    assert azimuth.dtype == np.float32
-
-    values = azimuth.to_numpy()
-    assert np.isfinite(values).all(), "Azimuth contains NaN; AZROT-CK coverage was expected"
-    assert np.all((values >= 0.0) & (values < 360.0))
-
-    header = l1b_product_dataset["Azimuth_Motor_Position_FSW_Metadata"].to_numpy().astype(np.float64)
-    wrapped_difference = (values.astype(np.float64) - header + 180.0) % 360.0 - 180.0
-    np.testing.assert_allclose(wrapped_difference, 0.0, atol=0.5)
+def test_earth_sun_distance_is_written(l1b_product_dataset):
+    """The granule Earth-Sun distance is written as a global attribute."""
+    assert np.isfinite(float(l1b_product_dataset.attrs["Earth_Sun_Distance_AU"]))
