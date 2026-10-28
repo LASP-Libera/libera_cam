@@ -84,7 +84,7 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 | Approach                    | Notes                                                                                                                      |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Sparse geometry**         | Done in 0.3.2: only the pixels the onboard mask kept are geolocated (9.1% of DITL2 pixels; geometry 0.95 to 0.095 s/frame) |
+| **Sparse geometry**         | Done in 0.4.0: only the pixels the onboard mask kept are geolocated (9.1% of DITL2 pixels; geometry 0.95 to 0.095 s/frame) |
 | **Reduce SPICE call count** | Batch by unique timestamps or integration groups before per-pixel expansion                                                |
 | **Coarser geometry grid**   | Rejected: interpolating from a subsampled grid put errors of up to 1.7 degrees near the limb                               |
 | **Worker-local caching**    | Reuse Sun/spacecraft orientation for all pixels sharing a timestamp                                                        |
@@ -96,7 +96,7 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ### Status
 
-Done for compression in 0.3.2. Under `distributed` the workers shuffle and deflate the chunks of
+Done for compression in 0.4.0. Under `distributed` the workers shuffle and deflate the chunks of
 every Dask-backed three-dimensional variable, and the writing process stores the compressed bytes
 with HDF5 `write_direct_chunk` (libera-utils `worker_compressed_variables`). Before, HDF5
 compressed every chunk in the single writing process, about 95% of wall time on AWS. The full
