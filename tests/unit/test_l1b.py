@@ -8,12 +8,10 @@ import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
-import yaml
 from libera_utils.constants import DataProductIdentifier
 from libera_utils.io.manifest import Manifest
 
 from libera_cam import l1b
-from libera_cam.config import product_config_path
 from libera_cam.version import version as libera_cam_version
 
 WFOV_L1A_FILENAME = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
@@ -154,7 +152,7 @@ class TestL1b(unittest.TestCase):
     @patch("libera_cam.l1b.add_frame_geometry_to_dataset")
     @patch("libera_cam.l1b.add_geolocation_to_dataset")
     def test_process_l1a_to_l1b_spice_mode(self, mock_geo, mock_frame_geo, mock_convert, mock_read_l1a):
-        """Production mode: geolocation and the per-frame geometry share one GeolocationKernelConfig."""
+        """Production mode: the per-frame geometry, then geolocation, under one GeolocationKernelConfig."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
@@ -171,6 +169,9 @@ class TestL1b(unittest.TestCase):
 
         mock_geo.return_value = mock_lazy_ds
         mock_frame_geo.return_value = mock_lazy_ds
+        calls = Mock()
+        calls.attach_mock(mock_frame_geo, "frame_geo")
+        calls.attach_mock(mock_geo, "geo")
 
         dynamic_kernel_sources = ["/tmp/spice/orbit.bc"]
         l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, use_geo=True)
@@ -179,22 +180,24 @@ class TestL1b(unittest.TestCase):
         geo_config = mock_geo.call_args.args[1]
         # The kept-pixel mask travels in the dataset as valid_pixel_mask, not as an argument.
         assert mock_geo.call_args.kwargs == {}
-        # Radiance is fill wherever the onboard pixel mask removed the pixel.
-        mock_radiance.where.assert_called_once_with(mock_lazy_ds.valid_pixel_mask, l1b._RADIANCE_FILL)
+        # Radiance is NaN wherever the onboard pixel mask removed the pixel.
+        mock_radiance.where.assert_called_once_with(mock_lazy_ds.valid_pixel_mask)
         assert mock_geo.call_args.args[0] is mock_lazy_ds
         assert geo_config.dynamic_kernel_sources == dynamic_kernel_sources
 
-        # The spacecraft-level fields and the CK azimuth share the geolocation kernel config.
+        # The spacecraft-level fields and the CK azimuth share the geolocation kernel config, and run
+        # first: their kernel load caches the kernels the geolocation workers read.
         mock_frame_geo.assert_called_once_with(mock_lazy_ds, geo_config)
+        assert [call[0] for call in calls.mock_calls] == ["frame_geo", "geo"]
         assert geo_config.jpss_only is False
         assert mock_lazy_ds.attrs["Geolocation_Mode"] == "production"
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
     @patch("libera_cam.l1b.add_frame_geometry_to_dataset")
-    @patch("libera_cam.l1b.add_jpss_only_geolocation_to_dataset")
+    @patch("libera_cam.l1b.add_geolocation_to_dataset")
     def test_process_l1a_to_l1b_jpss_only_mode(self, mock_jpss_geo, mock_frame_geo, mock_convert, mock_read_l1a):
-        """jpss_only uses LIBERA_BASE per-pixel geolocation and a jpss_only config for the per-frame geometry."""
+        """jpss_only passes one jpss_only config to the per-frame geometry and the geolocation (LIBERA_BASE)."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
@@ -220,9 +223,10 @@ class TestL1b(unittest.TestCase):
         assert mock_jpss_geo.call_args.kwargs == {}
         assert mock_jpss_geo.call_args.args[0] is mock_lazy_ds
         assert mock_jpss_geo.call_args.args[1].dynamic_kernel_sources == dynamic_kernel_sources
-        # The jpss_only config selects the zero azimuth in place of the azimuth CK.
+        # The jpss_only config selects the zero azimuth in place of the azimuth CK and the LIBERA_BASE body.
         mock_frame_geo.assert_called_once()
         frame_config = mock_frame_geo.call_args.args[1]
+        assert mock_jpss_geo.call_args.args[1] is frame_config
         assert frame_config.jpss_only is True
         assert frame_config.dynamic_kernel_sources == dynamic_kernel_sources
         assert mock_lazy_ds.attrs["Geolocation_Mode"] == "jpss_only"
@@ -493,9 +497,3 @@ class TestAlgorithmUseGeoConfiguration:
             mock_from_file.return_value = Mock(files=[], configuration={})
             with pytest.raises(ValueError, match="PROCESSING_PATH environment variable is not set"):
                 l1b.algorithm(argparse.Namespace(manifest="input.json"))
-
-
-def test_radiance_fill_is_the_product_fill_value():
-    radiance = yaml.safe_load(product_config_path.read_text())["variables"]["Radiance"]
-    assert l1b._RADIANCE_FILL == np.float32(radiance["attributes"]["_FillValue"])
-    assert l1b._RADIANCE_FILL.dtype == np.dtype(radiance["dtype"])

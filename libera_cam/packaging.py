@@ -7,14 +7,11 @@ import logging
 import dask.array as da
 import numpy as np
 import xarray as xr
-from libera_utils.io.product_definition import LiberaDataProductDefinition
-
-from libera_cam.config import product_config_path
 
 logger = logging.getLogger(__name__)
 
-# Per-pixel product variables with no producer yet. Each is written as its product ``_FillValue``
-# so the file says "not computed" rather than carrying zeros that look like data. Remove a name
+# Per-pixel product variables with no producer yet. Each is written as NaN so the file says "not
+# computed" rather than carrying zeros that look like data. Remove a name
 # here when processing starts producing it: the strict writer then raises if it goes missing, and
 # packaging raises if it arrives while still listed here, so neither direction fails silently.
 # TODO[LIBSDC-814]: terrain-corrected coordinates.
@@ -23,26 +20,6 @@ _UNIMPLEMENTED_PIXEL_VARIABLES: tuple[str, ...] = (
     "Terrain_Corrected_Longitude",
     "Terrain_Corrected_Altitude",
 )
-
-
-def _placeholder_fill_values(names: tuple[str, ...]) -> dict[str, float]:
-    """Product ``_FillValue`` for each named variable, read from the bundled product definition.
-
-    Raises
-    ------
-    ValueError
-        If a name is not a product variable or declares no ``_FillValue``.
-    """
-    definition = LiberaDataProductDefinition.from_yaml(product_config_path)
-    fills = {}
-    for name in names:
-        if name not in definition.variables:
-            raise ValueError(f"{name} is not a variable in {product_config_path.name}")
-        attributes = definition.variables[name].attributes
-        if "_FillValue" not in attributes:
-            raise ValueError(f"{name} declares no _FillValue to use as its placeholder")
-        fills[name] = attributes["_FillValue"]
-    return fills
 
 
 def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
@@ -56,7 +33,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     4. Enforce data types (float32, uint8, etc.).
 
     ``valid_pixel_mask``, the pixels the camera's onboard pixel mask kept, is written as
-    ``Camera_Mask`` (1 kept, 0 removed); ``Radiance`` and the geolocation fields are fill where
+    ``Camera_Mask`` (1 kept, 0 removed); ``Radiance`` and the geolocation fields are NaN where
     it is 0.
 
     Parameters
@@ -73,8 +50,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     ------
     ValueError
         If the dataset lacks the FSW header ``azimuth_angle``, the ``valid_pixel_mask`` or the
-        ``l1a_row`` that ``read_l1a_cam_data`` always provides, lacks ``Radiance``, or a
-        placeholder variable is missing from the product definition or declares no ``_FillValue``.
+        ``l1a_row`` that ``read_l1a_cam_data`` always provides, lacks ``Radiance``, or already
+        carries a variable listed in ``_UNIMPLEMENTED_PIXEL_VARIABLES``.
     """
     logger.info("Packaging L1B product for conformance.")
 
@@ -136,7 +113,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     dataset = dataset.transpose("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y", ...)
 
     # 3. Placeholders for the per-pixel fields without a producer (lazy, chunked like Radiance,
-    # which is now (Time, X, Y)). Each carries its product _FillValue.
+    # which is now (Time, X, Y)), NaN throughout.
     if "Radiance" not in dataset:
         raise ValueError("Dataset must contain 'Radiance' variable before packaging.")
 
@@ -145,10 +122,10 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     if produced := [name for name in _UNIMPLEMENTED_PIXEL_VARIABLES if name in dataset]:
         raise ValueError(
             f"{produced} carry data but are listed in _UNIMPLEMENTED_PIXEL_VARIABLES, which would "
-            "overwrite them with fill values. Remove them from that list now that they have a producer."
+            "overwrite them with NaN. Remove them from that list now that they have a producer."
         )
-    for name, fill in _placeholder_fill_values(_UNIMPLEMENTED_PIXEL_VARIABLES).items():
-        dataset[name] = (dims_3d, da.full_like(radiance, fill, dtype=np.float32))
+    for name in _UNIMPLEMENTED_PIXEL_VARIABLES:
+        dataset[name] = (dims_3d, da.full_like(radiance, np.nan, dtype=np.float32))
 
     # 4. Ensure Types (Cast if necessary)
     # Using explicit casting to float32/uint types. The geolocation variables arrive typed from

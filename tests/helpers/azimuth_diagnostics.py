@@ -1,8 +1,8 @@
 """Diagnostics comparing the SPICE-derived motor azimuth with the FSW image-header azimuth.
 
-Analysis tooling, not production code: the L1B product carries the CK-derived ``Azimuth`` and the
-header value is dropped in packaging. Adapted from the comparison logging proposed in
-libera_cam PR #16.
+Analysis tooling, not production code: the L1B product carries both, the CK-derived
+``Azimuth_Motor_Position_SPICE`` and the header's ``Azimuth_Motor_Position_FSW_Metadata``. Adapted
+from the comparison logging proposed in libera_cam PR #16.
 """
 
 import numpy as np
@@ -16,7 +16,6 @@ def angular_difference_deg(a_deg: np.ndarray, b_deg: np.ndarray) -> np.ndarray:
 def spice_vs_fsw_azimuth_stats(
     spice_az_deg: np.ndarray,
     fsw_az_deg: np.ndarray,
-    fill_value: float = -999.0,
 ) -> dict[str, float]:
     """Statistics of SPICE azimuth minus FSW header azimuth, both degrees, shortest arc.
 
@@ -27,11 +26,10 @@ def spice_vs_fsw_azimuth_stats(
     Parameters
     ----------
     spice_az_deg : np.ndarray
-        Per-frame motor azimuth from the CK, degrees in [0, 360); ``fill_value`` where uncovered.
+        Per-frame motor azimuth from the CK, degrees in [0, 360); NaN where uncovered.
     fsw_az_deg : np.ndarray
-        Per-frame FSW image-header azimuth in degrees, signed, same shape.
-    fill_value : float, optional
-        Value marking uncovered samples in either input; excluded from the comparison.
+        Per-frame FSW image-header azimuth in degrees, signed, same shape. NaN samples in either
+        input are excluded from the comparison.
 
     Returns
     -------
@@ -49,7 +47,7 @@ def spice_vs_fsw_azimuth_stats(
     if spice.shape != fsw.shape:
         raise ValueError(f"SPICE and FSW azimuth shapes differ: {spice.shape} vs {fsw.shape}")
 
-    valid = (spice != fill_value) & (fsw != fill_value) & np.isfinite(spice) & np.isfinite(fsw)
+    valid = np.isfinite(spice) & np.isfinite(fsw)
     if not valid.any():
         return {"n": 0, "min": np.nan, "max": np.nan, "mean": np.nan, "std": np.nan}
 

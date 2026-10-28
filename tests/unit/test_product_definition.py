@@ -48,37 +48,15 @@ def test_spacecraft_geometry_fields_are_declared_per_frame():
         assert definition["variables"][name]["dtype"] == "float64"
 
 
-@pytest.mark.parametrize(
-    "variable",
-    [
-        "Subsatellite_Latitude",
-        "Subsatellite_Longitude",
-        "Subsatellite_Colatitude",
-        "Subsolar_Latitude",
-        "Subsolar_Longitude",
-        "Subsolar_Colatitude",
-        "Radius_of_Satellite_from_Center_of_Earth",
-        "Satellite_Position",
-        "Satellite_Velocity",
-        "Satellite_Attitude_Q0",
-        "Satellite_Attitude_Q1",
-        "Satellite_Attitude_Q2",
-        "Satellite_Attitude_Q3",
-        "Azimuth_Motor_Position_FSW_Metadata",
-        "Azimuth_Motor_Position_SPICE",
-        "Azimuth_Motor_Position_SPICE_Int_Time_1",
-        "Azimuth_Motor_Position_SPICE_Int_Time_2",
-        "Radiance",
-    ],
-)
+@pytest.mark.parametrize("variable", sorted(yaml.safe_load(product_config_path.read_text())["variables"]))
 def test_variable_declares_no_fill_value(variable):
-    """Missing values are written as NaN, so these variables declare no ``_FillValue``."""
+    """Missing values are written as NaN, so no variable declares a ``_FillValue``."""
     definition = yaml.safe_load(product_config_path.read_text())
     assert "_FillValue" not in definition["variables"][variable].get("attributes", {})
 
 
 def test_surface_angles_are_declared_per_pixel_with_rad_conventions():
-    """The surface-angle set matches libera_rad: degrees, -999 fill, azimuths on [0, 360], zeniths on [0, 180]."""
+    """The surface-angle set matches libera_rad: degrees, azimuths on [0, 360], zeniths on [0, 180]."""
     definition = yaml.safe_load(product_config_path.read_text())["variables"]
     per_pixel = ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
     expected_ranges = {
@@ -94,7 +72,6 @@ def test_surface_angles_are_declared_per_pixel_with_rad_conventions():
         assert variable["dtype"] == "float32"
         assert variable["attributes"]["units"] == "degrees"
         assert variable["attributes"]["valid_range"] == valid_range
-        assert variable["attributes"]["_FillValue"] == -999
 
 
 def test_geolocation_quality_flag_is_a_per_pixel_uint16_bitmask():

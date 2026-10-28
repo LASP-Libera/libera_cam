@@ -11,7 +11,6 @@ import yaml
 from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
 from curryer.compute.constants import SpatialQualityFlags as SQF
-from curryer.compute.geometry_fields import PixelField
 from dask.utils import key_split
 
 from libera_cam import geolocation
@@ -24,10 +23,8 @@ from libera_cam.geolocation import (
     _PIXEL_VARIABLES,
     FrameGeometry,
     GeolocationKernelConfig,
-    _require_frame_coverage,
     add_frame_geometry_to_dataset,
     add_geolocation_to_dataset,
-    add_jpss_only_geolocation_to_dataset,
     add_placeholder_frame_geometry_to_dataset,
     add_placeholder_geolocation_to_dataset,
     calculate_azimuth,
@@ -76,21 +73,20 @@ def _curryer_result(n_epochs: int) -> dict[str, np.ndarray]:
 
 
 def test_pixel_variable_mapping_is_bound_to_curryer_and_the_product_definition():
-    """Every field maps to a real curryer attribute and to a product variable whose fill and dtype it carries."""
+    """Every field maps to a real curryer attribute and to a product variable whose dtype it carries."""
     product_variables = yaml.safe_load(product_config_path.read_text())["variables"]
     assert set(_PIXEL_VARIABLES) == set(FrameGeometry._fields) - {"quality_flags"}
     assert set(_AZIMUTH_FIELDS) <= set(_PIXEL_VARIABLES)
     # Every key must be a column curryer actually returns for the fields this product requests.
     requested_columns = {column for field in _PIXEL_FIELDS for column in field.columns}
     assert set(_PIXEL_VARIABLES) | {"quality_flags"} == requested_columns
-    for product_name, fill, dtype in _PIXEL_VARIABLES.values():
+    for product_name, dtype in _PIXEL_VARIABLES.values():
         definition = product_variables[product_name]
         assert definition["dimensions"] == ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
         assert np.dtype(definition["dtype"]) == np.dtype(dtype)
-        assert definition["attributes"]["_FillValue"] == fill
 
 
-def test_single_epoch_selects_epoch_zero_and_applies_fills():
+def test_single_epoch_selects_epoch_zero_and_writes_misses_as_nan():
     with patch("libera_cam.geolocation.spatial.pixel_geometry", return_value=_curryer_result(1)) as mock_geometry:
         frame = geolocate_frame(EPOCHS[:1], None, "LIBERA_WFOV_CAM", VECTORS, frame_shape=GRID_SHAPE)
 
@@ -102,10 +98,10 @@ def test_single_epoch_selects_epoch_zero_and_applies_fills():
     assert mock_geometry.call_args.kwargs["fields"] == list(_PIXEL_FIELDS)
 
     expected = np.arange(6, dtype=np.float64).reshape(GRID_SHAPE)
-    np.testing.assert_allclose(frame.latitude, np.where(expected == 5, -999.0, expected + 0.2), rtol=1e-6)
-    np.testing.assert_allclose(frame.longitude, np.where(expected == 5, -999.0, expected + 0.1), rtol=1e-6)
-    np.testing.assert_array_equal(frame.altitude, np.where(expected == 5, -9999.0, 0.0))
-    np.testing.assert_allclose(frame.relative_azimuth, np.where(expected == 5, -999.0, expected + 0.7), rtol=1e-6)
+    np.testing.assert_allclose(frame.latitude, np.where(expected == 5, np.nan, expected + 0.2), rtol=1e-6)
+    np.testing.assert_allclose(frame.longitude, np.where(expected == 5, np.nan, expected + 0.1), rtol=1e-6)
+    np.testing.assert_array_equal(frame.altitude, np.where(expected == 5, np.nan, 0.0))
+    np.testing.assert_allclose(frame.relative_azimuth, np.where(expected == 5, np.nan, expected + 0.7), rtol=1e-6)
     for name in FrameGeometry._fields:
         values = getattr(frame, name)
         assert values.shape == GRID_SHAPE
@@ -119,9 +115,9 @@ def test_two_epochs_select_per_pixel_by_exposure_index():
         frame = geolocate_frame(EPOCHS, exposure_index, "LIBERA_WFOV_CAM", VECTORS, frame_shape=GRID_SHAPE)
 
     expected = 100.0 * exposure_index + np.arange(6).reshape(GRID_SHAPE)
-    np.testing.assert_allclose(frame.viewing_zenith, np.where(expected % 100 == 5, -999.0, expected + 0.5), rtol=1e-6)
+    np.testing.assert_allclose(frame.viewing_zenith, np.where(expected % 100 == 5, np.nan, expected + 0.5), rtol=1e-6)
     np.testing.assert_allclose(frame.solar_azimuth[0], [0.4, 101.4, 2.4], rtol=1e-6)
-    np.testing.assert_allclose(frame.solar_azimuth[1], [103.4, 4.4, -999.0], rtol=1e-6)
+    np.testing.assert_allclose(frame.solar_azimuth[1], [103.4, 4.4, np.nan], rtol=1e-6)
 
 
 def test_azimuths_just_under_360_wrap_to_zero_after_float32_cast():
@@ -137,7 +133,7 @@ def test_azimuths_just_under_360_wrap_to_zero_after_float32_cast():
     for name in ("solar_azimuth", "viewing_azimuth", "relative_azimuth"):
         values = getattr(frame, name)
         np.testing.assert_array_equal(values[0], [0.0, 0.0, 0.0], err_msg=name)
-        np.testing.assert_array_equal(values[1], [0.0, 0.0, -999.0], err_msg=name)
+        np.testing.assert_array_equal(values[1], [0.0, 0.0, np.nan], err_msg=name)
     # Zeniths are not wrapped.
     assert frame.solar_zenith[0, 0] == np.float32(0.3)
 
@@ -203,12 +199,10 @@ def test_uncovered_epoch_keeps_its_compound_flag_word():
     np.testing.assert_array_equal(frame.quality_flags[0], [0, gap, 0])
     # An uncovered epoch carries the gap word alone: no intersection was attempted for it.
     np.testing.assert_array_equal(frame.quality_flags[1], [gap, 0, gap])
-    np.testing.assert_allclose(frame.latitude[0], [0.2, -999.0, 2.2], rtol=1e-6)
-    np.testing.assert_allclose(frame.latitude[1], [-999.0, 4.2, -999.0], rtol=1e-6)
-    for name in FrameGeometry._fields:
-        if name != "quality_flags":
-            fill = -9999.0 if name == "altitude" else -999.0
-            np.testing.assert_array_equal(getattr(frame, name)[exposure_index == 1], fill, err_msg=name)
+    np.testing.assert_allclose(frame.latitude[0], [0.2, np.nan, 2.2], rtol=1e-6)
+    np.testing.assert_allclose(frame.latitude[1], [np.nan, 4.2, np.nan], rtol=1e-6)
+    for name in _PIXEL_VARIABLES:
+        assert np.isnan(getattr(frame, name)[exposure_index == 1]).all(), name
 
 
 @pytest.mark.parametrize("flag", [1 << 15, 1 << 16])
@@ -238,8 +232,8 @@ def _curryer_by_pixel_id(epochs, spice_body, vectors, fields, allow_nans):
     return columns | {"quality_flags": flags}
 
 
-def test_pixel_mask_geolocates_only_kept_pixels_and_fills_the_rest():
-    """curryer sees only the kept pixels' vectors; dropped pixels are fill with bit 15 alone."""
+def test_pixel_mask_geolocates_only_kept_pixels_and_writes_the_rest_as_nan():
+    """curryer sees only the kept pixels' vectors; dropped pixels are NaN with bit 15 alone."""
     with patch("libera_cam.geolocation.spatial.pixel_geometry", side_effect=_curryer_by_pixel_id) as mock_geometry:
         masked = geolocate_frame(
             EPOCHS[:1], None, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=GRID_SHAPE, pixel_mask=KEPT
@@ -252,7 +246,7 @@ def test_pixel_mask_geolocates_only_kept_pixels_and_fills_the_rest():
         assert values.shape == GRID_SHAPE, name
         assert values.dtype == np.float32, name
         np.testing.assert_array_equal(values[KEPT], getattr(full, name)[KEPT], err_msg=name)
-        np.testing.assert_array_equal(values[~KEPT], np.float32(_PIXEL_VARIABLES[name][1]), err_msg=name)
+        assert np.isnan(values[~KEPT]).all(), name
     np.testing.assert_array_equal(masked.quality_flags[KEPT], full.quality_flags[KEPT])
     np.testing.assert_array_equal(masked.quality_flags[~KEPT], _GEO_NOT_COMPUTED_FLAG)
     # Pixel 5 is kept and misses the ellipsoid: curryer's flag, not "not computed".
@@ -268,7 +262,7 @@ def test_pixel_mask_keeps_each_kept_pixels_epoch_selection():
         full = geolocate_frame(EPOCHS, exposure_index, "LIBERA_WFOV_CAM", ID_VECTORS, frame_shape=GRID_SHAPE)
 
     np.testing.assert_array_equal(masked.latitude[KEPT], full.latitude[KEPT])
-    np.testing.assert_allclose(masked.latitude[0], [0.1, -999.0, 102.1], rtol=1e-6)
+    np.testing.assert_allclose(masked.latitude[0], [0.1, np.nan, 102.1], rtol=1e-6)
 
 
 def test_pixel_mask_with_no_kept_pixels_skips_curryer():
@@ -282,7 +276,7 @@ def test_pixel_mask_with_no_kept_pixels_skips_curryer():
             pixel_mask=np.zeros(GRID_SHAPE, bool),
         )
     mock_geometry.assert_not_called()
-    np.testing.assert_array_equal(frame.latitude, np.float32(-999.0))
+    assert np.isnan(frame.latitude).all()
     np.testing.assert_array_equal(frame.quality_flags, _GEO_NOT_COMPUTED_FLAG)
 
 
@@ -319,10 +313,12 @@ def _frame_dataset(n_times: int, time_chunk: int) -> xr.Dataset:
     return xr.Dataset(
         {
             "image_data": (("camera_time", "y", "x"), image_data),
-            # L1A rows that are not frame positions, as after dropped headers.
+            # L1A rows distinct from the frame positions, so a task handed the wrong rows shows.
             "l1a_row": (("camera_time",), 2 * np.arange(n_times) + 1, {"source": L1A_SOURCE}),
         },
         coords={"camera_time": times, "y": range(FRAME_SHAPE[0]), "x": range(FRAME_SHAPE[1])},
+        # Set by add_frame_geometry_to_dataset, which per-pixel geolocation requires first.
+        attrs={"Earth_Sun_Distance_AU": 1.0},
     )
 
 
@@ -452,67 +448,12 @@ def test_calculate_chunk_geometry_rejects_bad_shapes(worker_mocks, exposure_time
 
 
 @pytest.fixture
-def coverage_mocks():
-    with (
-        patch("libera_cam.geolocation.KernelManager") as km_cls,
-        patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2, 3])) as adapt,
-        patch("libera_cam.geolocation.spatial.pixel_geometry") as pixel_geometry,
-    ):
-        km = km_cls.return_value
-        km.__enter__.return_value = km
-        yield SimpleNamespace(km=km, adapt=adapt, pixel_geometry=pixel_geometry)
-
-
-def _probe(flags: list[int]) -> dict[str, np.ndarray]:
-    """The coverage probe requests only ``quality_flags``, so that is all curryer returns."""
-    return {"quality_flags": np.array(flags, dtype=np.int64)[:, None]}
-
-
-def test_require_frame_coverage_probes_the_boresight_once_per_frame(coverage_mocks):
-    coverage_mocks.pixel_geometry.return_value = _probe([0, 0, 0])
-    config = GeolocationKernelConfig(dynamic_kernel_sources=["orbit.bsp"])
-
-    _require_frame_coverage(config, _datetimes(3), "LIBERA_WFOV_CAM")
-
-    coverage_mocks.km.load_libera_dynamic_kernels.assert_called_once_with(
-        ["orbit.bsp"], needs_naif_kernels=True, needs_static_kernels=True
-    )
-    coverage_mocks.km.__exit__.assert_called_once()
-    call = coverage_mocks.pixel_geometry.call_args
-    np.testing.assert_array_equal(call.args[0], [1, 2, 3])
-    assert call.args[1] == "LIBERA_WFOV_CAM"
-    np.testing.assert_array_equal(call.args[2], [[0.0, 0.0, 1.0]])
-    # Only the flags are read, so only that field is requested: no Sun query, no angle math.
-    assert call.kwargs == {"fields": [PixelField.QUALITY_FLAGS], "allow_nans": True}
-
-
-def test_require_frame_coverage_raises_when_no_frame_is_covered(coverage_mocks):
-    gap = int(SQF.SPICE_ERR_MISSING_ATTITUDE | SQF.CALC_ELLIPS_INSUFF_DATA)
-    coverage_mocks.pixel_geometry.return_value = _probe([gap, gap, gap])
-
-    with pytest.raises(ValueError, match="cover none of the 3 camera frame"):
-        _require_frame_coverage(GeolocationKernelConfig(dynamic_kernel_sources=["k"]), _datetimes(3), "LIBERA_WFOV_CAM")
-
-
-def test_require_frame_coverage_tolerates_and_logs_individual_gaps(coverage_mocks, caplog):
-    """A missed pixel is not a coverage gap; an uncovered epoch is, and one covered frame keeps the granule."""
-    gap = int(SQF.SPICE_ERR_MISSING_ATTITUDE | SQF.CALC_ELLIPS_INSUFF_DATA)
-    coverage_mocks.pixel_geometry.return_value = _probe([gap, 0, int(SQF.CALC_ELLIPS_NO_INTERSECT)])
-
-    with caplog.at_level("WARNING", logger="libera_cam.geolocation"):
-        _require_frame_coverage(GeolocationKernelConfig(dynamic_kernel_sources=["k"]), _datetimes(3), "LIBERA_WFOV_CAM")
-
-    assert any("1 of 3 camera frame(s) have no SPICE coverage" in record.message for record in caplog.records)
-
-
-@pytest.fixture
 def orchestration_mocks(small_detector):
     def fake_kept_pixels(source, rows):
         assert source == L1A_SOURCE
         return _kept_pixels(max(rows) + 1)[rows]  # the pattern follows the L1A row, not the position
 
     with (
-        patch("libera_cam.geolocation._require_frame_coverage") as coverage,
         patch("libera_cam.geolocation.calculate_chunk_geometry") as chunk,
         patch("libera_cam.geolocation.kept_pixels_from_source", side_effect=fake_kept_pixels),
     ):
@@ -528,7 +469,7 @@ def orchestration_mocks(small_detector):
             )
 
         chunk.side_effect = fake_chunk
-        yield SimpleNamespace(coverage=coverage, chunk=chunk)
+        yield SimpleNamespace(chunk=chunk)
 
 
 @pytest.mark.parametrize("time_chunk", [5, 3])
@@ -544,10 +485,6 @@ def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orches
 
     result = add_geolocation_to_dataset(ds, config)
 
-    coverage_call = orchestration_mocks.coverage.call_args
-    assert coverage_call.args[0] is config
-    np.testing.assert_array_equal(coverage_call.args[1], ds.camera_time.values)
-    assert coverage_call.args[2] == "LIBERA_WFOV_CAM"
     assert orchestration_mocks.chunk.call_count == 0
     for variable, dtype in _FIELD_VARIABLES.values():
         assert isinstance(result[variable].data, da.Array), variable
@@ -575,14 +512,17 @@ def test_add_geolocation_to_dataset_is_lazy_and_chunked_by_geo_chunk_size(orches
         np.testing.assert_array_equal(call.args[2], _kept_pixels(max(rows) + 1)[rows])
 
 
-def test_add_jpss_only_geolocation_switches_the_body(orchestration_mocks):
-    ds = _frame_dataset(n_times=2, time_chunk=2)
-
-    result = add_jpss_only_geolocation_to_dataset(ds, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
-    result["Latitude"].compute(scheduler="synchronous")
-
-    assert orchestration_mocks.coverage.call_args.args[2] == "LIBERA_BASE"
-    assert orchestration_mocks.chunk.call_args.args[3].jpss_only is True
+@pytest.mark.parametrize("earth_sun_distance", [None, np.nan])
+def test_add_geolocation_requires_the_per_frame_geometry_first(orchestration_mocks, earth_sun_distance):
+    """Without add_frame_geometry_to_dataset's kernel load and coverage check, nothing is scheduled."""
+    ds = _frame_dataset(2, 2)
+    if earth_sun_distance is None:
+        del ds.attrs["Earth_Sun_Distance_AU"]
+    else:
+        ds.attrs["Earth_Sun_Distance_AU"] = earth_sun_distance
+    with pytest.raises(ValueError, match="add_frame_geometry_to_dataset"):
+        add_geolocation_to_dataset(ds, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+    assert "Latitude" not in ds
 
 
 def test_add_geolocation_requires_kernel_sources_and_camera_time(orchestration_mocks):
@@ -590,7 +530,6 @@ def test_add_geolocation_requires_kernel_sources_and_camera_time(orchestration_m
         add_geolocation_to_dataset(_frame_dataset(2, 2), GeolocationKernelConfig())
     with pytest.raises(ValueError, match="camera_time"):
         add_geolocation_to_dataset(xr.Dataset(), GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
-    orchestration_mocks.coverage.assert_not_called()
 
 
 @pytest.mark.parametrize("breakage", ["missing", "float rows", "no source"])
@@ -605,7 +544,6 @@ def test_add_geolocation_requires_the_l1a_rows(orchestration_mocks, breakage):
         ds["l1a_row"].attrs = {}
     with pytest.raises(ValueError, match="'l1a_row'"):
         add_geolocation_to_dataset(ds, GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
-    orchestration_mocks.coverage.assert_not_called()
 
 
 @pytest.mark.parametrize("value", ["0", "-3"])
@@ -613,11 +551,10 @@ def test_add_geolocation_rejects_geo_chunk_size_below_one(orchestration_mocks, m
     monkeypatch.setenv("LIBERA_CAM_GEO_CHUNK_SIZE", value)
     with pytest.raises(ValueError, match="LIBERA_CAM_GEO_CHUNK_SIZE must be >= 1"):
         add_geolocation_to_dataset(_frame_dataset(2, 2), GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
-    orchestration_mocks.coverage.assert_not_called()
 
 
 def test_add_placeholder_geolocation_to_dataset(small_detector):
-    """use_geo false: every geolocation variable as its fill, flags marked not-run, chunked like image_data."""
+    """use_geo false: every geolocation variable NaN, flags marked not-run, chunked like image_data."""
     ds = _frame_dataset(n_times=6, time_chunk=3)
 
     result = add_placeholder_geolocation_to_dataset(ds)
@@ -627,8 +564,8 @@ def test_add_placeholder_geolocation_to_dataset(small_detector):
         assert result[variable].dtype == dtype, variable
         assert result[variable].shape == (6, *FRAME_SHAPE), variable
         assert result[variable].data.chunks[0] == ds["image_data"].data.chunks[0], variable
-    for variable, fill, _ in _PIXEL_VARIABLES.values():
-        np.testing.assert_array_equal(result[variable].values, fill, err_msg=variable)
+    for variable, _ in _PIXEL_VARIABLES.values():
+        assert np.isnan(result[variable].values).all(), variable
     np.testing.assert_array_equal(result["Geolocation_Quality_Flag"].values, 0x8000)
 
 
