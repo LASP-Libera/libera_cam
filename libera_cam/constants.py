@@ -33,9 +33,7 @@ GROUND_CAL_PIXEL_MAPPING = LIBERA_CAM_GROUND_CAL_PATH / "wfov_pixel_vectors.npy"
 
 # --- SPICE observer frames ------------------------------------------------------------
 
-# Spacecraft frames the Libera frame kernels define, one per libera_utils kernel set (jpss4,
-# noaa20). Libera flies on JPSS-4; NOAA-20 is the alternate bus configuration.
-SPACECRAFT_OBSERVERS: tuple[str, ...] = ("JPSS4_SC", "NOAA20_SC")
+# Spacecraft frame of the JPSS-4 bus Libera flies on, from the Libera frame kernel.
 DEFAULT_SPACECRAFT_OBSERVER = "JPSS4_SC"
 
 # Azimuth motor encoder frames: the CK built from the encoder rotates LIBERA_BASE_COORD into

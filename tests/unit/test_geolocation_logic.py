@@ -376,16 +376,6 @@ def test_calculate_spacecraft_geometry_uses_curryer(
     assert result is spacecraft_geometry_frame
 
 
-@pytest.mark.parametrize("observer", ["LIBERA_WFOV_CAM", "LIBERA_BASE"])
-def test_calculate_spacecraft_geometry_rejects_unknown_observer(observer, mock_kernel_manager, two_timestamps):
-    """A valid SPICE frame used in the wrong role must fail loudly, not compute geometry for the wrong body."""
-    with patch("libera_cam.geolocation.geometry.GeometryData") as mock_geometry_data:
-        with pytest.raises(ValueError, match="Unsupported spacecraft observer"):
-            calculate_spacecraft_geometry(mock_kernel_manager, two_timestamps, spacecraft_observer=observer)
-    mock_geometry_data.assert_not_called()
-    mock_kernel_manager.ensure_known_kernels_are_furnished.assert_not_called()
-
-
 @patch("libera_cam.geolocation.spice_error_message", return_value="no coverage for the requested time")
 @patch("libera_cam.geolocation.geometry.GeometryData")
 @patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1]))

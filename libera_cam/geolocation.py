@@ -27,7 +27,6 @@ from libera_cam.constants import (
     GROUND_CAL_PIXEL_MAPPING,
     PIXEL_COUNT_X,
     PIXEL_COUNT_Y,
-    SPACECRAFT_OBSERVERS,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,34 +149,6 @@ def _kernel_manager_from_config(config: GeolocationKernelConfig) -> KernelManage
     )
 
 
-def _validate_observer(observer: str, allowed: tuple[str, ...], role: str) -> None:
-    """Reject an observer frame that is not a known Libera frame for this role.
-
-    A typo'd frame already fails inside SPICE, but a *valid* frame used in the wrong role
-    (the WFOV camera as the spacecraft, say) would silently produce correct-looking geometry
-    for the wrong body. This turns that into an error at the call site.
-
-    Parameters
-    ----------
-    observer : str
-        Requested SPICE frame name.
-    allowed : tuple[str, ...]
-        Frame names valid for this role.
-    role : str
-        Human-readable role name, used in the error message.
-
-    Raises
-    ------
-    ValueError
-        If ``observer`` is not in ``allowed``.
-    """
-    if observer not in allowed:
-        raise ValueError(
-            f"Unsupported {role} observer {observer!r}; expected one of {', '.join(allowed)}. "
-            "Geometry for other frames is not supported by the L1B product definition."
-        )
-
-
 def _query_geometry(
     observer: str,
     u_gps_times: np.ndarray,
@@ -224,15 +195,15 @@ def _query_geometry(
 def calculate_spacecraft_geometry(
     kernel_manager: KernelManager,
     timestamps: np.ndarray,
-    spacecraft_observer: str = DEFAULT_SPACECRAFT_OBSERVER,
 ) -> pd.DataFrame:
     """
     Compute the spacecraft-level geometry fields via curryer ``GeometryData``.
 
     curryer's selective-compute registry queries each SPICE input once, vectorized, with
-    coverage gaps surfaced as NaN. The spacecraft observer yields the fields needing only its
-    ephemeris and body attitude: subsatellite and subsolar points, satellite radius, Earth-Sun
-    distance, inertial (J2000) position and velocity, and the Earth-fixed attitude quaternion.
+    coverage gaps surfaced as NaN. The spacecraft observer (:data:`DEFAULT_SPACECRAFT_OBSERVER`)
+    yields the fields needing only its ephemeris and body attitude: subsatellite and subsolar
+    points, satellite radius, Earth-Sun distance, inertial (J2000) position and velocity, and
+    the Earth-fixed attitude quaternion.
     None of them resolve through the camera's instrument frame, so the same call serves the
     production and ``jpss_only`` modes.
 
@@ -242,9 +213,6 @@ def calculate_spacecraft_geometry(
         Kernel manager with the spacecraft SPK and CK and the generic/static kernels furnished.
     timestamps : np.ndarray
         Camera frame times on the L1B output time grid, as ``datetime64[ns]``.
-    spacecraft_observer : str
-        SPICE frame for the spacecraft, one of :data:`SPACECRAFT_OBSERVERS`. Default
-        ``"JPSS4_SC"``.
 
     Returns
     -------
@@ -254,17 +222,18 @@ def calculate_spacecraft_geometry(
     Raises
     ------
     ValueError
-        If ``spacecraft_observer`` is not a known Libera spacecraft frame, or a SPICE input
-        these fields read (spacecraft ephemeris, attitude, Sun ephemeris) covers no frame.
+        If a SPICE input these fields read (spacecraft ephemeris, attitude, Sun ephemeris)
+        covers no frame.
     RuntimeError
         If the curryer SPICE query fails outright, with a parsed, user-facing description of
         the cause.
     """
-    _validate_observer(spacecraft_observer, SPACECRAFT_OBSERVERS, "spacecraft")
     kernel_manager.ensure_known_kernels_are_furnished()
     u_gps_times = spicetime.adapt(pd.DatetimeIndex(timestamps), "iso")
     # The attitude quaternion is Earth-fixed (product convention); the inertial fields keep J2000.
-    return _query_geometry(spacecraft_observer, u_gps_times, _SPACECRAFT_FIELDS, attitude_frame=spatial.EARTH_FRAME)
+    return _query_geometry(
+        DEFAULT_SPACECRAFT_OBSERVER, u_gps_times, _SPACECRAFT_FIELDS, attitude_frame=spatial.EARTH_FRAME
+    )
 
 
 def create_placeholder_spacecraft_geometry(n_samples: int) -> pd.DataFrame:
