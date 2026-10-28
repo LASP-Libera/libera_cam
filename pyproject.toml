@@ -40,8 +40,9 @@ classifiers = [
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
     # 5.14.0 names data products with a microsecond timestamp revision (R + YYYYMMDDTHHMMSSffffff)
-    # and rejects the earlier R + YYDDDHHMMSS form.
-    "libera-utils >= 5.14.0,<6.0.0",
+    # and rejects the earlier R + YYDDDHHMMSS form. The next release lists manifest files as path
+    # strings rather than records with a filename, which l1b.py reads. TODO[LIBSDC-887]
+    "libera-utils >= 5.14.0,<5.15.0",
     # Imported directly by geolocation.py. 0.5.3 adds `GeometryData.get_geometry(require_coverage=)`,
     # which the spacecraft-level geometry query relies on to fail on a missing attitude or
     # ephemeris kernel.
