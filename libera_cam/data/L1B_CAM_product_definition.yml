@@ -28,7 +28,6 @@ variables:
       long_name: Geodetic latitude. Coordinate Reference System WGS84
       units: degrees_north
       valid_range: [-90, 90]
-      _FillValue: -999 #off Earth
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -39,7 +38,6 @@ variables:
       long_name: Terrain corrected latitude
       units: degrees_north
       valid_range: [-90, 90]
-      _FillValue: -999 #off Earth
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -50,7 +48,6 @@ variables:
       long_name: Longitude. Coordinate Reference System WGS84
       units: degrees_east
       valid_range: [-180, 180]
-      _FillValue: -999 #off Earth
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -61,7 +58,6 @@ variables:
       long_name: Terrain corrected longitude
       units: degrees_east
       valid_range: [-180, 180]
-      _FillValue: -999 #off Earth
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -72,7 +68,6 @@ variables:
       long_name: Height above the WGS84 ellipsoid. EPSG:4979
       units: meters
       valid_range: [-1000, 30000]
-      _FillValue: -9999
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -83,7 +78,6 @@ variables:
       long_name: Terrain corrected altitude
       units: meters
       valid_range: [-1000, 30000]
-      _FillValue: -9999
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -187,7 +181,6 @@ variables:
       long_name: Geodetic zenith angle at the Earth point of the Sun
       units: degrees
       valid_range: [0, 180]
-      _FillValue: -999
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -200,7 +193,6 @@ variables:
         the solar plane (measured clockwise in the plane normal to the geodetic zenith)
       units: degrees
       valid_range: [0, 360]
-      _FillValue: -999
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -211,7 +203,6 @@ variables:
       long_name: Geodetic angle at the Earth point to the satellite
       units: degrees
       valid_range: [0, 180]
-      _FillValue: -999
     encoding:
       chunksizes: [1, 512, 512]
       shuffle: true
@@ -222,7 +213,6 @@ variables:
       long_name: Libera viewing azimuth angle at the surface with respect to North
       units: degrees
       valid_range: [0, 360]
-      _FillValue: -999
       comment: >-
         Azimuth of the satellite as seen from the pixel's surface point, in degrees clockwise from
         geodetic north.
@@ -236,7 +226,6 @@ variables:
       long_name: Solar azimuth angle at the surface with respect to North
       units: degrees
       valid_range: [0, 360]
-      _FillValue: -999
       comment: >-
         Azimuth of the Sun as seen from the pixel's surface point, in degrees clockwise from
         geodetic north.
@@ -259,11 +248,11 @@ variables:
       long_name: Bit flags from the per-pixel geolocation; 0 where the pixel geometry is good
       value_meaning: >-
         Bits 0-14 are curryer SpatialQualityFlags from the ellipsoid intersection and the surface
-        angles. Those this product sets: [b8] no SPICE data for the frame epoch (every field written
-        as fill), accompanied by the SPICE error class [b0] no result, [b1] ephemeris missing,
+        angles. Those this product sets: [b8] no SPICE data for the frame epoch (every field NaN),
+        accompanied by the SPICE error class [b0] no result, [b1] ephemeris missing,
         [b2] attitude missing, [b3] invalid location or [b4] unclassified SPICE error; [b9] the pixel
-        line of sight misses the ellipsoid (fill); [b13] Sun position unavailable (solar angles
-        fill); [b14] a surface angle was not finite (fill). [b15] geolocation was not run (use_geo
+        line of sight misses the ellipsoid (NaN); [b13] Sun position unavailable (solar angles
+        NaN); [b14] a surface angle was not finite (NaN). [b15] geolocation was not run (use_geo
         false, or the onboard pixel mask removed the pixel; see Camera_Mask).
     encoding:
       chunksizes: [1, 512, 512]
@@ -390,7 +379,7 @@ variables:
       valid_range: [0, 1]
       value_meaning: >-
         1 where the camera returned the pixel (non-zero count), 0 where the onboard pixel mask
-        removed it. Where this is 0, Radiance and the geolocation fields are their fill value,
+        removed it. Where this is 0, Radiance and the geolocation fields are NaN,
         Geolocation_Quality_Flag has bit 15 set, Pixel_Counts is 0 and Integration_Time_Flag
         carries no meaning. Video mode applies no onboard mask, so a pixel is 0 there only if it
         read 0 DN.

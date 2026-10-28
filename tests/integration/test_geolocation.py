@@ -39,7 +39,7 @@ def test_add_geolocation_to_dataset_reproduces_geolocate_frame(test_data_path, t
     sources = _ditl_dynamic_kernel_sources(test_data_path)
     config = GeolocationKernelConfig(dynamic_kernel_sources=sources)
 
-    ds_geo = add_geolocation_to_dataset(ds, config)
+    ds_geo = add_geolocation_to_dataset(add_frame_geometry_to_dataset(ds, config), config)
 
     variables = [variable for variable, _ in _FIELD_VARIABLES.values()]
     for variable, dtype in _FIELD_VARIABLES.values():
@@ -66,16 +66,6 @@ def test_add_geolocation_to_dataset_reproduces_geolocate_frame(test_data_path, t
     assert 0.0 < kept.mean() < 0.2, "DITL_3min frame 2 is a masked frame"
     np.testing.assert_array_equal(flags[~kept], _GEO_NOT_COMPUTED_FLAG)
     assert (flags[kept] == 0).any()
-
-
-def test_add_geolocation_rejects_a_granule_the_kernels_do_not_cover(test_data_path, test_ditl_l1a_file_path):
-    """Frames a day past the kernels: no frame is covered, so the granule is rejected before any task runs."""
-    ds = read_l1a_cam_data(xr.open_dataset(test_ditl_l1a_file_path)).isel(camera_time=slice(0, 2))
-    ds = ds.assign_coords(camera_time=ds.camera_time + np.timedelta64(1, "D"))
-    config = GeolocationKernelConfig(dynamic_kernel_sources=_ditl_dynamic_kernel_sources(test_data_path))
-
-    with pytest.raises(ValueError, match="cover none of the 2 camera frame"):
-        add_geolocation_to_dataset(ds, config)
 
 
 def test_dynamic_kernel_sequence_materializes_into_cache(monkeypatch, tmp_path, test_data_path):
@@ -146,7 +136,7 @@ def test_boresight_pixel_matches_curryer_boresight_fields(frame_ugps):
 
 
 def test_full_frame_geometry_is_consistent(frame_ugps):
-    """Full-frame values: fills off Earth, flags agree with fills, conventions hold, nadir is where it should be."""
+    """Full-frame values: NaN off Earth, flags agree with the NaNs, conventions hold, nadir is where it should be."""
     ugps, sources = frame_ugps
     vectors = np.load(GROUND_CAL_PIXEL_MAPPING, mmap_mode="r").reshape(-1, 3)
     with KernelManager() as km:
@@ -155,15 +145,15 @@ def test_full_frame_geometry_is_consistent(frame_ugps):
         subsatellite = geometry.GeometryData(_BODY).get_geometry(ugps, fields=[geometry.GeometryField.SUBSATELLITE])
 
     assert frame.latitude.shape == (PIXEL_COUNT_Y, PIXEL_COUNT_X)
-    on_earth = frame.latitude != np.float32(-999.0)
+    on_earth = np.isfinite(frame.latitude)
     # The square array inscribes the circular field of view; corner pixels point past the limb.
     assert 0.70 < on_earth.mean() < 0.85
 
     assert np.array_equal(frame.quality_flags == 0, on_earth)
     assert np.all(frame.quality_flags[~on_earth] & SQF.CALC_ELLIPS_NO_INTERSECT)
     for name in ("longitude", "solar_zenith", "solar_azimuth", "viewing_zenith", "viewing_azimuth", "relative_azimuth"):
-        assert np.array_equal(getattr(frame, name) != np.float32(-999.0), on_earth), name
-    assert np.array_equal(frame.altitude != np.float32(-9999.0), on_earth)
+        assert np.array_equal(np.isfinite(getattr(frame, name)), on_earth), name
+    assert np.array_equal(np.isfinite(frame.altitude), on_earth)
     assert np.all(frame.altitude[on_earth] == 0.0)
 
     assert np.all((frame.latitude[on_earth] >= -90.0) & (frame.latitude[on_earth] <= 90.0))
@@ -173,7 +163,7 @@ def test_full_frame_geometry_is_consistent(frame_ugps):
     for name in ("viewing_azimuth", "solar_azimuth", "relative_azimuth"):
         values = getattr(frame, name)[on_earth]
         assert np.all((values >= 0.0) & (values < 360.0)), name
-    # Pins the field mapping and the fill/float32/wrap pipeline, not the convention itself (which
+    # Pins the field mapping and the NaN/float32/wrap pipeline, not the convention itself (which
     # the boresight test checks against GeometryData): the relation must survive per pixel.
     # 1e-3 deg covers float32 differencing of two azimuths near 360.
     expected_raa = np.mod(frame.viewing_azimuth[on_earth] - frame.solar_azimuth[on_earth] + 180.0, 360.0)

@@ -10,10 +10,10 @@ def test_angular_difference_is_shortest_signed_arc():
     np.testing.assert_allclose(angular_difference_deg(a, b), [20.0, -20.0, 180.0, 180.0])
 
 
-def test_stats_wrap_signed_degrees_and_exclude_fill():
+def test_stats_wrap_signed_degrees_and_exclude_nan():
     """The FSW angle is degrees, signed; -10 must wrap onto 350 rather than be converted."""
-    spice_deg = np.array([10.0, 90.0, -999.0, 45.0])
-    fsw_deg = np.array([-10.0, 80.0, 30.0, -999.0])
+    spice_deg = np.array([10.0, 90.0, np.nan, 45.0])
+    fsw_deg = np.array([-10.0, 80.0, 30.0, np.nan])
 
     stats = spice_vs_fsw_azimuth_stats(spice_deg, fsw_deg)
 
@@ -25,7 +25,7 @@ def test_stats_wrap_signed_degrees_and_exclude_fill():
 
 
 def test_stats_with_no_valid_samples_are_nan():
-    stats = spice_vs_fsw_azimuth_stats(np.array([-999.0, np.nan]), np.array([0.1, 0.2]))
+    stats = spice_vs_fsw_azimuth_stats(np.array([np.nan, np.nan]), np.array([0.1, 0.2]))
     assert stats["n"] == 0
     assert all(np.isnan(stats[key]) for key in ("min", "max", "mean", "std"))
 

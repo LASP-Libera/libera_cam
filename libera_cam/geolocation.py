@@ -8,7 +8,7 @@ geolocation calculations for the Libera camera.
 import logging
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -20,7 +20,6 @@ from cloudpathlib import S3Path
 from curryer import spicetime
 from curryer import spicierpy as sp
 from curryer.compute import geometry, spatial
-from curryer.compute.constants import SpatialQualityFlags
 from curryer.compute.geometry_fields import PixelField
 from curryer.spicierpy.ext import spice_error_message
 from dask import delayed
@@ -37,11 +36,6 @@ from libera_cam.constants import (
 from libera_cam.image_parsing.read_l1a_cam_data import kept_pixels_from_source
 
 logger = logging.getLogger(__name__)
-
-# Per-pixel product fill values (L1B_CAM_product_definition.yml)
-_GEO_FILL_LAT_LON = np.float32(-999.0)
-_GEO_FILL_ALT = np.float32(-9999.0)
-_GEO_FILL_ANGLE = np.float32(-999.0)
 
 _SPICE_BODY_PRODUCTION = "LIBERA_WFOV_CAM"
 _SPICE_BODY_JPSS_ONLY = "LIBERA_BASE"
@@ -477,12 +471,12 @@ def add_placeholder_frame_geometry_to_dataset(ds: xr.Dataset) -> xr.Dataset:
 
 
 class FrameGeometry(NamedTuple):
-    """Per-pixel geometry of one camera frame, ``(Y, X)`` arrays with the product fills applied.
+    """Per-pixel geometry of one camera frame, ``(Y, X)`` arrays.
 
     Angles are degrees under curryer's conventions (azimuths clockwise from geodetic North in
     [0, 360), zeniths from the local geodetic normal in [0, 180], relative azimuth with the Sun at
-    180). Pixels that miss the ellipsoid, or whose epoch SPICE could not resolve, carry the product
-    ``_FillValue`` and a non-zero ``quality_flags`` word (curryer ``SpatialQualityFlags``).
+    180). Pixels that miss the ellipsoid, or whose epoch SPICE could not resolve, are NaN with a
+    non-zero ``quality_flags`` word (curryer ``SpatialQualityFlags``).
     """
 
     latitude: np.ndarray
@@ -508,17 +502,17 @@ _PIXEL_FIELDS: tuple[PixelField, ...] = (
     PixelField.QUALITY_FLAGS,
 )
 
-# curryer output column -> (product variable, _FillValue, dtype). The keys are curryer's column
-# names, which are also the ``FrameGeometry`` field names, so no rename table is needed.
-_PIXEL_VARIABLES: dict[str, tuple[str, float, type]] = {
-    "latitude": ("Latitude", _GEO_FILL_LAT_LON, np.float32),
-    "longitude": ("Longitude", _GEO_FILL_LAT_LON, np.float32),
-    "altitude": ("Altitude", _GEO_FILL_ALT, np.float32),
-    "solar_zenith": ("Solar_Zenith_Surface", _GEO_FILL_ANGLE, np.float32),
-    "solar_azimuth": ("Solar_Azimuth_Surface_WRT_North", _GEO_FILL_ANGLE, np.float32),
-    "viewing_zenith": ("Viewing_Zenith_Surface", _GEO_FILL_ANGLE, np.float32),
-    "viewing_azimuth": ("Viewing_Azimuth_Surface_WRT_North", _GEO_FILL_ANGLE, np.float32),
-    "relative_azimuth": ("Relative_Azimuth_Surface", _GEO_FILL_ANGLE, np.float32),
+# curryer output column -> (product variable, dtype). The keys are curryer's column names, which
+# are also the ``FrameGeometry`` field names, so no rename table is needed.
+_PIXEL_VARIABLES: dict[str, tuple[str, type]] = {
+    "latitude": ("Latitude", np.float32),
+    "longitude": ("Longitude", np.float32),
+    "altitude": ("Altitude", np.float32),
+    "solar_zenith": ("Solar_Zenith_Surface", np.float32),
+    "solar_azimuth": ("Solar_Azimuth_Surface_WRT_North", np.float32),
+    "viewing_zenith": ("Viewing_Zenith_Surface", np.float32),
+    "viewing_azimuth": ("Viewing_Azimuth_Surface_WRT_North", np.float32),
+    "relative_azimuth": ("Relative_Azimuth_Surface", np.float32),
 }
 _KM_TO_M = 1000.0
 # Bit 15 of Geolocation_Quality_Flag: geolocation was not run for the pixel, because use_geo is false
@@ -539,13 +533,13 @@ def geolocate_frame(
     frame_shape: tuple[int, int] = (PIXEL_COUNT_Y, PIXEL_COUNT_X),
     pixel_mask: np.ndarray | None = None,
 ) -> FrameGeometry:
-    """Per-pixel geometry of one camera frame via curryer ``pixel_geometry``, with product fills.
+    """Per-pixel geometry of one camera frame via curryer ``pixel_geometry``.
 
     The per-frame unit of the geolocation path: pure, one frame in, one frame out, no kernel
     management and no Dask. Every pixel ``pixel_mask`` selects that hits the ellipsoid gets
     geodetic latitude and longitude and the solar and viewing zenith and azimuth at that point;
     nothing is interpolated. curryer sees only the selected pixels' vectors, so the cost scales
-    with the pixels the camera kept, and the unselected pixels are written as fill.
+    with the pixels the camera kept, and the unselected pixels are NaN.
     ``altitude`` is the ellipsoid reference and is 0 m at every hit (there is no terrain here;
     that is ``Terrain_Corrected_Altitude``, LIBSDC-814). A frame is geolocated at one or more
     exposure epochs: curryer runs once over all ``K`` epochs and each pixel takes
@@ -581,8 +575,8 @@ def geolocate_frame(
     Returns
     -------
     FrameGeometry
-        Float32 fields with the product fill where a pixel misses the ellipsoid, its epoch is
-        uncovered, or ``pixel_mask`` excludes it; altitude in meters; azimuths wrapped so the
+        Float32 fields, NaN where a pixel misses the ellipsoid, its epoch is uncovered, or
+        ``pixel_mask`` excludes it; altitude in meters; azimuths wrapped so the
         float32 rounding of a value just under 360 lands on 0, not 360; ``quality_flags`` as
         uint16, 0 where good, bit 15 alone where ``pixel_mask`` excludes the pixel.
 
@@ -644,10 +638,10 @@ def geolocate_frame(
             )
         selected = np.flatnonzero(mask)
 
-    fields = {name: np.full(n_pixels, fill, dtype=dtype) for name, (_, fill, dtype) in _PIXEL_VARIABLES.items()}
+    fields = {name: np.full(n_pixels, np.nan, dtype=dtype) for name, (_, dtype) in _PIXEL_VARIABLES.items()}
     flags = np.full(n_pixels, _GEO_NOT_COMPUTED_FLAG, dtype=np.uint16)
     if selected.size:
-        # Fill-and-flag on a SPICE gap is this function's contract (a granule with no covered frame
+        # NaN-and-flag on a SPICE gap is this function's contract (a granule with no covered frame
         # is rejected upstream), so the choice is made here rather than left to curryer's default.
         result = spatial.pixel_geometry(
             epochs, spice_body, vectors[selected], fields=list(_PIXEL_FIELDS), allow_nans=True
@@ -658,11 +652,11 @@ def geolocate_frame(
             """Select each selected pixel's epoch from a (K, n_selected) curryer array."""
             return values[0] if selected_index is None else values[selected_index, np.arange(selected.size)]
 
-        for name, (_, fill, dtype) in _PIXEL_VARIABLES.items():
+        for name, (_, dtype) in _PIXEL_VARIABLES.items():
             values = per_pixel(result[name])
             if name == "altitude":
                 values = values * _KM_TO_M  # 0 at every hit today; kept for a non-zero upstream ``alt``
-            values = np.where(np.isfinite(values), values, fill).astype(dtype)
+            values = values.astype(dtype)
             if name in _AZIMUTH_FIELDS:
                 values[values == _FULL_TURN] = 0.0
             fields[name][selected] = values
@@ -684,14 +678,9 @@ _GEOLOCATION_FLAG_VARIABLE = "Geolocation_Quality_Flag"
 # FrameGeometry field -> (product variable, dtype) for every field the geolocation path writes, in
 # FrameGeometry field order (the worker returns its blocks in this order).
 _FIELD_VARIABLES: dict[str, tuple[str, type]] = {
-    name: (
-        (_GEOLOCATION_FLAG_VARIABLE, np.uint16)
-        if name == "quality_flags"
-        else (_PIXEL_VARIABLES[name][0], _PIXEL_VARIABLES[name][2])
-    )
+    name: ((_GEOLOCATION_FLAG_VARIABLE, np.uint16) if name == "quality_flags" else _PIXEL_VARIABLES[name])
     for name in FrameGeometry._fields
 }
-_BORESIGHT = np.array([[0.0, 0.0, 1.0]])
 
 
 def _geometry_chunk_size() -> int:
@@ -745,7 +734,7 @@ def calculate_chunk_geometry(
     -------
     tuple of np.ndarray
         One ``(T, Y, X)`` array per :class:`FrameGeometry` field, in field order: the float32
-        fields with product fills, then the uint16 ``quality_flags``.
+        fields, then the uint16 ``quality_flags``.
 
     Raises
     ------
@@ -831,48 +820,6 @@ def calculate_chunk_geometry_from_l1a(
     return calculate_chunk_geometry(exposure_times, None, kept_pixels_from_source(l1a_source, l1a_rows), config)
 
 
-def _require_frame_coverage(config: GeolocationKernelConfig, timestamps: np.ndarray, spice_body: str) -> None:
-    """
-    Furnish the kernels once on the client and reject a granule of which no frame is covered.
-
-    Loading here materializes every kernel into the libera_utils cache serially before the
-    workers start; ``KernelFileCache`` has no lock, so concurrent tasks fetching the same file
-    could corrupt it. Coverage is then probed along the body's +Z axis (the camera boresight in
-    production) at every frame: an epoch SPICE cannot resolve flags every pixel
-    ``CALC_ELLIPS_INSUFF_DATA`` whatever its vector, so one pixel per frame tells. Uncovered
-    frames inside a covered granule are the workers' business (fill and flag); a granule with no
-    covered frame means the kernels miss it altogether.
-
-    Raises
-    ------
-    ValueError
-        If no frame is covered.
-    """
-    with _kernel_manager_from_config(config) as km:
-        km.load_libera_dynamic_kernels(
-            config.dynamic_kernel_sources,
-            needs_naif_kernels=True,
-            needs_static_kernels=True,
-        )
-        ugps = np.asarray(spicetime.adapt(pd.DatetimeIndex(timestamps), "iso"))
-        probe = spatial.pixel_geometry(ugps, spice_body, _BORESIGHT, fields=[PixelField.QUALITY_FLAGS], allow_nans=True)
-
-    uncovered = (probe["quality_flags"][:, 0] & int(SpatialQualityFlags.CALC_ELLIPS_INSUFF_DATA)) != 0
-    if uncovered.all():
-        raise ValueError(
-            f"SPICE kernels cover none of the {uncovered.size} camera frame(s) for {spice_body!r}; "
-            "check that the manifest kernels span the granule."
-        )
-    if uncovered.any():
-        logger.warning(
-            "%d of %d camera frame(s) have no SPICE coverage for %r; they are written as fill with the "
-            "CALC_ELLIPS_INSUFF_DATA flag.",
-            int(uncovered.sum()),
-            uncovered.size,
-            spice_body,
-        )
-
-
 def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
     """
     Lazily compute the per-pixel geometry of every frame and add it to the dataset.
@@ -880,21 +827,25 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     Every pixel the camera kept, the
     :func:`~libera_cam.image_parsing.read_l1a_cam_data.kept_pixels` of its frame, is geolocated
     at its frame's epoch through :func:`geolocate_frame`; nothing is subsampled or interpolated. The
-    pixels the onboard pixel mask removed are written as fill with bit 15 of the flag set, so
-    the cost and the stored volume follow the kept pixels. The work is split into tasks of
+    pixels the onboard pixel mask removed are NaN with bit 15 of the flag set, so the cost and
+    the stored volume follow the kept pixels. The work is split into tasks of
     ``LIBERA_CAM_GEO_CHUNK_SIZE`` frames along ``camera_time``, independent of the
     decompression chunking; each task rebuilds its frames' masks from the L1A file
     (:func:`calculate_chunk_geometry_from_l1a`), returns one ``(T, Y, X)`` block per field and the blocks
-    are concatenated into lazy arrays under the product variable names. The kernels are
-    furnished once on the client first, which populates the kernel cache ahead of the workers
-    and rejects a granule the kernels do not cover at all.
+    are concatenated into lazy arrays under the product variable names.
+
+    The per-frame geometry must already be on the dataset: :func:`add_frame_geometry_to_dataset`
+    furnishes the same kernels on the client, which populates the kernel cache ahead of the
+    workers, and rejects a granule the kernels do not cover at all. A frame they do not cover,
+    which its warnings count, is NaN here with bit 8 (``CALC_ELLIPS_INSUFF_DATA``) of the flag set.
 
     Parameters
     ----------
     ds : xr.Dataset
         Dataset with a ``camera_time`` coordinate (``datetime64[ns]``) and the integer
         ``l1a_row`` on ``camera_time`` with the L1A file in its ``source`` attribute, as
-        :func:`~libera_cam.image_parsing.read_l1a_cam_data.read_l1a_cam_data` returns it.
+        :func:`~libera_cam.image_parsing.read_l1a_cam_data.read_l1a_cam_data` returns it, and the
+        finite ``Earth_Sun_Distance_AU`` attribute :func:`add_frame_geometry_to_dataset` sets.
     config : GeolocationKernelConfig
         Kernel sources (required) and ``jpss_only`` (``LIBERA_BASE`` body: the camera vectors
         at zero azimuth, no azimuth CK).
@@ -910,8 +861,8 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     ------
     ValueError
         If ``ds`` has no ``camera_time`` coordinate, no integer ``l1a_row`` with a ``source``
-        attribute, ``config`` names no kernel sources, ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1, or the
-        kernels cover none of the frames.
+        attribute, or no per-frame geometry from :func:`add_frame_geometry_to_dataset`, ``config``
+        names no kernel sources, or ``LIBERA_CAM_GEO_CHUNK_SIZE`` is below 1.
 
     Notes
     -----
@@ -927,13 +878,16 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
         or not isinstance(ds["l1a_row"].attrs.get("source"), str)
     ):
         raise ValueError("Dataset must have the integer 'l1a_row' with a 'source' attribute, from read_l1a_cam_data.")
+    if not np.isfinite(ds.attrs.get(_EARTH_SUN_DISTANCE_ATTRIBUTE, np.nan)):
+        raise ValueError(
+            "Per-pixel geolocation needs the per-frame geometry first: call add_frame_geometry_to_dataset, "
+            "which loads the kernels into the cache ahead of the workers and rejects an uncovered granule."
+        )
     if not config.dynamic_kernel_sources:
         raise ValueError("SPICE kernel sources are required for per-pixel geolocation")
     chunk_size = _geometry_chunk_size()
 
     timestamps = ds.camera_time.values
-    _require_frame_coverage(config, timestamps, _geometry_spice_body(config))
-
     n_frames = timestamps.size
     exposure_times = timestamps[:, None]
     frame_shape = (PIXEL_COUNT_Y, PIXEL_COUNT_X)
@@ -953,19 +907,14 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
     return ds
 
 
-def add_jpss_only_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) -> xr.Dataset:
-    """Per-pixel geometry against ``LIBERA_BASE`` (camera vectors at zero azimuth) from the JPSS kernels alone."""
-    return add_geolocation_to_dataset(ds, replace(config, jpss_only=True))
-
-
 def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
     """
-    Add the per-pixel geolocation variables as fill values, for ``use_geo`` false mode.
+    Add the per-pixel geolocation variables as placeholders, for ``use_geo`` false mode.
 
     Ground-data processing has no SPICE kernels, but the writer rejects a dataset missing a
-    declared variable, so every field of the geolocation path is written as its fill: the float
-    fields as their product ``_FillValue`` and ``Geolocation_Quality_Flag`` with bit 15 set
-    (geolocation not run), since 0 would read as good geometry. The arrays are lazy and share
+    declared variable, so every field of the geolocation path is written: the float fields as
+    NaN and ``Geolocation_Quality_Flag`` with bit 15 set (geolocation not run), since 0 would
+    read as good geometry. The arrays are lazy and share
     ``image_data``'s time chunks.
 
     Parameters
@@ -987,10 +936,10 @@ def add_placeholder_geolocation_to_dataset(ds: xr.Dataset) -> xr.Dataset:
         raise ValueError("Placeholder geolocation takes its time chunks from a Dask-backed 'image_data' variable.")
     shape = (ds.sizes["camera_time"], PIXEL_COUNT_Y, PIXEL_COUNT_X)
     chunks = (ds["image_data"].chunks[0], (PIXEL_COUNT_Y,), (PIXEL_COUNT_X,))
-    fills = {name: fill for name, (_, fill, _) in _PIXEL_VARIABLES.items()} | {"quality_flags": _GEO_NOT_COMPUTED_FLAG}
+    fills = {name: np.nan for name in _PIXEL_VARIABLES} | {"quality_flags": _GEO_NOT_COMPUTED_FLAG}
     for name, (variable, dtype) in _FIELD_VARIABLES.items():
         ds[variable] = (("camera_time", "y", "x"), da.full(shape, fills[name], dtype=dtype, chunks=chunks))
 
-    logger.info("use_geo is false: per-pixel geolocation written as fill values.")
+    logger.info("use_geo is false: per-pixel geolocation written as NaN.")
 
     return ds
