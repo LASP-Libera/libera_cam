@@ -82,29 +82,35 @@ and related fields at each pixel — multiplies SPICE work substantially.
 
 ### Optimization strategies
 
-| Approach                    | Notes                                                                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Sparse geometry**         | Restrict geometry calculations strictly to unmasked/active pixels (e.g. within stripes), skipping masked-off areas entirely |
-| **Reduce SPICE call count** | Batch by unique timestamps or integration groups before per-pixel expansion                                                 |
-| **Coarser geometry grid**   | Compute angles on a subsampled grid and interpolate (with science validation)                                               |
-| **Worker-local caching**    | Reuse Sun/spacecraft orientation for all pixels sharing a timestamp                                                         |
-| **Vectorized evaluation**   | Evaluate whether curryer vectorized paths or precomputed ephemeris tables help at full camera resolution (2048×2048)        |
+| Approach                    | Notes                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Sparse geometry**         | Done in 0.4.0: only the pixels the onboard mask kept are geolocated (9.1% of DITL2 pixels; geometry 0.95 to 0.095 s/frame) |
+| **Reduce SPICE call count** | Batch by unique timestamps or integration groups before per-pixel expansion                                                |
+| **Coarser geometry grid**   | Rejected: interpolating from a subsampled grid put errors of up to 1.7 degrees near the limb                               |
+| **Worker-local caching**    | Reuse Sun/spacecraft orientation for all pixels sharing a timestamp                                                        |
+| **Vectorized evaluation**   | Evaluate whether curryer vectorized paths or precomputed ephemeris tables help at full camera resolution (2048×2048)       |
 
 ---
 
 ## 4. Direct worker NetCDF chunk output
 
-### Problem today
+### Status
 
-Currently, `write_data_product` relies on `to_netcdf` / `write_libera_data_product`, which
-funnels all computed Dask blocks back through the client process. Client process memory and I/O
-become a bottleneck on large multi-gigabyte datasets.
+Done for compression in 0.4.0. Under `distributed` the workers shuffle and deflate the chunks of
+every Dask-backed three-dimensional variable, and the writing process stores the compressed bytes
+with HDF5 `write_direct_chunk` (libera-utils `worker_compressed_variables`). Before, HDF5
+compressed every chunk in the single writing process, about 95% of wall time on AWS. The full
+July 12 day (8,205 frames) went from 6 h 17 min to about 2 h 42 min through the l1b-cam step
+function, 1.09 s/frame against 2.7 (one of four runs took 1 h 47 min), at a 10.8 GB peak of the task's 30 GB, with the same values on read (see `overview.md`, AWS sizing).
 
-### Target state
+### Remaining
 
-Investigate and prototype direct worker-to-disk or worker-to-S3 NetCDF chunk writes (e.g., using
-region-based HDF5/NetCDF-4 writes or Zarr storage targets). This allows distributed workers to
-write their completed chunks independently without returning payload data to the client driver.
+The writing process still receives every compressed chunk and writes the file alone. Workers
+writing their chunks to disk or to S3 themselves (region writes, or a Zarr target) would remove
+that hand-off, but it is no longer the bottleneck. The write scales with vCPUs up to at
+least 16 (0.29-0.30 s/frame on the DITL2 granule, against 1.06-1.07 at 4), so the defaults moved
+to seven 8 GB workers for an 8 vCPU / 60 GB task, which wrote the full July 12 day in 1 h 20 min
+at a 15.8 GB peak.
 
 ---
 
@@ -124,4 +130,7 @@ radiometric calibration, JPEG-LS decompression, and SPICE geolocation.
 
 - Logging of distributed tasks on AWS. Are we getting enough information out to debug?
 - When using `distributed` mode does Dask emit a "large object detected in task graph" warning because of the 50 images passing in?
-- Confirm netcdf file writing in distributed mode on AWS with h5netcdf vs netcdf4 engine
+- Multi-node `distributed` needs shared filesystem access to the L1A input: each worker reads
+  the L1A file by path (`_decompress_batch_from_source`, `kept_pixels_from_source`), while the
+  client process alone writes the output. The single-node `LocalCluster` built by `l1b.py`
+  satisfies this automatically.

@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
+import dask.array as da
+import numpy as np
 import pytest
 import xarray as xr
 from libera_utils.constants import DataProductIdentifier
@@ -69,7 +71,7 @@ class TestL1b(unittest.TestCase):
         mock_read.assert_called_with(mock_manifest)
         mock_process.assert_called_with(mock_l1a_data, mock_dynamic_kernel_sources, use_geo=True, jpss_only_mode=False)
         mock_package.assert_called_once_with(mock_processed_ds)
-        mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox")
+        mock_write.assert_called_with(mock_package.return_value, "/tmp/dropbox", compress_on_workers=False)
 
         # Verify input configuration is propagated to the output manifest
         mock_out_man.configuration.update.assert_called_once_with({})
@@ -150,7 +152,7 @@ class TestL1b(unittest.TestCase):
     @patch("libera_cam.l1b.add_frame_geometry_to_dataset")
     @patch("libera_cam.l1b.add_geolocation_to_dataset")
     def test_process_l1a_to_l1b_spice_mode(self, mock_geo, mock_frame_geo, mock_convert, mock_read_l1a):
-        """Production mode: geolocation and the per-frame geometry share one GeolocationKernelConfig."""
+        """Production mode: the per-frame geometry, then geolocation, under one GeolocationKernelConfig."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
@@ -167,26 +169,35 @@ class TestL1b(unittest.TestCase):
 
         mock_geo.return_value = mock_lazy_ds
         mock_frame_geo.return_value = mock_lazy_ds
+        calls = Mock()
+        calls.attach_mock(mock_frame_geo, "frame_geo")
+        calls.attach_mock(mock_geo, "geo")
 
         dynamic_kernel_sources = ["/tmp/spice/orbit.bc"]
         l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, use_geo=True)
 
         mock_geo.assert_called_once()
-        call_kwargs = mock_geo.call_args
-        assert call_kwargs.args[1].dynamic_kernel_sources == dynamic_kernel_sources
-        assert call_kwargs.kwargs["pixel_mask"] is mock_lazy_ds.valid_pixel_mask
+        geo_config = mock_geo.call_args.args[1]
+        # The kept-pixel mask travels in the dataset as valid_pixel_mask, not as an argument.
+        assert mock_geo.call_args.kwargs == {}
+        # Radiance is NaN wherever the onboard pixel mask removed the pixel.
+        mock_radiance.where.assert_called_once_with(mock_lazy_ds.valid_pixel_mask)
+        assert mock_geo.call_args.args[0] is mock_lazy_ds
+        assert geo_config.dynamic_kernel_sources == dynamic_kernel_sources
 
-        # The spacecraft-level fields and the CK azimuth share the geolocation kernel config.
-        mock_frame_geo.assert_called_once_with(mock_lazy_ds, call_kwargs.args[1])
-        assert call_kwargs.args[1].jpss_only is False
+        # The spacecraft-level fields and the CK azimuth share the geolocation kernel config, and run
+        # first: their kernel load caches the kernels the geolocation workers read.
+        mock_frame_geo.assert_called_once_with(mock_lazy_ds, geo_config)
+        assert [call[0] for call in calls.mock_calls] == ["frame_geo", "geo"]
+        assert geo_config.jpss_only is False
         assert mock_lazy_ds.attrs["Geolocation_Mode"] == "production"
 
     @patch("libera_cam.l1b.read_l1a_cam_data")
     @patch("libera_cam.l1b.convert_dn_to_radiance")
     @patch("libera_cam.l1b.add_frame_geometry_to_dataset")
-    @patch("libera_cam.l1b.add_jpss_only_geolocation_to_dataset")
+    @patch("libera_cam.l1b.add_geolocation_to_dataset")
     def test_process_l1a_to_l1b_jpss_only_mode(self, mock_jpss_geo, mock_frame_geo, mock_convert, mock_read_l1a):
-        """jpss_only uses LIBERA_BASE per-pixel geolocation and a jpss_only config for the per-frame geometry."""
+        """jpss_only passes one jpss_only config to the per-frame geometry and the geolocation (LIBERA_BASE)."""
         mock_l1a_input = MagicMock(spec=xr.Dataset)
         all_input = {WFOV_L1A_FILENAME: mock_l1a_input}
 
@@ -209,9 +220,13 @@ class TestL1b(unittest.TestCase):
         result = l1b.process_l1a_to_l1b(all_input, dynamic_kernel_sources, jpss_only_mode=True)
 
         mock_jpss_geo.assert_called_once()
-        # The jpss_only config selects the zero azimuth in place of the azimuth CK.
+        assert mock_jpss_geo.call_args.kwargs == {}
+        assert mock_jpss_geo.call_args.args[0] is mock_lazy_ds
+        assert mock_jpss_geo.call_args.args[1].dynamic_kernel_sources == dynamic_kernel_sources
+        # The jpss_only config selects the zero azimuth in place of the azimuth CK and the LIBERA_BASE body.
         mock_frame_geo.assert_called_once()
         frame_config = mock_frame_geo.call_args.args[1]
+        assert mock_jpss_geo.call_args.args[1] is frame_config
         assert frame_config.jpss_only is True
         assert frame_config.dynamic_kernel_sources == dynamic_kernel_sources
         assert mock_lazy_ds.attrs["Geolocation_Mode"] == "jpss_only"
@@ -231,6 +246,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
         mock_lazy_ds.integration_mask = MagicMock()
+        mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.sizes = {"camera_time": 2}
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
         mock_lazy_ds.attrs = {}
@@ -258,6 +274,7 @@ class TestL1b(unittest.TestCase):
         mock_lazy_ds = MagicMock(spec=xr.Dataset)
         mock_lazy_ds.image_data = MagicMock()
         mock_lazy_ds.integration_mask = MagicMock()
+        mock_lazy_ds.valid_pixel_mask = MagicMock()
         mock_lazy_ds.chunk.return_value = mock_lazy_ds
         mock_read_l1a.return_value = mock_lazy_ds
         mock_convert.return_value = MagicMock()
@@ -274,11 +291,39 @@ class TestL1b(unittest.TestCase):
         mock_filenames = (MagicMock(), MagicMock())
         mock_write_libera.return_value = mock_filenames
 
-        result = l1b.write_data_product(mock_ds, "/tmp/out")
+        result = l1b.write_data_product(mock_ds, "/tmp/out", compress_on_workers=False)
 
         assert result == mock_filenames
         assert mock_ds.attrs["algorithm_version"] == libera_cam_version()
         mock_write_libera.assert_called_once()
+        assert mock_write_libera.call_args.kwargs["worker_compressed_variables"] == ()
+
+    @patch("libera_cam.l1b.write_libera_data_product")
+    def test_write_data_product_names_the_dask_backed_three_dimensional_variables(self, mock_write_libera):
+        """compress_on_workers passes every Dask-backed 3-D data variable, and nothing else, to libera-utils"""
+        dims = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+        dataset = xr.Dataset(
+            {
+                "Radiance": (dims, da.zeros((2, 4, 4), chunks=1, dtype=np.float32)),
+                "Latitude": (dims, da.zeros((2, 4, 4), chunks=1, dtype=np.float32)),
+                "Eager_Image": (dims, np.zeros((2, 4, 4), dtype=np.float32)),
+                "Quality_Flag": (("CAMERA_TIME",), da.zeros(2, chunks=1, dtype=np.uint32)),
+            }
+        )
+
+        l1b.write_data_product(dataset, "/tmp/out", compress_on_workers=True)
+
+        assert mock_write_libera.call_args.kwargs["worker_compressed_variables"] == ("Radiance", "Latitude")
+
+    @patch("libera_cam.l1b.write_libera_data_product")
+    def test_write_data_product_with_no_dask_backed_three_dimensional_variable_raises(self, mock_write_libera):
+        """compress_on_workers with nothing to compress fails rather than quietly writing on one thread"""
+        dims = ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+        dataset = xr.Dataset({"Radiance": (dims, np.zeros((2, 4, 4), dtype=np.float32))})
+
+        with pytest.raises(ValueError, match="no Dask-backed three-dimensional variable"):
+            l1b.write_data_product(dataset, "/tmp/out", compress_on_workers=True)
+        mock_write_libera.assert_not_called()
 
 
 class TestReadAllInputDataSpiceKernels:

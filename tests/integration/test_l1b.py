@@ -1,8 +1,10 @@
 """Tests for the l1b algorithm"""
 
+import logging
 from argparse import Namespace
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 import xarray as xr
@@ -93,3 +95,97 @@ def test_per_frame_geometry_is_written(l1b_product_dataset, variable, dims):
 def test_earth_sun_distance_is_written(l1b_product_dataset):
     """The granule Earth-Sun distance is written as a global attribute."""
     assert np.isfinite(float(l1b_product_dataset.attrs["Earth_Sun_Distance_AU"]))
+
+
+def test_three_dimensional_variables_carry_the_pinned_encoding_on_disk(l1b_product_file_path):
+    """The shuffle filter and chunk shape declared in the product definition must reach the written file."""
+    with h5py.File(l1b_product_file_path, "r") as product:
+        for name in ("Latitude", "Longitude", "Viewing_Zenith_Surface", "Geolocation_Quality_Flag"):
+            assert product[name].shuffle is True, name
+        # Pinned off, against the netcdf4 engine's default of on whenever zlib is on.
+        assert product["Radiance"].shuffle is False
+        assert product["Pixel_Counts"].shuffle is True
+        for name in ("Latitude", "Longitude", "Viewing_Zenith_Surface", "Geolocation_Quality_Flag", "Radiance"):
+            assert product[name].chunks == (1, 512, 512), name
+
+
+def test_per_pixel_geometry_is_computed_for_every_kept_pixel(l1b_product_dataset):
+    """Kept on-Earth pixels have finite geometry flagged 0; pixels the camera removed are NaN with bit 31.
+
+    The flag variable keeps its uint32 dtype. DITL_3min mixes masked frames (about 8% kept) with an
+    unmasked one.
+    """
+    flags = l1b_product_dataset["Geolocation_Quality_Flag"]
+    assert flags.dims == ("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+    assert flags.dtype == np.uint32
+    kept = l1b_product_dataset["Camera_Mask"].to_numpy() == 1
+    assert "valid_pixel_mask" not in l1b_product_dataset
+
+    flag_values = flags.to_numpy()
+    on_earth = flag_values == 0
+    assert on_earth.any(axis=(1, 2)).all(), "every frame has geolocated pixels"
+    # On an unmasked frame the square detector inscribes the circular field of view; corner pixels
+    # point past the limb.
+    unmasked = kept.all(axis=(1, 2))
+    assert unmasked.any(), "DITL_3min has an unmasked frame"
+    on_earth_fraction = on_earth[unmasked].mean(axis=(1, 2))
+    assert np.all((on_earth_fraction > 0.70) & (on_earth_fraction < 0.85)), on_earth_fraction
+    assert not on_earth[~kept].any()
+    np.testing.assert_array_equal(flag_values[~kept], 1 << 31)
+    assert np.isnan(l1b_product_dataset["Radiance"].to_numpy()[~kept]).all()
+    for name in (
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Solar_Zenith_Surface",
+        "Viewing_Zenith_Surface",
+        "Relative_Azimuth_Surface",
+        "Viewing_Azimuth_Surface_WRT_North",
+        "Solar_Azimuth_Surface_WRT_North",
+    ):
+        assert np.array_equal(np.isfinite(l1b_product_dataset[name].to_numpy()), on_earth), name
+
+
+def _write_product(manifest_path: Path, output_dir: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run the L1B algorithm into ``output_dir`` and return the written NetCDF path."""
+    output_dir.mkdir()
+    monkeypatch.setenv("PROCESSING_PATH", str(output_dir))
+    output_manifest = Manifest.from_file(algorithm(Namespace(manifest=str(manifest_path))))
+    (nc_file,) = [file for file in output_manifest.files if Path(file).suffix == ".nc"]
+    return nc_file
+
+
+def _dataset_names(h5file: h5py.File) -> list[str]:
+    names = []
+    h5file.visititems(lambda name, obj: names.append(name) if isinstance(obj, h5py.Dataset) else None)
+    return sorted(names)
+
+
+@pytest.mark.parametrize("configuration", [{}, {"use_geo": False}], ids=["use_geo", "no_geo"])
+def test_distributed_product_matches_synchronous(generate_input_manifest, monkeypatch, tmp_path, caplog, configuration):
+    """The worker-compressed write under distributed stores the same bits, chunks and filters as synchronous.
+
+    Under distributed the workers shuffle and deflate every Dask-backed 3-D variable's chunks and the
+    client stores them with ``write_direct_chunk``; under synchronous HDF5 compresses as it writes.
+    """
+    manifest_path = generate_input_manifest(configuration)
+    synchronous_path = _write_product(manifest_path, tmp_path / "synchronous", monkeypatch)
+
+    monkeypatch.setenv("DASK_SCHEDULER", "distributed")
+    monkeypatch.setenv("DASK_NUM_WORKERS", "1")
+    monkeypatch.setenv("DASK_MEMORY_LIMIT", "6GB")
+    with caplog.at_level(logging.INFO, logger="libera_utils.io.netcdf"):
+        distributed_path = _write_product(manifest_path, tmp_path / "distributed", monkeypatch)
+    assert "worker-compressed chunks" in caplog.text
+
+    with h5py.File(synchronous_path, "r") as expected, h5py.File(distributed_path, "r") as actual:
+        names = _dataset_names(expected)
+        assert _dataset_names(actual) == names
+        for name in names:
+            want, got = expected[name], actual[name]
+            layout = ("dtype", "shape", "chunks", "compression", "compression_opts", "shuffle")
+            assert [getattr(got, key) for key in layout] == [getattr(want, key) for key in layout], name
+            assert np.asarray(got.fillvalue).tobytes() == np.asarray(want.fillvalue).tobytes(), name
+            want_values, got_values = np.asarray(want[()]), np.asarray(got[()])
+            bits = f"u{want_values.dtype.itemsize}"
+            np.testing.assert_array_equal(got_values.view(bits), want_values.view(bits), err_msg=name)

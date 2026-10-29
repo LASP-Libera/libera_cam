@@ -5,6 +5,10 @@ libera-cam
 
 # Standard
 import argparse
+import logging
+from datetime import UTC, datetime
+
+from libera_utils.logutil import configure_task_logging
 
 # Local
 from libera_cam import l1b
@@ -14,6 +18,10 @@ from libera_cam.version import version as libera_cam_version
 def main(cli_args: list = None):
     """Main CLI entrypoint that runs the function inferred from the specified subcommand"""
     args = parse_cli_args(cli_args)
+    configure_task_logging(
+        f"libera_cam_{datetime.now(UTC):%Y%m%dT%H%M%S}",
+        console_log_level=logging.DEBUG if args.verbose else logging.INFO,
+    )
     args.func(args)
 
 
