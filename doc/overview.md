@@ -141,7 +141,7 @@ and averaged 9.8-9.9 GB, ephemeral disk peaked at 62.8 GB, and CPU averaged 2.8-
 Run 1's write took 37% less time with the same image, L1A, kernels and 1,607,052 stored chunks;
 Fargate does not fix the host CPU model, so it most likely ran on a faster host. No worker run
 logged a worker pause, restart or spill. These runs used LASP-Libera/libera*utils#102 at `7703cfd`,
-which skipped chunks that were fill throughout, most of them in the `Terrain_Corrected*\*`placeholders, and that is why their product is 0.55 GB smaller. The pinned commit stores every
+which skipped chunks that were fill throughout, most of them in the `Terrain_Corrected*\*`placeholders, and that is why their product is 0.55 GB smaller. The #102 branch now stores every
 chunk, as`to_netcdf` does. Locally, on 150 frames of the same day, the two write paths produced
 bit-identical variables.
 
