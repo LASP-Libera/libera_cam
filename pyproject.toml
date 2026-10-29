@@ -39,11 +39,10 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    # Installed from the LASP-Libera/libera_utils#102 branch, which merges #106: manifests list files
-    # as path strings without checksums, and `worker_compressed_variables` compresses chunks on the
-    # Dask workers. A branch rather than a commit so this PR tests each update to #106 and #102 before
-    # 5.16.0 releases them. Replace with "libera-utils >=5.16.0,<6.0.0" once 5.16.0 is released.
-    # TODO[LIBSDC-808]
+    # Installed from the LASP-Libera/libera_utils#102 branch, which adds `worker_compressed_variables`
+    # to compress chunks on the Dask workers. A branch rather than a commit so this PR tests each
+    # update to #102 before 5.17.0 releases it. Replace with "libera-utils >=5.17.0,<6.0.0" once
+    # 5.17.0 is released. TODO[LIBSDC-808]
     "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@perf/parallel-kernel-writes",
     # Imported directly by geolocation.py. 0.5.3 adds `spatial.pixel_geometry`, the `PixelField`
     # registry it selects fields from, and `GeometryData.get_geometry(require_coverage=)`, which the
