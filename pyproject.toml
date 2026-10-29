@@ -39,11 +39,11 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    # 5.14.0 names data products with a microsecond timestamp revision (R + YYYYMMDDTHHMMSSffffff)
-    # and rejects the earlier R + YYDDDHHMMSS form. LASP-Libera/libera_utils#106, not yet released,
-    # lists manifest files as path strings rather than the records with a filename that l1b.py
-    # reads. TODO[LIBSDC-887]
-    "libera-utils >= 5.14.0,<5.16.0",
+    # Installed from the LASP-Libera/libera_utils#102 branch, which merges #106: manifests list files
+    # as path strings without checksums, which read_all_input_data reads. A branch rather than a
+    # commit so this PR tests each update to #106 and #102 before 5.16.0 releases them. Replace with
+    # "libera-utils >=5.16.0,<6.0.0" once 5.16.0 is released. TODO[LIBSDC-887]
+    "libera-utils @ git+https://github.com/LASP-Libera/libera_utils.git@perf/parallel-kernel-writes",
     # Imported directly by geolocation.py. 0.5.3 adds `GeometryData.get_geometry(require_coverage=)`,
     # which the spacecraft-level geometry query relies on to fail on a missing attitude or
     # ephemeris kernel.

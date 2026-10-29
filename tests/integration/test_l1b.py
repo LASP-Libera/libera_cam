@@ -40,9 +40,9 @@ def l1b_product_file_path(input_manifest_path, tmp_path_factory):
         output_manifest_path = algorithm(Namespace(manifest=str(input_manifest_path)))
 
     output_manifest = Manifest.from_file(output_manifest_path)
-    nc_files = [file for file in output_manifest.files if Path(file.filename).suffix == ".nc"]
+    nc_files = [file for file in output_manifest.files if Path(file).suffix == ".nc"]
     assert len(nc_files) == 1, "Expected exactly one L1B output file in manifest"
-    return nc_files[0].filename
+    return nc_files[0]
 
 
 @pytest.fixture(scope="module")

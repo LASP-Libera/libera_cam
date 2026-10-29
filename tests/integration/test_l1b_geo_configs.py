@@ -37,8 +37,8 @@ class TestL1bManifestUseGeoConfiguration:
 
     def _output_nc_path(self, output_manifest: Manifest) -> str:
         for file in output_manifest.files:
-            if Path(file.filename).suffix == ".nc":
-                return file.filename
+            if Path(file).suffix == ".nc":
+                return file
         raise AssertionError("No NetCDF data product in output manifest")
 
     def _run_l1b(self, generate_input_manifest, configuration: dict, tmp_path):

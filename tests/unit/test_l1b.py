@@ -86,14 +86,10 @@ class TestL1b(unittest.TestCase):
     @patch("libera_cam.l1b.LiberaDataProductFilename")
     def test_read_all_input_data(self, mock_filename_cls, mock_open_ds, mock_manifest_cls):
         """Test manifest file reading and dataset loading."""
-        mock_file_info = MagicMock()
-        mock_file_info.filename = "test_l1a.nc"
-        az_file = MagicMock()
-        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
-        jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
-        jpss_ck = MagicMock()
-        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
+        mock_file_info = "test_l1a.nc"
+        az_file = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
+        jpss_spk = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
+        jpss_ck = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
         mock_manifest = MagicMock()
         mock_manifest.files = [mock_file_info, az_file, jpss_spk, jpss_ck]
         mock_manifest.configuration = {}
@@ -120,17 +116,15 @@ class TestL1b(unittest.TestCase):
 
         assert "test_l1a.nc" in all_data
         assert all_data["test_l1a.nc"] == mock_ds
-        assert dynamic_kernel_sources == [az_file.filename, jpss_spk.filename, jpss_ck.filename]
+        assert dynamic_kernel_sources == [az_file, jpss_spk, jpss_ck]
         mock_open_ds.assert_called_once()
 
     @patch("libera_cam.l1b.xr.open_dataset")
     @patch("libera_cam.l1b.LiberaDataProductFilename")
     def test_read_all_input_data_use_geo_false_skips_spice(self, mock_filename_cls, mock_open_ds):
         """use_geo false should skip SPICE files and return an empty kernel list."""
-        nc_file = MagicMock()
-        nc_file.filename = "test_l1a.nc"
-        spice_file = MagicMock()
-        spice_file.filename = "orbit.bc"
+        nc_file = "test_l1a.nc"
+        spice_file = "orbit.bc"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, spice_file]
@@ -293,16 +287,10 @@ class TestReadAllInputDataSpiceKernels:
         """jpss_only collects only JPSS kernels and warns on motor kernels."""
         import logging
 
-        nc_file = MagicMock()
-        nc_file.filename = (
-            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
-        )
-        az_file = MagicMock()
-        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
-        jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
-        jpss_ck = MagicMock()
-        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
+        nc_file = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        az_file = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
+        jpss_spk = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
+        jpss_ck = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, az_file, jpss_spk, jpss_ck]
@@ -315,22 +303,16 @@ class TestReadAllInputDataSpiceKernels:
         with caplog.at_level(logging.WARNING):
             _, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
 
-        assert dynamic_kernel_sources == [jpss_spk.filename, jpss_ck.filename]
+        assert dynamic_kernel_sources == [jpss_spk, jpss_ck]
         assert "jpss_only mode: skipping SPICE file" in caplog.text
 
     @patch("libera_cam.l1b.xr.open_dataset")
     def test_read_all_input_data_production_collects_required_kernels(self, mock_open_ds):
         """Production mode collects AZROT + JPSS kernels in furnish order."""
-        nc_file = MagicMock()
-        nc_file.filename = (
-            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
-        )
-        az_file = MagicMock()
-        az_file.filename = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
-        jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
-        jpss_ck = MagicMock()
-        jpss_ck.filename = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
+        nc_file = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        az_file = "LIBERA_SPICE_AZROT-CK_V5-5-1_20280215T135304_20280215T142141_R20260121T234221000000.bc"
+        jpss_spk = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
+        jpss_ck = "LIBERA_SPICE_JPSS-CK_V5-4-2_20280215T000000_20280215T220000_R20260106T200700000000.bc"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, jpss_ck, az_file, jpss_spk]
@@ -340,19 +322,14 @@ class TestReadAllInputDataSpiceKernels:
 
         _, dynamic_kernel_sources = l1b.read_all_input_data(mock_manifest)
 
-        assert dynamic_kernel_sources == [az_file.filename, jpss_spk.filename, jpss_ck.filename]
+        assert dynamic_kernel_sources == [az_file, jpss_spk, jpss_ck]
 
     @patch("libera_cam.l1b.xr.open_dataset")
     def test_read_all_input_data_duplicate_spice_raises(self, mock_open_ds):
         """Duplicate SPICE data product IDs in the manifest raise ValueError."""
-        nc_file = MagicMock()
-        nc_file.filename = (
-            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
-        )
-        jpss_spk_a = MagicMock()
-        jpss_spk_a.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
-        jpss_spk_b = MagicMock()
-        jpss_spk_b.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T235900_R20260106T200657000000.bsp"
+        nc_file = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        jpss_spk_a = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
+        jpss_spk_b = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T235900_R20260106T200657000000.bsp"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, jpss_spk_a, jpss_spk_b]
@@ -366,12 +343,8 @@ class TestReadAllInputDataSpiceKernels:
     @patch("libera_cam.l1b.xr.open_dataset")
     def test_read_all_input_data_missing_required_spice_raises(self, mock_open_ds):
         """Missing required SPICE kernels raise ValueError."""
-        nc_file = MagicMock()
-        nc_file.filename = (
-            "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
-        )
-        jpss_spk = MagicMock()
-        jpss_spk.filename = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
+        nc_file = "LIBERA_L1A_WFOV-SCI-DECODED_V5-4-2_20280215T135304_20280215T142141_R20260121T133743000000.nc"
+        jpss_spk = "LIBERA_SPICE_JPSS-SPK_V5-4-2_20280215T000000_20280215T220000_R20260106T200656000000.bsp"
 
         mock_manifest = MagicMock()
         mock_manifest.files = [nc_file, jpss_spk]
