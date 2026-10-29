@@ -29,6 +29,13 @@ Manifest **`configuration`** keys (optional):
 
 `use_geo: false` and `jpss_only: true` cannot both be set.
 
+With `use_geo` true, the run raises `ValueError` if the spacecraft SPK/CK, or outside
+`jpss_only` the AZROT-CK, cover none of the granule's frames. Frames a partly covered
+granule misses are written as NaN, and a warning gives their count for each variable.
+`jpss_only` writes the three `Azimuth_Motor_Position_SPICE` variables as 0 degrees. The
+global attribute `Geolocation_Mode` names the mode: `production`, `jpss_only` or
+`use_geo_false`.
+
 ---
 
 ## L1A inputs
@@ -42,15 +49,15 @@ FSW/FPGA header metadata is decoded into `WFOV_FSW_HEADER_*`, `WFOV_IMAGE_HEADER
 
 L1A header fields reach the L1B product as:
 
-| L1B variable                    | L1A source                                   | Notes                           |
-| ------------------------------- | -------------------------------------------- | ------------------------------- |
-| `Azimuth_FSW_Metadata`          | `WFOV_FSW_HEADER_AZIMUTH_ANGLE`              | Degrees, signed about zero      |
-| `Radiometer_Observation_ID`     | `WFOV_FSW_HEADER_RAD_OBS_ID`                 |                                 |
-| `Camera_Observation_ID`         | `WFOV_FSW_HEADER_CAM_OBS_ID`                 |                                 |
-| `Image_Mode`                    | `WFOV_FSW_HEADER_IMG_MODE`                   | 0=DUAL, 1=VIDEO, 2=IMGA, 3=IMGB |
-| `Camera_Packet_Index`           | `CAMERA_PACKET_INDEX`                        | Originating L1A packet index    |
-| `Actual_Exposure_Time_1` / `_2` | `WFOV_IMAGE_HEADER_ACTUAL_EXP_TIME_1` / `_2` | Converted to milliseconds       |
-| `Exposure_Delta`                | `WFOV_IMAGE_HEADER_DELTA`                    | Converted to milliseconds       |
+| L1B variable                          | L1A source                                   | Notes                           |
+| ------------------------------------- | -------------------------------------------- | ------------------------------- |
+| `Azimuth_Motor_Position_FSW_Metadata` | `WFOV_FSW_HEADER_AZIMUTH_ANGLE`              | Degrees, signed about zero      |
+| `Radiometer_Observation_ID`           | `WFOV_FSW_HEADER_RAD_OBS_ID`                 |                                 |
+| `Camera_Observation_ID`               | `WFOV_FSW_HEADER_CAM_OBS_ID`                 |                                 |
+| `Image_Mode`                          | `WFOV_FSW_HEADER_IMG_MODE`                   | 0=DUAL, 1=VIDEO, 2=IMGA, 3=IMGB |
+| `Camera_Packet_Index`                 | `CAMERA_PACKET_INDEX`                        | Originating L1A packet index    |
+| `Actual_Exposure_Time_1` / `_2`       | `WFOV_IMAGE_HEADER_ACTUAL_EXP_TIME_1` / `_2` | Converted to milliseconds       |
+| `Exposure_Delta`                      | `WFOV_IMAGE_HEADER_DELTA`                    | Converted to milliseconds       |
 
 Exposure register conversions are documented in
 [wfov_fsw_header_reference.md](wfov_fsw_header_reference.md#exposure-timing).

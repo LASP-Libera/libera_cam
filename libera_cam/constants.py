@@ -31,6 +31,17 @@ RADIOMETRIC_SCALING_COEFFICIENT = 1.8737270248520255e-07
 LIBERA_CAM_GROUND_CAL_PATH = AnyPath(resources.files("libera_cam").joinpath("data", "ground_calibration"))
 GROUND_CAL_PIXEL_MAPPING = LIBERA_CAM_GROUND_CAL_PATH / "wfov_pixel_vectors.npy"
 
+# --- SPICE observer frames ------------------------------------------------------------
+
+# Spacecraft frame of the JPSS-4 bus Libera flies on, from the Libera frame kernel.
+DEFAULT_SPACECRAFT_OBSERVER = "JPSS4_SC"
+
+# Azimuth motor encoder frames: the CK built from the encoder rotates LIBERA_BASE_COORD into
+# LIBERA_AZ_COORD. The WFOV camera is mounted on the azimuth stage (LIBERA_WFOV_CAM_COORD is a
+# fixed offset from LIBERA_AZ_COORD), so the azimuth encoder is the only motor in its pointing
+# chain; the elevation encoder (LIBERA_AZ_COORD -> LIBERA_EL_COORD) moves the radiometers alone.
+AZIMUTH_ENCODER_FRAMES: tuple[str, str] = ("LIBERA_BASE_COORD", "LIBERA_AZ_COORD")
+
 
 class IntegrationTime(IntEnum):
     """The class defining the length of integration times"""

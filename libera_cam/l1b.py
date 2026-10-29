@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 
 import dask
-import numpy as np
 import xarray as xr
 from cloudpathlib import AnyPath, S3Path
 from dask.distributed import Client
@@ -23,8 +22,10 @@ from libera_cam.camera import convert_dn_to_radiance
 from libera_cam.config import product_config_path
 from libera_cam.geolocation import (
     GeolocationKernelConfig,
+    add_frame_geometry_to_dataset,
     add_geolocation_to_dataset,
     add_jpss_only_geolocation_to_dataset,
+    add_placeholder_frame_geometry_to_dataset,
     add_placeholder_geolocation_to_dataset,
 )
 from libera_cam.image_parsing.read_l1a_cam_data import read_l1a_cam_data
@@ -91,7 +92,8 @@ def algorithm(parsed_cli_args: argparse.Namespace) -> AnyPath:
     placeholder lat/lon/alt values are written. Omitting the key defaults to
     true (production SPICE geolocation). ``configuration.jpss_only`` selects
     JPSS-only SPICE geolocation (per-pixel vectors with ``LIBERA_BASE`` reference
-    frame, Azimuth_FSW_Metadata 0°) and cannot be combined with ``use_geo: false``.
+    frame, the ``Azimuth_Motor_Position_SPICE`` variables 0 degrees) and cannot be combined with
+    ``use_geo: false``.
     """
     dask_scheduler = os.getenv("DASK_SCHEDULER", "synchronous")
     if dask_scheduler not in _ALLOWED_DASK_SCHEDULERS:
@@ -245,23 +247,23 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
     all_data: dict[str, xr.Dataset] = {}
     spice_files: dict[DataProductIdentifier, str] = {}
 
-    for i, file_info in enumerate(input_manifest.files):
-        logger.info(f"Reading file {i + 1}/{len(input_manifest.files)}: {file_info.filename}")
+    for i, filename in enumerate(input_manifest.files):
+        logger.info(f"Reading file {i + 1}/{len(input_manifest.files)}: {filename}")
 
         try:
-            if file_info.filename.endswith((".bc", ".bsp")):
+            if filename.endswith((".bc", ".bsp")):
                 if not use_geo:
                     logger.warning(
                         "use_geo is false: skipping SPICE kernel %s",
-                        file_info.filename,
+                        filename,
                     )
                     continue
 
-                product_id = LiberaDataProductFilename.from_file_path(file_info.filename).data_product_id
+                product_id = LiberaDataProductFilename.from_file_path(filename).data_product_id
                 if jpss_only_mode and product_id not in _REQUIRED_SPICE_JPSS_ONLY:
                     logger.warning(
                         "jpss_only mode: skipping SPICE file %s (%s)",
-                        file_info.filename,
+                        filename,
                         product_id,
                     )
                     continue
@@ -269,23 +271,23 @@ def read_all_input_data(input_manifest: Manifest) -> tuple[dict[str, xr.Dataset]
                 if product_id in spice_files:
                     raise ValueError(
                         f"Duplicate SPICE data product {product_id} in manifest: "
-                        f"{spice_files[product_id]} and {file_info.filename}"
+                        f"{spice_files[product_id]} and {filename}"
                     )
 
-                spice_files[product_id] = file_info.filename
+                spice_files[product_id] = filename
                 logger.info(
                     "Recorded SPICE kernel %s (%s)",
-                    file_info.filename,
+                    filename,
                     product_id,
                 )
             else:
-                LiberaDataProductFilename.from_file_path(file_info.filename)  # Ensure file is Libera Data Product
-                anypath = AnyPath(file_info.filename)
+                LiberaDataProductFilename.from_file_path(filename)  # Ensure file is Libera Data Product
+                anypath = AnyPath(filename)
                 dataset = xr.open_dataset(anypath, decode_times=True)
-                all_data[file_info.filename] = dataset
-                logger.info(f"Successfully loaded dataset lazily: {file_info.filename}")
+                all_data[filename] = dataset
+                logger.info(f"Successfully loaded dataset lazily: {filename}")
         except Exception as e:
-            logger.error(f"Failed to process file {file_info.filename}: {e}", exc_info=True)
+            logger.error(f"Failed to process file {filename}: {e}", exc_info=True)
             raise
 
     dynamic_kernel_sources: list[str] = []
@@ -322,18 +324,6 @@ def _extract_camera_dataset(all_input_data: dict[str, xr.Dataset]) -> xr.Dataset
     raise ValueError("No WFOV SCI DECODED data found in input files")
 
 
-def _apply_azimuth_fill(ds: xr.Dataset, fill_value: float) -> xr.Dataset:
-    """Replace ``azimuth_angle`` with a constant per-frame fill value."""
-    if "azimuth_angle" not in ds:
-        return ds
-    n_times = ds.sizes["camera_time"]
-    ds["azimuth_angle"] = (
-        ("camera_time",),
-        np.full(n_times, fill_value, dtype=np.float32),
-    )
-    return ds
-
-
 def process_l1a_to_l1b(
     all_input_data: dict[str, xr.Dataset],
     dynamic_kernel_sources: Sequence[str | Path | S3Path],
@@ -348,6 +338,10 @@ def process_l1a_to_l1b(
     - Convert DN to radiance (lazy when backed by Dask arrays)
     - Add geolocation (lazy Dask ``map_blocks``), JPSS-only LIBERA_BASE geolocation,
       or placeholders when ``use_geo`` is false
+    - Add the per-frame geometry under one kernel manager: the spacecraft-level fields (sub-points,
+      satellite radius, inertial position and velocity, attitude quaternion, Earth-Sun distance)
+      and the motor azimuth from the azimuth CK at the first and second integration, 0 degrees
+      in ``jpss_only`` mode; NaN placeholders when ``use_geo`` is false
 
     Parameters
     ----------
@@ -366,19 +360,25 @@ def process_l1a_to_l1b(
         ``configuration.use_geo``; omitting the key is equivalent to True.
     jpss_only_mode : bool, optional
         When True, uses per-pixel geolocation with ``LIBERA_BASE`` (zero-azimuth
-        approximation) and sets Azimuth_FSW_Metadata to 0°. Requires ``use_geo`` True and JPSS-only
-        SPICE kernels in the manifest.
+        approximation) and sets the ``Azimuth_Motor_Position_SPICE`` variables to 0 degrees.
+        Requires ``use_geo`` True and JPSS-only SPICE kernels in the manifest.
 
     Returns
     -------
     xr.Dataset
-        L1B product dataset, with variables defined by the L1B product definition.
+        L1B product dataset, with variables defined by the L1B product definition. The global
+        ``Geolocation_Mode`` attribute names the mode: ``"production"``, ``"jpss_only"`` or
+        ``"use_geo_false"``.
 
     Raises
     ------
     ValueError
         If required input datasets (camera or housekeeping data) are not found,
-        or SPICE kernel sources are missing when ``use_geo`` is True.
+        SPICE kernel sources are missing when ``use_geo`` is True, or the kernels do
+        not cover the granule (spacecraft ephemeris or attitude, Sun ephemeris, or the
+        azimuth CK in production mode).
+    RuntimeError
+        If the curryer spacecraft geometry query fails outright.
     FileNotFoundError
         If the calibration data file is not found.
     """
@@ -391,22 +391,29 @@ def process_l1a_to_l1b(
     calibrated_images = convert_dn_to_radiance(cam_dataset.image_data, cam_dataset.integration_mask)
     cam_dataset["Radiance"] = (("camera_time", "y", "x"), calibrated_images.data)
 
-    # Apply Geolocation (Lazy)
+    # Apply Geolocation (Lazy) and the per-frame spacecraft geometry and motor azimuth (eager, one
+    # value per frame). The spacecraft geometry is the same in both SPICE modes: its fields need
+    # only the spacecraft ephemeris and attitude, never the camera's instrument frame. The azimuth
+    # needs the azimuth CK, which only production mode furnishes.
     if not use_geo:
+        geolocation_mode = "use_geo_false"
         cam_dataset = add_placeholder_geolocation_to_dataset(cam_dataset)
-        cam_dataset = _apply_azimuth_fill(cam_dataset, fill_value=-999.0)
+        cam_dataset = add_placeholder_frame_geometry_to_dataset(cam_dataset)
     elif jpss_only_mode:
+        geolocation_mode = "jpss_only"
         if not dynamic_kernel_sources:
             raise ValueError("SPICE kernel sources are required for geolocation when jpss_only_mode is True")
         geo_config = GeolocationKernelConfig(
             temp_dir_base=None,
             dynamic_kernel_sources=dynamic_kernel_sources,
+            jpss_only=True,
         )
         cam_dataset = add_jpss_only_geolocation_to_dataset(
             cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask
         )
-        cam_dataset = _apply_azimuth_fill(cam_dataset, fill_value=0.0)
+        cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
     else:
+        geolocation_mode = "production"
         if not dynamic_kernel_sources:
             raise ValueError("SPICE kernel sources are required for geolocation when use_geo is True")
         geo_config = GeolocationKernelConfig(
@@ -414,7 +421,9 @@ def process_l1a_to_l1b(
             dynamic_kernel_sources=dynamic_kernel_sources,
         )
         cam_dataset = add_geolocation_to_dataset(cam_dataset, geo_config, pixel_mask=cam_dataset.valid_pixel_mask)
+        cam_dataset = add_frame_geometry_to_dataset(cam_dataset, geo_config)
 
+    cam_dataset.attrs["Geolocation_Mode"] = geolocation_mode
     return cam_dataset
 
 

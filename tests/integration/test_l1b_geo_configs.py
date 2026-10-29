@@ -13,6 +13,12 @@ from libera_cam.l1b import algorithm
 
 pytestmark = pytest.mark.integration
 
+_CK_AZIMUTH_VARIABLES = (
+    "Azimuth_Motor_Position_SPICE",
+    "Azimuth_Motor_Position_SPICE_Int_Time_1",
+    "Azimuth_Motor_Position_SPICE_Int_Time_2",
+)
+
 
 class TestL1bManifestUseGeoConfiguration:
     """Each manifest configuration case is a separate integration test."""
@@ -31,8 +37,8 @@ class TestL1bManifestUseGeoConfiguration:
 
     def _output_nc_path(self, output_manifest: Manifest) -> str:
         for file in output_manifest.files:
-            if Path(file.filename).suffix == ".nc":
-                return file.filename
+            if Path(file).suffix == ".nc":
+                return file
         raise AssertionError("No NetCDF data product in output manifest")
 
     def _run_l1b(self, generate_input_manifest, configuration: dict, tmp_path):
@@ -49,6 +55,7 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "production"
             assert "Latitude" in dataset
             assert "Longitude" in dataset
             assert "Altitude" in dataset
@@ -61,6 +68,7 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {"use_geo": True}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "production"
             assert "Latitude" in dataset
             assert "Longitude" in dataset
             assert "Altitude" in dataset
@@ -72,10 +80,13 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {"use_geo": False}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "use_geo_false"
             assert np.all(dataset["Latitude"].values == np.float32(-999))
             assert np.all(dataset["Longitude"].values == np.float32(-999))
             assert np.all(dataset["Altitude"].values == np.float32(-9999))
-            assert np.all(dataset["Azimuth_FSW_Metadata"].values == np.float32(-999))
+            for variable in _CK_AZIMUTH_VARIABLES:
+                assert np.isnan(dataset[variable].values).all(), variable
+            assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
             assert np.any(np.isfinite(dataset["Radiance"].values))
 
     def test_jpss_only_runs_per_pixel_geolocation(self, generate_input_manifest, monkeypatch, tmp_path):
@@ -84,6 +95,7 @@ class TestL1bManifestUseGeoConfiguration:
         nc_path = self._run_l1b(generate_input_manifest, {"jpss_only": True}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
+            assert dataset.attrs["Geolocation_Mode"] == "jpss_only"
             lat = dataset["Latitude"].values
             lon = dataset["Longitude"].values
             alt = dataset["Altitude"].values
@@ -112,7 +124,9 @@ class TestL1bManifestUseGeoConfiguration:
                     f"Frame {t}: expected per-pixel geolocation variation across {n_valid} valid pixels"
                 )
 
-            assert np.all(dataset["Azimuth_FSW_Metadata"].values == 0)
+            for variable in _CK_AZIMUTH_VARIABLES:
+                assert np.all(dataset[variable].values == 0), variable
+            assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
             assert np.all(dataset["Solar_Zenith_Surface"].values == 0)
             assert np.all(dataset["Viewing_Zenith_Surface"].values == 0)
             assert np.all(dataset["Relative_Azimuth_Surface"].values == 0)
