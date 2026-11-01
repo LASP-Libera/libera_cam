@@ -79,8 +79,8 @@ def test_l1b_profiling_smoke(generate_input_manifest, tmp_path, monkeypatch):
         log_profiling(prof)
 
     output_manifest = Manifest.from_file(output_manifest_path)
-    nc_files = [file for file in output_manifest.files if Path(file.filename).suffix == ".nc"]
+    nc_files = [file for file in output_manifest.files if Path(file).suffix == ".nc"]
     assert len(nc_files) == 1
 
-    with xr.open_dataset(nc_files[0].filename) as data_product:
+    with xr.open_dataset(nc_files[0]) as data_product:
         assert "Radiance" in data_product

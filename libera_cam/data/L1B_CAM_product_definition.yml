@@ -1,6 +1,8 @@
 attributes:
   ProductID: CAM
   algorithm_version: null
+  Earth_Sun_Distance_AU: null
+  Geolocation_Mode: null # production, jpss_only or use_geo_false
 
 coordinates:
   CAMERA_TIME: # TODO[LIBSDC-707]: Validate that time is unique for each image and can be used as a UID
@@ -67,10 +69,99 @@ variables:
       units: meters
       valid_range: [-1000, 30000]
       _FillValue: -9999
+  Subsatellite_Latitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Geodetic latitude of subsatellite point at observation
+      units: degrees_north
+      valid_range: [-90, 90]
+  Subsatellite_Longitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Longitude of subsatellite point at observation
+      units: degrees_east
+      valid_range: [-180, 180]
+  Subsatellite_Colatitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Geodetic colatitude of subsatellite point at observation
+      units: degrees
+      valid_range: [0, 180]
+  Subsolar_Latitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Geodetic latitude of subsolar point at observation
+      units: degrees_north
+      valid_range: [-90, 90]
+  Subsolar_Longitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Longitude of subsolar point at observation
+      units: degrees_east
+      valid_range: [-180, 180]
+  Subsolar_Colatitude:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Geodetic colatitude of subsolar point at observation
+      units: degrees
+      valid_range: [0, 180]
 
   ############
   # Geometry #
   ############
+  Radius_of_Satellite_from_Center_of_Earth:
+    dtype: float64
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Radius of the satellite from the center of the Earth
+      units: km
+      valid_range: [6000, 8000]
+  Satellite_Position:
+    dtype: float64
+    dimensions: ["CAMERA_TIME", "EUCLIDEAN_DIM"]
+    attributes:
+      long_name: >-
+        X, Y, and Z components of the satellite inertial position in J2000 Earth-centered inertial reference frame
+      units: kilometers
+      valid_range: [-8000.0, 8000.0]
+  Satellite_Velocity:
+    dtype: float64
+    dimensions: ["CAMERA_TIME", "EUCLIDEAN_DIM"]
+    attributes:
+      long_name: >-
+        X, Y, and Z components of the satellite inertial velocity in J2000 Earth-centered inertial reference frame
+      units: km/s
+      valid_range: [-10, 10]
+  Satellite_Attitude_Q0:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: The scalar component of the quaternion describing the attitude of the spacecraft interpolated to the camera measurement time, rotating the spacecraft body frame into ECEF (ITRF93), scalar first
+      valid_range: [-1, 1]
+  Satellite_Attitude_Q1:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: First component in the quaternion vector describing the attitude of the spacecraft interpolated to the camera measurement time, rotating the spacecraft body frame into ECEF (ITRF93), scalar first
+      valid_range: [-1, 1]
+  Satellite_Attitude_Q2:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Second component in the quaternion vector describing the attitude of the spacecraft interpolated to the camera measurement time, rotating the spacecraft body frame into ECEF (ITRF93), scalar first
+      valid_range: [-1, 1]
+  Satellite_Attitude_Q3:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Third component in the quaternion vector describing the attitude of the spacecraft interpolated to the camera measurement time, rotating the spacecraft body frame into ECEF (ITRF93), scalar first
+      valid_range: [-1, 1]
   Solar_Zenith_Surface:
     dtype: float32
     dimensions: ["CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y"]
@@ -97,7 +188,7 @@ variables:
       units: degrees
       valid_range: [0, 180]
       _FillValue: -999
-  Azimuth_FSW_Metadata:
+  Azimuth_Motor_Position_FSW_Metadata:
     dtype: float32
     dimensions: ["CAMERA_TIME"]
     attributes:
@@ -106,7 +197,36 @@ variables:
       comment: >-
         FSW-reported commanded instrument azimuth, passed through from L1A
         WFOV_FSW_HEADER_AZIMUTH_ANGLE. Reported as a signed integer in degrees.
-      _FillValue: -999
+  Azimuth_Motor_Position_SPICE:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Azimuth motor encoder angle from the SPICE CK (LIBERA_BASE_COORD to LIBERA_AZ_COORD) at CAMERA_TIME
+      units: degrees
+      valid_range: [0, 360]
+      comment: >-
+        0 in jpss_only mode, which has no azimuth CK. NaN where the CK does not
+        cover the time, and when use_geo is false.
+  Azimuth_Motor_Position_SPICE_Int_Time_1:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Azimuth motor encoder angle from the SPICE CK (LIBERA_BASE_COORD to LIBERA_AZ_COORD) at CAMERA_TIME, the first integration
+      units: degrees
+      valid_range: [0, 360]
+      comment: >-
+        0 in jpss_only mode, which has no azimuth CK. NaN where the CK does not
+        cover the time, and when use_geo is false.
+  Azimuth_Motor_Position_SPICE_Int_Time_2:
+    dtype: float32
+    dimensions: ["CAMERA_TIME"]
+    attributes:
+      long_name: Azimuth motor encoder angle from the SPICE CK (LIBERA_BASE_COORD to LIBERA_AZ_COORD) at CAMERA_TIME + 350 ms, the second integration
+      units: degrees
+      valid_range: [0, 360]
+      comment: >-
+        0 in jpss_only mode, which has no azimuth CK. NaN where the CK does not
+        cover the time, and when use_geo is false.
 
   ##############
   # Instrument #
@@ -183,7 +303,6 @@ variables:
         integration is weighted by the spectral throughput of the camera's channel (555 nm)
       units: W/(m^2*sr*nm)
       valid_range: [0, 1000]
-      _FillValue: -999
   Camera_Mask:
     #If we need to save storage space, this can become a per-image trace to the mask that was applied,
     #rather than the pixel-level bitmask itself (FSW captures this as "Bitmask Mask ID")

@@ -1,11 +1,27 @@
+import logging
 from unittest.mock import MagicMock, patch
 
 import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
+import yaml
+from curryer import spicierpy as sp
+from curryer.compute import geometry, spatial
 
-from libera_cam.geolocation import calculate_all_pixel_lat_lon_altitude
+from libera_cam import geolocation
+from libera_cam.config import product_config_path
+from libera_cam.geolocation import (
+    GeolocationKernelConfig,
+    add_frame_geometry_to_dataset,
+    add_placeholder_frame_geometry_to_dataset,
+    calculate_all_pixel_lat_lon_altitude,
+    calculate_azimuth,
+    calculate_spacecraft_geometry,
+    create_placeholder_spacecraft_geometry,
+    granule_earth_sun_distance,
+)
 
 
 @pytest.fixture
@@ -129,7 +145,6 @@ def test_geolocation_logic_dynamic_path(
 def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
     """Verify that add_geolocation_to_dataset returns a lazy dataset with correct graph."""
     import dask.array as da
-    import xarray as xr
 
     from libera_cam.geolocation import (
         GeolocationKernelConfig,
@@ -191,7 +206,6 @@ def test_add_geolocation_to_dataset_lazy(mock_prefetch, mock_calc_chunk):
 @patch("libera_cam.geolocation.PIXEL_COUNT_X", 5)
 def test_add_placeholder_geolocation_to_dataset():
     """Placeholder function adds product fill-value Latitude/Longitude/Altitude."""
-    import xarray as xr
 
     from libera_cam.geolocation import add_placeholder_geolocation_to_dataset
 
@@ -278,3 +292,275 @@ def test_jpss_only_uses_libera_base_spice_body(
 
     assert mock_compute.call_count == 1
     mock_body.assert_called_with("LIBERA_BASE", frame=True)
+
+
+# --- Spacecraft-level geometry and motor azimuth (per camera frame, no camera frame involved) ---
+
+
+@pytest.fixture
+def spacecraft_geometry_frame():
+    """Two frames of curryer output for every spacecraft field; the second is a SPICE coverage gap."""
+    values = {
+        "subsatellite_latitude": 10.0,
+        "subsatellite_longitude": 20.0,
+        "subsatellite_colatitude": 80.0,
+        "subsolar_latitude": -5.0,
+        "subsolar_longitude": 100.0,
+        "subsolar_colatitude": 95.0,
+        "spacecraft_radius": 7000.0,
+        "earth_sun_distance": 0.985,
+        "spacecraft_position_inertial_x": 5000.0,
+        "spacecraft_position_inertial_y": 4000.0,
+        "spacecraft_position_inertial_z": 1000.0,
+        "spacecraft_velocity_inertial_x": -2.9,
+        "spacecraft_velocity_inertial_y": 3.5,
+        "spacecraft_velocity_inertial_z": 6.0,
+        "attitude_q0": 1.0,
+        "attitude_q1": 0.0,
+        "attitude_q2": 0.0,
+        "attitude_q3": 0.0,
+    }
+    return pd.DataFrame({column: [value, np.nan] for column, value in values.items()})
+
+
+@pytest.fixture
+def camera_dataset():
+    times = pd.to_datetime(["2025-01-01T00:00:00", "2025-01-01T00:00:01"])
+    return xr.Dataset(coords={"camera_time": times})
+
+
+@pytest.fixture
+def two_timestamps():
+    return np.array(["2025-01-01T00:00:00", "2025-01-01T00:00:01"], dtype="datetime64[ns]")
+
+
+def test_spacecraft_field_mapping_matches_curryer_and_product_definition():
+    """The variable maps must name curryer columns and reproduce each product variable's dtype."""
+    curryer_columns = {column for field in geolocation._SPACECRAFT_FIELDS for column in field.columns}
+    product_variables = yaml.safe_load(product_config_path.read_text())["variables"]
+
+    assert set(geolocation._SCALAR_VARIABLES) <= curryer_columns
+    assert set(geolocation._VECTOR_VARIABLES) <= set(geolocation._SPACECRAFT_FIELDS)
+    for variable, dtype in [*geolocation._SCALAR_VARIABLES.values(), *geolocation._VECTOR_VARIABLES.values()]:
+        assert np.dtype(dtype) == np.dtype(product_variables[variable]["dtype"]), variable
+
+    for variable in [*geolocation._AZIMUTH_CAMERA_TIME_VARIABLES, geolocation._AZIMUTH_INT_TIME_2_VARIABLE]:
+        assert np.dtype(product_variables[variable]["dtype"]) == np.float32, variable
+
+
+@patch("libera_cam.geolocation.geometry.GeometryData")
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2]))
+def test_calculate_spacecraft_geometry_uses_curryer(
+    mock_adapt, mock_geometry_data, mock_kernel_manager, spacecraft_geometry_frame, two_timestamps
+):
+    """One spacecraft-observer query: every spacecraft field, Earth-fixed attitude, no camera frame."""
+    mock_geometry_data.return_value.get_geometry.return_value = spacecraft_geometry_frame
+
+    result = calculate_spacecraft_geometry(mock_kernel_manager, two_timestamps)
+
+    mock_kernel_manager.ensure_known_kernels_are_furnished.assert_called_once()
+    mock_geometry_data.assert_called_once_with("JPSS4_SC", attitude_frame=spatial.EARTH_FRAME)
+    # curryer owns the whole-granule coverage check, per SPICE input, so a missing attitude CK
+    # raises even while the ephemeris fields are finite.
+    assert mock_geometry_data.return_value.get_geometry.call_args.kwargs["require_coverage"] is True
+    assert mock_geometry_data.return_value.get_geometry.call_args.kwargs["fields"] == [
+        geometry.GeometryField.SUBSATELLITE,
+        geometry.GeometryField.SUBSOLAR,
+        geometry.GeometryField.SC_RADIUS,
+        geometry.GeometryField.EARTH_SUN_DISTANCE,
+        geometry.GeometryField.SC_POSITION_INERTIAL,
+        geometry.GeometryField.SC_VELOCITY_INERTIAL,
+        geometry.GeometryField.SATELLITE_ATTITUDE,
+    ]
+    assert result is spacecraft_geometry_frame
+
+
+@patch("libera_cam.geolocation.spice_error_message", return_value="no coverage for the requested time")
+@patch("libera_cam.geolocation.geometry.GeometryData")
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1]))
+def test_calculate_spacecraft_geometry_raises_friendly_message_on_spice_error(
+    mock_adapt, mock_geometry_data, mock_message, mock_kernel_manager, two_timestamps
+):
+    mock_geometry_data.return_value.get_geometry.side_effect = sp.utils.exceptions.SpiceyError("SPICE(NOFRAMECONNECT)")
+
+    with pytest.raises(RuntimeError, match="no coverage for the requested time"):
+        calculate_spacecraft_geometry(mock_kernel_manager, two_timestamps)
+
+
+@pytest.fixture
+def frame_geometry_mocks(spacecraft_geometry_frame):
+    """KernelManager, GeometryData, spicetime.adapt and frame_to_frame_euler, patched for two frames."""
+    with (
+        patch("libera_cam.geolocation.KernelManager") as mock_km_cls,
+        patch("libera_cam.geolocation.geometry.GeometryData") as mock_geometry_data,
+        patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2])) as mock_adapt,
+        patch("libera_cam.geolocation.spatial.frame_to_frame_euler") as mock_euler,
+    ):
+        mock_km = mock_km_cls.return_value
+        mock_km.__enter__.return_value = mock_km
+        mock_geometry_data.return_value.get_geometry.return_value = spacecraft_geometry_frame
+        mock_euler.side_effect = [_euler_frame([12.5, np.nan]), _euler_frame([13.0, 14.0])]
+        yield mock_km_cls, mock_adapt, mock_euler
+
+
+def test_add_frame_geometry_maps_columns_and_keeps_gaps_nan(frame_geometry_mocks, camera_dataset, caplog):
+    """curryer columns map onto product variables; coverage gaps stay NaN and are counted in a warning."""
+    mock_km_cls, _, _ = frame_geometry_mocks
+    config = GeolocationKernelConfig(dynamic_kernel_sources=["some.bsp"])
+
+    with caplog.at_level(logging.WARNING, logger="libera_cam.geolocation"):
+        result = add_frame_geometry_to_dataset(camera_dataset, config)
+
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert "Subsatellite_Latitude has no SPICE coverage at 1 of 2 camera frames; written as NaN." in warnings
+    assert "Satellite_Position has no SPICE coverage at 1 of 2 camera frames; written as NaN." in warnings
+    assert "Azimuth_Motor_Position_SPICE_Int_Time_1 has no SPICE coverage at 1 of 2 camera frames; written as NaN." in (
+        warnings
+    )
+    # The second-integration azimuth is covered at both frames.
+    assert not any(message.startswith("Azimuth_Motor_Position_SPICE_Int_Time_2") for message in warnings)
+
+    assert result["Subsatellite_Latitude"].dims == ("camera_time",)
+    np.testing.assert_allclose(result["Subsatellite_Latitude"].values, [10.0, np.nan])
+    np.testing.assert_allclose(result["Subsolar_Longitude"].values, [100.0, np.nan])
+    np.testing.assert_allclose(result["Subsatellite_Colatitude"].values, [80.0, np.nan])
+    np.testing.assert_allclose(result["Radius_of_Satellite_from_Center_of_Earth"].values, [7000.0, np.nan])
+    assert result["Subsatellite_Latitude"].dtype == np.float32
+    assert result["Radius_of_Satellite_from_Center_of_Earth"].dtype == np.float64
+
+    assert result["Satellite_Position"].dims == ("camera_time", "EUCLIDEAN_DIM")
+    np.testing.assert_allclose(result["Satellite_Position"].values, [[5000.0, 4000.0, 1000.0], [np.nan] * 3])
+    np.testing.assert_allclose(result["Satellite_Velocity"].values, [[-2.9, 3.5, 6.0], [np.nan] * 3])
+    assert result["Satellite_Position"].dtype == np.float64
+    assert result["Satellite_Velocity"].dtype == np.float64
+
+    np.testing.assert_allclose(result["Satellite_Attitude_Q0"].values, [1.0, np.nan])
+    np.testing.assert_allclose(result["Satellite_Attitude_Q3"].values, [0.0, np.nan])
+    assert result["Satellite_Attitude_Q0"].dtype == np.float32
+
+    # The granule attribute ignores the gap rather than averaging it in.
+    assert result.attrs["Earth_Sun_Distance_AU"] == pytest.approx(0.985)
+
+    # One kernel manager furnishes the kernels for every field and releases them within the call.
+    mock_km_cls.assert_called_once()
+    mock_km = mock_km_cls.return_value
+    mock_km.load_libera_dynamic_kernels.assert_called_once_with(
+        ["some.bsp"], needs_naif_kernels=True, needs_static_kernels=True
+    )
+    mock_km.__exit__.assert_called_once()
+
+
+def test_add_frame_geometry_queries_the_azimuth_ck_at_both_integrations(frame_geometry_mocks, camera_dataset):
+    """The CK is read at camera_time (SPICE and Int_Time_1) and 350 ms later (Int_Time_2)."""
+    _, mock_adapt, mock_euler = frame_geometry_mocks
+    config = GeolocationKernelConfig(dynamic_kernel_sources=["azrot.bc"])
+
+    result = add_frame_geometry_to_dataset(camera_dataset, config)
+
+    assert mock_euler.call_count == 2
+    frame_times = pd.DatetimeIndex(camera_dataset.camera_time.values)
+    # spicetime.adapt is called for the geometry query, then once per azimuth query.
+    pd.testing.assert_index_equal(mock_adapt.call_args_list[1].args[0], frame_times)
+    pd.testing.assert_index_equal(mock_adapt.call_args_list[2].args[0], frame_times + pd.Timedelta(350, "ms"))
+    for variable in ["Azimuth_Motor_Position_SPICE", "Azimuth_Motor_Position_SPICE_Int_Time_1"]:
+        assert result[variable].dims == ("camera_time",)
+        assert result[variable].dtype == np.float32
+        np.testing.assert_allclose(result[variable].values, [12.5, np.nan])
+    np.testing.assert_allclose(result["Azimuth_Motor_Position_SPICE_Int_Time_2"].values, [13.0, 14.0])
+    assert result["Azimuth_Motor_Position_SPICE_Int_Time_2"].dtype == np.float32
+
+
+def test_add_frame_geometry_jpss_only_writes_zero_azimuth(frame_geometry_mocks, camera_dataset):
+    """jpss_only has no azimuth CK: the azimuth is 0 degrees and the CK is never read."""
+    _, _, mock_euler = frame_geometry_mocks
+    config = GeolocationKernelConfig(dynamic_kernel_sources=["jpss.bc"], jpss_only=True)
+
+    result = add_frame_geometry_to_dataset(camera_dataset, config)
+
+    mock_euler.assert_not_called()
+    for variable in [*geolocation._AZIMUTH_CAMERA_TIME_VARIABLES, geolocation._AZIMUTH_INT_TIME_2_VARIABLE]:
+        assert result[variable].dtype == np.float32
+        assert np.all(result[variable].values == 0), variable
+    np.testing.assert_allclose(result["Subsatellite_Latitude"].values, [10.0, np.nan])
+
+
+def test_add_frame_geometry_requires_kernel_sources(camera_dataset):
+    with pytest.raises(ValueError, match="SPICE kernel sources are required"):
+        add_frame_geometry_to_dataset(camera_dataset, GeolocationKernelConfig())
+
+
+def test_add_frame_geometry_requires_camera_time():
+    with pytest.raises(ValueError, match="camera_time"):
+        add_frame_geometry_to_dataset(xr.Dataset(), GeolocationKernelConfig(dynamic_kernel_sources=["k"]))
+
+
+def test_granule_earth_sun_distance_ignores_gaps():
+    assert granule_earth_sun_distance(np.array([np.nan, 0.98, 1.0])) == pytest.approx(0.99)
+
+
+def test_create_placeholder_spacecraft_geometry():
+    result = create_placeholder_spacecraft_geometry(5)
+
+    assert len(result) == 5
+    expected_columns = [column for field in geolocation._SPACECRAFT_FIELDS for column in field.columns]
+    assert list(result.columns) == expected_columns
+    assert np.isnan(result.to_numpy()).all()
+
+
+def test_add_placeholder_frame_geometry(camera_dataset, caplog):
+    with caplog.at_level(logging.WARNING, logger="libera_cam.geolocation"):
+        result = add_placeholder_frame_geometry_to_dataset(camera_dataset)
+
+    # Placeholders are NaN by design, not SPICE gaps.
+    assert not [record for record in caplog.records if record.levelno == logging.WARNING]
+
+    for variable, dtype in [*geolocation._SCALAR_VARIABLES.values(), *geolocation._VECTOR_VARIABLES.values()]:
+        assert result[variable].dtype == dtype, variable
+        assert np.isnan(result[variable].values).all(), variable
+    assert result["Radius_of_Satellite_from_Center_of_Earth"].dims == ("camera_time",)
+    assert result["Satellite_Position"].dims == ("camera_time", "EUCLIDEAN_DIM")
+    assert np.isnan(result.attrs["Earth_Sun_Distance_AU"])
+    for variable in [*geolocation._AZIMUTH_CAMERA_TIME_VARIABLES, geolocation._AZIMUTH_INT_TIME_2_VARIABLE]:
+        assert result[variable].dims == ("camera_time",)
+        assert result[variable].dtype == np.float32
+        assert np.isnan(result[variable].values).all(), variable
+
+
+def _euler_frame(euler3: list[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {"euler1": 0.0, "euler2": 0.0, "euler3": euler3}, index=pd.Index(range(len(euler3)), name="ugps")
+    )
+
+
+@patch("libera_cam.geolocation.spatial.frame_to_frame_euler")
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2, 3, 4]))
+def test_calculate_azimuth_uses_curryer_frame_euler(mock_adapt, mock_euler, mock_kernel_manager):
+    """Azimuth is the third 1-2-3 Euler angle of BASE -> AZ, wrapped to [0, 360); CK gaps stay NaN.
+
+    -1e-6 wraps to a float64 just below 360 that rounds to 360.0 in float32, and must be written as 0.
+    """
+    mock_euler.return_value = _euler_frame([-10.0, 350.0, -1e-6, np.nan])
+    timestamps = np.array(
+        ["2025-01-01T00:00:00", "2025-01-01T00:00:01", "2025-01-01T00:00:02", "2025-01-01T00:00:03"],
+        dtype="datetime64[ns]",
+    )
+
+    azimuth = calculate_azimuth(mock_kernel_manager, timestamps)
+
+    mock_kernel_manager.ensure_known_kernels_are_furnished.assert_called_once()
+    call = mock_euler.call_args
+    assert call.args[:2] == ("LIBERA_BASE_COORD", "LIBERA_AZ_COORD")
+    np.testing.assert_array_equal(call.args[2], [1, 2, 3, 4])
+    assert call.kwargs == {"sequence": (1, 2, 3), "allow_nans": True}
+    assert azimuth.dtype == np.float32
+    np.testing.assert_array_equal(azimuth, np.array([350.0, 350.0, 0.0, np.nan], dtype=np.float32))
+
+
+@patch("libera_cam.geolocation.spatial.frame_to_frame_euler")
+@patch("libera_cam.geolocation.spicetime.adapt", return_value=np.array([1, 2]))
+def test_calculate_azimuth_raises_when_ck_has_no_coverage(mock_adapt, mock_euler, mock_kernel_manager):
+    """A granule the CK does not cover at all is a missing input, not a per-frame gap."""
+    mock_euler.return_value = _euler_frame([np.nan, np.nan])
+
+    with pytest.raises(ValueError, match="LIBERA_BASE_COORD -> LIBERA_AZ_COORD transform has no coverage"):
+        calculate_azimuth(mock_kernel_manager, np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]"))

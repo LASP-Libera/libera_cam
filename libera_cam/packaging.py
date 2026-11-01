@@ -30,6 +30,12 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     -------
     xr.Dataset
         The packaged dataset ready for NetCDF writing.
+
+    Raises
+    ------
+    ValueError
+        If the dataset lacks the FSW header ``azimuth_angle`` that ``read_l1a_cam_data`` always
+        provides, or lacks ``Radiance``.
     """
     logger.info("Packaging L1B product for conformance.")
 
@@ -52,9 +58,15 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     ):
         dataset.attrs.pop(attr_name, None)
 
+    # The ``Azimuth_Motor_Position_SPICE`` variables are the motor encoder angle from the SPICE CK, set
+    # during processing. The FSW image-header ``azimuth_angle`` is a different quantity and passes
+    # through as ``Azimuth_Motor_Position_FSW_Metadata``.
+    if "azimuth_angle" not in dataset:
+        raise ValueError("Dataset must contain the FSW header 'azimuth_angle' variable from read_l1a_cam_data.")
+
     # 1. Rename variables/dims to match Product Definition.
     rename_map = {
-        "azimuth_angle": "Azimuth_FSW_Metadata",
+        "azimuth_angle": "Azimuth_Motor_Position_FSW_Metadata",
         "rad_obs_id": "Radiometer_Observation_ID",
         "cam_obs_id": "Camera_Observation_ID",
         "img_mode": "Image_Mode",
@@ -72,7 +84,8 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
     dataset = dataset.rename({src: dst for src, dst in rename_map.items() if src in dataset})
 
     # 2. Reorder dimensions to match product definition: (Time, X, Y)
-    dataset = dataset.transpose("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y")
+    # Remaining dimensions (EUCLIDEAN_DIM on the spacecraft state vectors) keep their trailing position.
+    dataset = dataset.transpose("CAMERA_TIME", "CAMERA_PIXEL_COUNT_X", "CAMERA_PIXEL_COUNT_Y", ...)
 
     # 3. Create Placeholders for unused fields (Lazy)
     if "Radiance" not in dataset:
@@ -96,7 +109,7 @@ def package_l1b_product(dataset: xr.Dataset) -> xr.Dataset:
 
     # 4. Ensure Types (Cast if necessary)
     type_map = {
-        "Azimuth_FSW_Metadata": np.float32,
+        "Azimuth_Motor_Position_FSW_Metadata": np.float32,
         "Radiometer_Observation_ID": np.uint16,
         "Camera_Observation_ID": np.uint16,
         "Image_Mode": np.uint8,
