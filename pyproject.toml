@@ -39,12 +39,7 @@ classifiers = [
 # These are the dependencies used in the package metadata when building the project
 dependencies = [
     "cloudpathlib[s3]>=0.14.0,<1.0",
-    # 5.17.0 adds `worker_compressed_variables`, which compresses chunks on the Dask workers
-    # (LASP-Libera/libera_utils#102).
     "libera-utils >=5.17.0,<6.0.0",
-    # Imported directly by geolocation.py. 0.5.3 adds `spatial.pixel_geometry`, the `PixelField`
-    # registry it selects fields from, and `GeometryData.get_geometry(require_coverage=)`, which the
-    # spacecraft-level geometry query relies on to fail on a missing kernel.
     "lasp-curryer>=0.5.3,<1.0",
     "pyyaml>=6.0.2,<7",
     "matplotlib>=3.10.1",
