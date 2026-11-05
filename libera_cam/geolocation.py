@@ -608,6 +608,7 @@ def geolocate_frame(
             f"pointing_vectors must be shape ({n_pixels}, 3) for frame_shape {frame_shape}, got {vectors.shape}"
         )
 
+    # Per-pixel epoch index: absent for one epoch, required and range-checked for several.
     if epochs.size == 1:
         if exposure_index is not None:
             raise ValueError("exposure_index must be None when a single exposure epoch is given")
@@ -626,6 +627,7 @@ def geolocate_frame(
             )
         flat_index = index.ravel()
 
+    # The pixels curryer sees: every pixel, or those the camera's onboard mask kept.
     if pixel_mask is None:
         selected = np.arange(n_pixels)
     else:
@@ -636,6 +638,7 @@ def geolocate_frame(
             )
         selected = np.flatnonzero(mask)
 
+    # Unselected pixels stay NaN with only bit 31 set; selected pixels are filled from curryer below.
     fields = {name: np.full(n_pixels, np.nan, dtype=dtype) for name, (_, dtype) in _PIXEL_VARIABLES.items()}
     flags = np.full(n_pixels, _GEO_NOT_COMPUTED_FLAG, dtype=np.uint32)
     if selected.size:
@@ -650,6 +653,7 @@ def geolocate_frame(
             """Select each selected pixel's epoch from a (K, n_selected) curryer array."""
             return values[0] if selected_index is None else values[selected_index, np.arange(selected.size)]
 
+        # Take each pixel's own epoch, convert altitude to meters, cast and fold 360.0 onto 0.
         for name, (_, dtype) in _PIXEL_VARIABLES.items():
             values = per_pixel(result[name])
             if name == "altitude":
@@ -880,6 +884,7 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
         raise ValueError("SPICE kernel sources are required for per-pixel geolocation")
     chunk_size = _geometry_chunk_size()
 
+    # One input-free task per LIBERA_CAM_GEO_CHUNK_SIZE frames, each returning a (T, Y, X) block per field.
     timestamps = ds.camera_time.values
     n_frames = timestamps.size
     exposure_times = timestamps[:, None]
@@ -893,6 +898,7 @@ def add_geolocation_to_dataset(ds: xr.Dataset, config: GeolocationKernelConfig) 
         outputs = chunk_geometry(exposure_times[start:stop], l1a_source, l1a_rows[start:stop].tolist(), config)
         for (name, (_, dtype)), output in zip(_FIELD_VARIABLES.items(), outputs, strict=True):
             blocks[name].append(da.from_delayed(output, shape=(stop - start, *frame_shape), dtype=dtype))
+    # Join each field's blocks along camera_time under its product variable name.
     for name, (variable, _) in _FIELD_VARIABLES.items():
         ds[variable] = (("camera_time", "y", "x"), da.concatenate(blocks[name], axis=0))
 
