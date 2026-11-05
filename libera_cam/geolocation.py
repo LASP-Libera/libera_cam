@@ -541,11 +541,9 @@ def geolocate_frame(
     nothing is interpolated. curryer sees only the selected pixels' vectors, so the cost scales
     with the pixels the camera kept, and the unselected pixels are NaN.
     ``altitude`` is the ellipsoid reference and is 0 m at every hit (there is no terrain here;
-    that is ``Terrain_Corrected_Altitude``, LIBSDC-814). A frame is geolocated at one or more
-    exposure epochs: curryer runs once over all ``K`` epochs and each pixel takes
-    the epoch ``exposure_index`` names, which is how the two HDR exposures of a frame will be
-    handled once their timing is known (LIBSDC-816). Production passes a single epoch until
-    then.
+    that is ``Terrain_Corrected_Altitude``). A frame is geolocated at one or more exposure
+    epochs: curryer runs once over all ``K`` epochs and each pixel takes the epoch
+    ``exposure_index`` names. The L1B pipeline passes one epoch, the frame's ``camera_time``.
 
     Parameters
     ----------
@@ -697,11 +695,6 @@ def _geometry_chunk_size() -> int:
     return chunk_size
 
 
-def _geometry_spice_body(config: GeolocationKernelConfig) -> str:
-    """The body whose frame the pixel vectors are intersected in: the camera, or its base in ``jpss_only`` mode."""
-    return _SPICE_BODY_JPSS_ONLY if config.jpss_only else _SPICE_BODY_PRODUCTION
-
-
 def calculate_chunk_geometry(
     exposure_times: np.ndarray,
     exposure_index: np.ndarray | None,
@@ -721,7 +714,7 @@ def calculate_chunk_geometry(
     ----------
     exposure_times : np.ndarray
         ``(T, K)`` exposure epochs as ``datetime64[ns]``, ``K`` per frame. Production passes
-        ``K = 1``, the frame's ``camera_time``; the per-exposure epochs arrive with LIBSDC-816.
+        ``K = 1``, the frame's ``camera_time``.
     exposure_index : np.ndarray or None
         ``(T, Y, X)`` integer index into each frame's ``K`` epochs, or None when ``K == 1``.
     pixel_mask : np.ndarray
@@ -756,7 +749,7 @@ def calculate_chunk_geometry(
     # Read through mmap on the worker rather than shipped from the client with every task.
     pointing_vectors = np.load(GROUND_CAL_PIXEL_MAPPING, mmap_mode="r").reshape(-1, 3)
     outputs = tuple(np.empty((n_frames, *frame_shape), dtype=dtype) for _, dtype in _FIELD_VARIABLES.values())
-    spice_body = _geometry_spice_body(config)
+    spice_body = _SPICE_BODY_JPSS_ONLY if config.jpss_only else _SPICE_BODY_PRODUCTION
     with _kernel_manager_from_config(config) as km:
         km.load_libera_dynamic_kernels(
             config.dynamic_kernel_sources,
