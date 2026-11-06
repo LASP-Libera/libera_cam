@@ -13,19 +13,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Azimuth_Motor_Position_SPICE`, the motor encoder angle from the AZROT-CK (third 1-2-3 Euler angle of `LIBERA_BASE_COORD -> LIBERA_AZ_COORD`, degrees in `[0, 360)`) at `CAMERA_TIME`, via `curryer.compute.spatial.frame_to_frame_euler`, matching `libera_rad`, and the same angle at each integration: `Azimuth_Motor_Position_SPICE_Int_Time_1` at `CAMERA_TIME` and `Azimuth_Motor_Position_SPICE_Int_Time_2` at `CAMERA_TIME` + 350 ms. `jpss_only` writes 0 degrees and `use_geo: false` writes NaN. A granule the azimuth CK covers at no frame raises `ValueError`. Elevation is not reported: the camera is mounted on the azimuth stage and ELSCAN-CK is not a camera L1B input.
 - Frames the kernels do not cover are written as NaN in the per-frame variables, and a warning gives their count for each variable. With `use_geo: false` the per-frame variables and `Earth_Sun_Distance_AU` are NaN.
 - Add the global attribute `Geolocation_Mode`: `production`, `jpss_only` or `use_geo_false`.
+- Geolocate every kept pixel through curryer's `spatial.pixel_geometry` (`geolocate_frame`): `Latitude`, `Longitude`, `Altitude`, the five surface angles and the uint32 `Geolocation_Quality_Flag` (curryer `SpatialQualityFlags` in bits 0-30, bit 31 for geolocation not run) are written per pixel, NaN where a pixel misses the ellipsoid or SPICE does not cover its frame.
+- Add the per-pixel `Viewing_Azimuth_Surface_WRT_North` and `Solar_Azimuth_Surface_WRT_North`, matching the `libera_rad` surface-angle set.
+- Add an integration test comparing the SPICE motor azimuth with the FSW header azimuth on the DITL data, adapted from the comparison logging in PR #16 (Matt Watwood); they agree to about 0.1 degrees.
 
 ### Changed
 
 - **Dependencies**: Replaced `pillow-jpls` with `pyjpegls>=1.5.1` for JPEG-LS decompression. `pillow-jpls` publishes wheels only through cp312, so Python 3.13 installs built it from source through Conan and CMake and failed outright on gcc 14 hosts. `pyjpegls` binds the same CharLS codec and ships wheels for cp39–cp313 on manylinux x86_64 and aarch64, macOS, and Windows, so no interpreter in the supported range needs a compiler. Decoded sample values are unchanged.
 - **Image decoding**: `read_l1a_cam_data` returns `image_data` as `uint16` (was `int32`), the decoder's native sample type and the L1B `Pixel_Counts` dtype. Values and the L1B product are unchanged.
-- Require `lasp-curryer >= 0.5.3` for `GeometryData.get_geometry(require_coverage=)`.
-- Require `libera-utils >=5.16.0,<6.0.0`. Since 5.14.0 libera-utils names data products with a microsecond timestamp revision (`R20260904T171104000000`) and rejects the earlier `R` + `YYDDDHHMMSS` form, so the `DITL_3min` fixtures are renamed to match. In 5.16.0 a manifest lists its files as path strings without checksums (LASP-Libera/libera_utils#106), and `read_all_input_data` reads each entry as a path.
+- Require `lasp-curryer >= 0.5.3` for `GeometryData.get_geometry(require_coverage=)`, `spatial.pixel_geometry` and the `PixelField` registry (lasp/curryer#188).
+- Require `libera-utils >=5.17.0,<6.0.0`. Since 5.14.0 libera-utils names data products with a microsecond timestamp revision (`R20260904T171104000000`) and rejects the earlier `R` + `YYDDDHHMMSS` form, so the `DITL_3min` fixtures are renamed to match. In 5.16.0 a manifest lists its files as path strings without checksums (LASP-Libera/libera_utils#106), and `read_all_input_data` reads each entry as a path.
 - Rename `Azimuth_FSW_Metadata` to `Azimuth_Motor_Position_FSW_Metadata`. It passes the FSW header azimuth through in every mode; it was 0 in `jpss_only` and -999 with `use_geo: false`.
-- `Radiance` and `Azimuth_Motor_Position_FSW_Metadata` declare no `_FillValue`; missing values are NaN.
+- No variable in the product definition declares a `_FillValue`; missing values are NaN.
+- Under `DASK_SCHEDULER=distributed` the Dask workers compress the chunks of every Dask-backed three-dimensional variable and libera-utils stores them with `write_direct_chunk` (`worker_compressed_variables`, libera-utils 5.17.0, LASP-Libera/libera_utils#102), which requires the `h5netcdf` engine; see [doc/performance.md](doc/performance.md#aws-sizing).
+- Geolocate only the pixels the camera's onboard pixel mask kept (every pixel above 0 DN in video mode, which has no mask), with NaN and bit 31 of `Geolocation_Quality_Flag` elsewhere; `Camera_Mask` carries the mask and `valid_pixel_mask` leaves the product ([doc/performance.md](doc/performance.md#data-volume-and-throughput)).
+- Default to seven 8 GB Dask workers, `LIBERA_CAM_CHUNK_SIZE` 20 and the new `LIBERA_CAM_GEO_CHUNK_SIZE` 5, sized for an 8 vCPU / 60 GB task ([doc/performance.md](doc/performance.md#aws-sizing)).
+- The `libera-cam` command configures logging through libera-utils' `configure_task_logging`, at INFO or DEBUG with `-v`.
+- Run the per-pixel geometry in Dask tasks of `LIBERA_CAM_GEO_CHUNK_SIZE` frames that rebuild their masks from the L1A file and take no Dask inputs; `add_geolocation_to_dataset` raises `ValueError` unless the per-frame geometry ran first.
+- Declare the per-pixel geometry as curryer `PixelField` members (`_PIXEL_FIELDS`), as `libera_rad` declares its `GeometryField` set.
+- Pin `chunksizes: [1, 512, 512]` on every three-dimensional variable so the write cost does not depend on granule length ([doc/performance.md](doc/performance.md#data-volume-and-throughput)).
+- Encode the per-pixel geolocation variables and `Pixel_Counts` with `shuffle: true` and `Radiance` with `shuffle: false`, so both engines write the same encoding ([doc/performance.md](doc/performance.md#data-volume-and-throughput)).
 
 ### Fixed
 
 - **Metadata clean up:** Remove the WFOV_HEADER_PARSE_VALID from libera_cam as that field is never useful in L1A files
+- Write the not-yet-computed `Terrain_Corrected_*` fields as NaN instead of zeros.
+
+### Removed
+
+- Remove `calculate_all_pixel_lat_lon_altitude`, `calculate_chunk_geolocation`, `add_jpss_only_geolocation_to_dataset`, the static/dynamic `pixel_mask` options and `prefetch_kernels`; `GeolocationKernelConfig.jpss_only` selects the `LIBERA_BASE` body.
 
 ## [0.3.0] - 2026-10-06
 

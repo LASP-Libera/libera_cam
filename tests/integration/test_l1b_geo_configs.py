@@ -75,15 +75,15 @@ class TestL1bManifestUseGeoConfiguration:
             assert np.any(np.isfinite(dataset["Radiance"].values))
 
     def test_use_geo_false_writes_placeholder_geolocation(self, generate_input_manifest, monkeypatch, tmp_path):
-        """Explicit use_geo false skips SPICE and writes product fill-value geolocation."""
+        """Explicit use_geo false skips SPICE and writes NaN geolocation."""
         monkeypatch.setenv("PROCESSING_PATH", str(tmp_path))
         nc_path = self._run_l1b(generate_input_manifest, {"use_geo": False}, tmp_path)
 
         with xr.open_dataset(nc_path, mask_and_scale=False) as dataset:
             assert dataset.attrs["Geolocation_Mode"] == "use_geo_false"
-            assert np.all(dataset["Latitude"].values == np.float32(-999))
-            assert np.all(dataset["Longitude"].values == np.float32(-999))
-            assert np.all(dataset["Altitude"].values == np.float32(-9999))
+            for name in ("Latitude", "Longitude", "Altitude", "Solar_Zenith_Surface"):
+                assert np.isnan(dataset[name].values).all(), name
+            assert np.all(dataset["Geolocation_Quality_Flag"].values == np.uint32(1 << 31))
             for variable in _CK_AZIMUTH_VARIABLES:
                 assert np.isnan(dataset[variable].values).all(), variable
             assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
@@ -104,13 +104,13 @@ class TestL1bManifestUseGeoConfiguration:
             assert np.any(np.isfinite(lat))
             assert np.any(np.isfinite(lon))
 
-            valid = (lat != -999) & (lon != -999)
+            valid = np.isfinite(lat) & np.isfinite(lon)
             invalid = ~valid
             assert np.any(valid)
             assert np.any(invalid)
             # Ellipsoid intersection height at the ground point is 0 m on the WGS84 surface.
             assert np.all(alt[valid] == 0.0)
-            assert np.all(alt[invalid] == np.float32(-9999))
+            assert np.isnan(alt[invalid]).all()
 
             # Per-pixel vectors should produce varying lat/lon across the FOV
             for t in range(lat.shape[0]):
@@ -127,6 +127,16 @@ class TestL1bManifestUseGeoConfiguration:
             for variable in _CK_AZIMUTH_VARIABLES:
                 assert np.all(dataset[variable].values == 0), variable
             assert np.all(dataset["Azimuth_Motor_Position_FSW_Metadata"].values != np.float32(-999))
-            assert np.all(dataset["Solar_Zenith_Surface"].values == 0)
-            assert np.all(dataset["Viewing_Zenith_Surface"].values == 0)
-            assert np.all(dataset["Relative_Azimuth_Surface"].values == 0)
+            # The surface angles are produced with lat/lon: finite where the pixel hits the
+            # ellipsoid, NaN elsewhere, and the flag word is 0 exactly there.
+            flags = dataset["Geolocation_Quality_Flag"].values
+            assert flags.dtype == np.uint32
+            assert np.array_equal(flags == 0, valid)
+            for name in (
+                "Solar_Zenith_Surface",
+                "Viewing_Zenith_Surface",
+                "Relative_Azimuth_Surface",
+                "Viewing_Azimuth_Surface_WRT_North",
+                "Solar_Azimuth_Surface_WRT_North",
+            ):
+                assert np.array_equal(np.isfinite(dataset[name].values), valid), name

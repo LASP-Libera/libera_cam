@@ -5,6 +5,7 @@ Operator and developer guide for running the WFOV camera L1B pipeline.
 **Related documentation**
 
 - [CHANGELOG.md](../CHANGELOG.md) — shipped changes by version
+- [performance.md](performance.md) — measured sizing, throughput, memory and encoding behind the defaults
 - [roadmap.md](roadmap.md) — forward-looking L1B plans
 - [wfov_fsw_header_reference.md](wfov_fsw_header_reference.md) — FSW metadata and L1A time coordinates
 
@@ -73,24 +74,25 @@ images sharing a single FSW timestamp; `Camera_Packet_Index` distinguishes them.
 L1B uses Dask for lazy L1A decompression, radiometry, and geolocation. Tune execution with
 environment variables before starting the pipeline:
 
-| Variable                | Default       | Description                                                                                                                                                                                                       |
-| ----------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DASK_SCHEDULER`        | `synchronous` | Dask scheduler. **`synchronous`** (single-process, default) or **`distributed`** (local cluster with dashboard). **`threads`** and **`processes`** are not supported — CSPICE is not thread-safe within a worker. |
-| `DASK_NUM_WORKERS`      | `1`           | Number of Dask workers when using `distributed`.                                                                                                                                                                  |
-| `DASK_MEMORY_LIMIT`     | `8GB`         | Per-worker memory limit for `distributed` (e.g. `4GB`, `8GB`, `16GB`).                                                                                                                                            |
-| `LIBERA_CAM_CHUNK_SIZE` | `50`          | Number of L1A images per Dask batch during JPEG-LS decompression in `read_l1a_cam_data`. Lower values reduce peak memory; higher values reduce scheduler overhead.                                                |
+| Variable                    | Default       | Description                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `XARRAY_NETCDF_ENGINE`      | `h5netcdf`    | NetCDF engine used by `libera_utils` to write the product. Both engines write to S3. `distributed` writes through worker compression, which requires `h5netcdf`: libera-utils raises `ValueError` under `netcdf4`. `h5netcdf` is also faster and produces smaller granules (see [performance.md](performance.md#tuning-relationships)).                                              |
+| `DASK_SCHEDULER`            | `synchronous` | Dask scheduler. **`synchronous`** (single-process, default) or **`distributed`** (local cluster with dashboard). **`threads`** and **`processes`** are not supported — CSPICE is not thread-safe within a worker.                                                                                                                                                                    |
+| `DASK_NUM_WORKERS`          | `7`           | Number of Dask workers when using `distributed`. Each worker computes and compresses its own blocks, so the write speeds up with workers until they fill the task's vCPUs; seven suits the 8 vCPU / 60 GB task (see [performance.md](performance.md#aws-sizing)).                                                                                                                    |
+| `DASK_MEMORY_LIMIT`         | `8GB`         | Per-worker memory limit for `distributed`. It must cover one worker's worst moment, which the decompression chunk sets: at the default chunk of 20 a worker peaked at 4.3-7.2 GB, measured with HDF5 compressing in the writing process. With the workers compressing, the full July 12 day peaked at 15.8 GB for the whole task at the defaults. Dask pauses a worker at 80% of it. |
+| `LIBERA_CAM_CHUNK_SIZE`     | `20`          | Number of L1A images per Dask batch during JPEG-LS decompression in `read_l1a_cam_data`. Lower values reduce peak memory; higher values reduce scheduler overhead.                                                                                                                                                                                                                   |
+| `LIBERA_CAM_GEO_CHUNK_SIZE` | `5`           | Number of frames per per-pixel geometry task in `add_geolocation_to_dataset`, independent of the decompression chunk. Each task furnishes the kernels once and geolocates its frames one at a time.                                                                                                                                                                                  |
 
-### Operator Tuning Guide
+### Production settings
 
-When sizing AWS Batch containers and configuring Dask execution, keep the following relationships in mind:
-
-1. **Production Scheduling**: Shipped defaults (`synchronous`, `DASK_NUM_WORKERS=1`) run single-threaded for safe local testing. Production Batch job definitions should explicitly configure `DASK_SCHEDULER=distributed` along with `DASK_NUM_WORKERS` matched to the allocated container vCPUs.
-2. **Parallelism is Capped by Chunk Count**: Geolocation blocks align 1:1 with decompression chunks (`add_geolocation_to_dataset` reuses `ds.image_data.chunks[0]`), and inside each worker block, frames are evaluated serially for SPICE thread-safety. Therefore, the maximum number of useful workers is:
-   $$\text{max\_useful\_workers} = \left\lceil \frac{N_{\text{images}}}{\text{LIBERA\_CAM\_CHUNK\_SIZE}} \right\rceil$$
-   For example, a 500-image product with `LIBERA_CAM_CHUNK_SIZE=50` creates 10 chunks and can utilize at most 10 workers. To scale across wider containers (e.g. 32 vCPUs), `LIBERA_CAM_CHUNK_SIZE` should be decreased accordingly (e.g. 15–20).
-3. **Worker Memory Sizing**: Each active worker processes one chunk at a time. For `LIBERA_CAM_CHUNK_SIZE=50`, memory per chunk comprises ~800 MB for `image_data` plus ~2.5 GB for `float32` geolocation (lat, lon, alt), totaling ~3.3 GB live task memory. Setting `DASK_MEMORY_LIMIT=8GB` provides safe operating headroom for SPICE calculations and decompression buffers. Sizing rule of thumb:
-   $$\text{Total System Memory} \ge (\text{DASK\_NUM\_WORKERS} \times \text{DASK\_MEMORY\_LIMIT}) + \text{Client Overhead}$$
-4. **Client Write Funneling**: When `write_data_product` writes the final NetCDF file via `smart_open` / `h5netcdf`, computed chunks are funneled through the client process. Ensure the client host process has adequate memory headroom.
+Production runs `DASK_SCHEDULER=distributed` with the default `h5netcdf` engine on an
+8 vCPU / 60 GB task: seven workers at `8GB`, `LIBERA_CAM_CHUNK_SIZE=20` and
+`LIBERA_CAM_GEO_CHUNK_SIZE=5`. The pipeline's `LocalCluster` runs one thread per worker,
+because CSPICE is not thread-safe. Size the container against the whole process tree,
+not the client: at these settings the full July 12 day (8,205 frames) peaked at 15.8 GB.
+Every worker reads the L1A file by path, so a multi-node cluster needs shared filesystem
+access to it. The measurements and tuning relationships behind these settings are in
+[performance.md](performance.md).
 
 ### Examples
 
@@ -102,18 +104,30 @@ export DASK_SCHEDULER=synchronous
 libera-cam /path/to/input_manifest.json
 ```
 
-Multi-worker local cluster (larger products; watch memory per worker):
+Multi-worker local cluster at the defaults, which are sized for an 8 vCPU / 60 GB task. Seven
+workers at `8GB` may use up to 56 GB between them; the full July 12 day peaked at 15.8 GB with
+the workers compressing. On a smaller machine, use one worker per core. On a 16 GB machine,
+two workers at `6GB` with `LIBERA_CAM_CHUNK_SIZE=10` ran cleanly with HDF5 compressing in the
+writing process (see [performance.md](performance.md#aws-sizing)):
 
 ```bash
 export PROCESSING_PATH=/path/to/output
 export DASK_SCHEDULER=distributed
-export DASK_NUM_WORKERS=4
+export DASK_NUM_WORKERS=7
 export DASK_MEMORY_LIMIT=8GB
-export LIBERA_CAM_CHUNK_SIZE=50
+export LIBERA_CAM_CHUNK_SIZE=20
+export LIBERA_CAM_GEO_CHUNK_SIZE=5
 libera-cam /path/to/input_manifest.json
 ```
 
+The product version in the output filename and `algorithm_version` comes from the installed
+package metadata, not from `pyproject.toml`, so reinstall (`pip install -e .`) after switching
+branches; a stale editable install labels the product with whatever version it last recorded.
+
 When `DASK_SCHEDULER=distributed`, the pipeline logs a Bokeh dashboard URL for task profiling.
+Note that `DASK_SCHEDULER`, `DASK_NUM_WORKERS` and `DASK_MEMORY_LIMIT` are also read by Dask's
+own configuration, so `DASK_SCHEDULER=distributed` set in the environment makes any Dask
+compute outside the pipeline's client context fail with `no Client active`.
 
 ### Profiling in tests
 
